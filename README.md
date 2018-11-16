@@ -12,7 +12,7 @@ https://vimeo.com/244515640
 
 ## communication between instances
 
-Max/MSP -> (OSC) -> Processing -> (Syphon) -> Madmapper -> (ArtNet) -> APA 102</ br>
+Max/MSP -> (OSC) -> Processing -> (Syphon) -> Madmapper -> (ArtNet) -> APA 102 </ br>
 Max/SMP <- (OSC) <- Processing</ br>
 
 ## rules
