@@ -4,7 +4,7 @@ imPulse is an audiovisual instrument. An installation with led-stripes, speakers
 ## video documentation
 <b>Wisp lab 2018</b></br >
 focusing on the sound design, contact mic building, sound spatialisation movements, connecting Ableton/MaxForLive + Processing + Ambisonic</br >
-https://vimeo.com/295063279
+https://vimeo.com/295063279</br >
 PW: workinprogress
 
 <b>network, impulses, nodes</b></br >
