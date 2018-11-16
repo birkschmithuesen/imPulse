@@ -10,8 +10,10 @@ PW: workinprogress
 <b>network, impulses, nodes</b></br >
 https://vimeo.com/244515640
 
-## communication between instances
+## sketch
+![My image](https://github.com/birkschmithuesen/imPulse/blob/master/sketch.jpg)
 
+## communication between instances
 Max/MSP -> (OSC) -> Processing -> (Syphon) -> Madmapper -> (ArtNet) -> APA 102</br>
 Max/SMP <- (OSC) <- Processing
 
@@ -21,3 +23,8 @@ Max/SMP <- (OSC) <- Processing
 * play the corresponding note when a node is reached by an impulse
 
 ## parameters
+* /net/impulse/speed
+* /net/impulse/energyDecay
+* /net/impulse/nodeDeadTime
+* /nodes/times/fire
+* /nodes/times/recover
