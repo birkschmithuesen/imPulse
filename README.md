@@ -13,7 +13,7 @@ PW: workinprogress
 https://vimeo.com/244515640
 
 ## sketch for 35C3 version
-![My image](https://github.com/birkschmithuesen/imPulse/blob/master/sketch.jpg)
+![My image](https://github.com/birkschmithuesen/imPulse/blob/master/impulse_topView.jpg)
 
 ## communication between instances
 Max/MSP -> (OSC) -> Processing -> (Syphon) -> Madmapper -> (ArtNet) -> APA 102</br>
