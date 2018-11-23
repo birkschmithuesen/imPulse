@@ -52,24 +52,16 @@ int counter=0;
 
 void setup() { 
   size(1200, 80, P3D);
-  frameRate(200);
+  frameRate(120);
   //opens the port to receive OSC
   oscP5 = new OscP5(this, 8001);
   //when a node is activated an osc impuls is send to Ableton Live
   oscOutput = new NetAddress("192.168.111.100", 8002);
+  
   // Create syhpon server to send frames out.
   //server = new SyphonServer(this, "Lightstrument");
   // create stripe information
   stripeConfiguration = new StripeConfigurator(numStripes, numLedsPerStripe); // used to generate per led info.
-
-  //to save the osc-adresses
-  try {
-    DataOutputStream dataOut = new DataOutputStream(new FileOutputStream(dataPath("remoteSettings.txt")));
-    OscMessageDistributor.dumpParameterInfo(dataOut);
-  } 
-  catch (FileNotFoundException e) {
-    println("file not found");
-  }
 
   // use the canvas to create the visuals to send over syphon
   // the size depends on the stripe configuration
@@ -80,8 +72,7 @@ void setup() {
   ledNetInfo = LedInNetInfo.buildNetInfo(numStripes, numLedsPerStripe); //create an Array with data for each LED if they are part of a node
   listOfNodes = LedInNetInfo.buildClusterInfo(ledNetInfo);  // all sets of Leds that are on different stripes but close to each other
 
-
-
+  //initialize visual effects
   ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, oscP5, oscOutput);
   ledNetworkNodeEffects = new LedNetworkNodeEffects("1", numLeds, ledNetInfo, listOfNodes);
 
