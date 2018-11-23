@@ -1,6 +1,6 @@
 import netP5.*;
 import oscP5.*;
-import codeanticode.syphon.*;
+//import codeanticode.syphon.*;
 
 import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
@@ -13,16 +13,16 @@ import java.util.ArrayList;
 //////////////////////////////////////////////////////////////////////////
 /*
 - define crossings between two led stripes (nodes) manually 
-  => in LedStripeNetworks.java Line 60 function buildClusterInfo
-- solve problem when traveling speed of impulses is higher then framerate (when impulses jumps over an led from one frame to the next, the led is not light up)
-*/
+ => in LedStripeNetworks.java Line 60 function buildClusterInfo
+ - solve problem when traveling speed of impulses is higher then framerate (when impulses jumps over an led from one frame to the next, the led is not light up)
+ */
 
 
 // canvs is a grafic buffer for the texture to send over syphon
 // width: length of led stripes
 // height: number of stripes 
 PGraphics canvas;
-SyphonServer server;
+//SyphonServer server;
 
 OscP5 oscP5;
 NetAddress oscOutput;
@@ -46,6 +46,7 @@ Mixer mixer;
 
 //visual generators
 LedNetworkTransportEffect ledNetworkTransportEffect;
+LedNetworkNodeEffects ledNetworkNodeEffects;
 
 int counter=0;
 
@@ -57,7 +58,7 @@ void setup() {
   //when a node is activated an osc impuls is send to Ableton Live
   oscOutput = new NetAddress("192.168.111.100", 8002);
   // Create syhpon server to send frames out.
-  server = new SyphonServer(this, "Lightstrument");
+  //server = new SyphonServer(this, "Lightstrument");
   // create stripe information
   stripeConfiguration = new StripeConfigurator(numStripes, numLedsPerStripe); // used to generate per led info.
 
@@ -79,12 +80,14 @@ void setup() {
   ledNetInfo = LedInNetInfo.buildNetInfo(numStripes, numLedsPerStripe); //create an Array with data for each LED if they are part of a node
   listOfNodes = LedInNetInfo.buildClusterInfo(ledNetInfo);  // all sets of Leds that are on different stripes but close to each other
 
+
+
   ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, oscP5, oscOutput);
+  ledNetworkNodeEffects = new LedNetworkNodeEffects("1", numLeds, ledNetInfo, listOfNodes);
 
   mixer = new Mixer(numLeds);
-
   mixer.addEffect(ledNetworkTransportEffect);
-  mixer.addEffect(new LedNetworkNodeEffects("1", numLeds, ledNetInfo, listOfNodes));
+  mixer.addEffect(ledNetworkNodeEffects);
 
   //to save the osc-adresses
   try {
@@ -98,12 +101,18 @@ void setup() {
 
 void draw() {
   OscMessageDistributor.distributeMessages();
-  
-  // calculate the visuals
-  ledColors=mixer.mix();
+  createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
+  ledColors=mixer.mix(); // calculate the visuals  
+  drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
+  image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
+  //server.sendImage(canvas); // send the visuals over Syphon to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
+}
 
-  // the visuals to be displayed on the led-stripes are drawn into the canvas to be send over syphon
-  // Madmapper receives the canvas and sends the data out over UDP (Art-Net)
+void oscEvent(OscMessage theOscMessage) {
+  OscMessageDistributor.queueMessage(theOscMessage);
+}
+
+void drawLedColorsToCanvas() {
   canvas.beginDraw();
   canvas.loadPixels();
   for (int i = 0; i < numLeds; i++) {
@@ -111,24 +120,15 @@ void draw() {
   }
   canvas.updatePixels();
   canvas.endDraw();
+}
 
-  image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10);
-
-  // send the visuals over Syphon
-  server.sendImage(canvas);
-  
-  // for test purpose create random activations (instead of hitting a pipe)
+void createRandomPipeTrigger() {
   if (counter > 60) {
     counter=0;    
     OscMessage myMessage = new OscMessage("/tube/trigger");
     myMessage.add((int)random(numStripes));
     NetAddress localhost = new NetAddress("127.0.0.1", 8001);
     oscP5.send(myMessage, localhost);
-    
   }
   counter++;
-}
-
-void oscEvent(OscMessage theOscMessage) {
-  OscMessageDistributor.queueMessage(theOscMessage);
 }
