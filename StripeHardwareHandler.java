@@ -37,7 +37,7 @@ class StripeConfigurator {
         if (j==numLedsPerStripe-1)nextIndex=-1; //-1 aka physical ending of the stripe
         else nextIndex=(j+(i*numLedsPerStripe))+1;
 
-        ledInStripeInfos[i]=new LedInStripeInfo(prevIndex, nextIndex, j, i, numLedsPerStripe);
+        ledInStripeInfos[i*numLedsPerStripe + j]=new LedInStripeInfo(prevIndex, nextIndex, j, i, numLedsPerStripe);
       }
     }
     return ledInStripeInfos;
