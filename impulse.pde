@@ -159,9 +159,7 @@ void keyPressed() {
     if (keyCode == UP) {
       ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.INCREASE_BRIGHTNESS;
     } else if (keyCode == DOWN) {
-      if(stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS){
-        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.DECREASE_BRIGHTNESS;
-      }
+      ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.DECREASE_BRIGHTNESS;
     } else if (keyCode == RIGHT) {
       if(stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS){
         ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_STRIPE_LED;
@@ -171,9 +169,9 @@ void keyPressed() {
     } else if (keyCode == LEFT) {
       if(stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS){
         ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_STRIPE_LED;
-      }
-    } else if (stripeChangeMode == StripeChangeMode.CYCLE_BLACK_STRIPE) {
+      } else if (stripeChangeMode == StripeChangeMode.CYCLE_BLACK_STRIPE) {
         ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.PREV_BLACK_STRIPE;
+      }  
     }
   }
 }

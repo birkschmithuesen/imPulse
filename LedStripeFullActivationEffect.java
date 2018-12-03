@@ -1,5 +1,3 @@
-import processing.core.PApplet;
-import processing.core.PVector;
 import java.time.Duration;
 import java.time.Instant;
 
@@ -9,7 +7,6 @@ import java.time.Instant;
 ///////////////////////////////////////////////////////////
 
 public class LedStripeFullActivationEffect implements runnableLedEffect {
-  PApplet papplet;
   String name = "Activate Stripe";
   String id;
   LedColor[] bufferLedColors;
@@ -17,7 +14,7 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   int activatedStripeIndex = 0;
   int activatedStripeLength = 0;
   float stripesBrightness = 1;
-  float stripesBrightnessDelta = 0.01f;
+  float stripesBrightnessDelta = 0.1f;
   int ledStripeActivationIndex = -1;
   int numStripes;
   public static enum StripeChange {
