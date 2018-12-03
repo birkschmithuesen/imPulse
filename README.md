@@ -34,3 +34,7 @@ Max/MSP <- (OSC) <- Processing
 ## libraries to be imported into Processing
 * [oscP5](http://www.sojamo.de/libraries/oscP5/)
 * [controlP5](http://www.sojamo.de/libraries/controlP5/)
+
+## Controls for manual node selection
+* UP and DOWN keys for brightness
+* LEFT/RIGHT keys for decreasing/increasing the parameter selected in the drop down menu
