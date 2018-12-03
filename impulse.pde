@@ -79,7 +79,7 @@ void setup() {
   mixer = new Mixer(numLeds);
   mixer.addEffect(ledNetworkTransportEffect);
   mixer.addEffect(ledNetworkNodeEffects);
-  mixer.addEffect(new LedStripeFullActivationEffect("1", numLeds, stripeInfos, 4));
+  mixer.addEffect(new LedStripeFullActivationEffect("1", stripeInfos, 4));
 
   //to save the osc-adresses
   try {
