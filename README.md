@@ -1,5 +1,5 @@
 # imPulse
-imPulse is an audiovisual instrument. An installation with led-stripes, speakers, metal pipes and contact mics as user interface. The led-stripes are arranged as a chaotic net with multiply nodes. The metal pipes are acoustic sound bodys and user interface to create light impulses that travel along the net. When an impulse reaches a node, it triggers a sound and splits up into multiply impulses corresponding to the system behaviour. 
+imPulse is an audiovisual instrument. An installation with led-stripes, speakers, metal pipes and contact mics as user interface. The led-stripes are arranged as a chaotic net with multiply nodes. The metal pipes are acoustic sound bodys and user interface to create light impulses that travel along the net. When an impulse reaches a node, it triggers a sound and splits up into multiply impulses corresponding to the system behaviour.
 <b>Topic for 35C3 lab</b> is to play with the system rules and add attributes to the traveling agents(light impulses).
 
 
@@ -30,3 +30,7 @@ Max/MSP <- (OSC) <- Processing
 * /net/impulse/nodeDeadTime
 * /nodes/times/fire
 * /nodes/times/recover
+
+## libraries to be imported into Processing
+* [oscP5](http://www.sojamo.de/libraries/oscP5/)
+* [controlP5](http://www.sojamo.de/libraries/controlP5/)

@@ -1,11 +1,14 @@
 import netP5.*;
 import oscP5.*;
+import controlP5.*;
 //import codeanticode.syphon.*;
 
 import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 
 //////////////////////////////////////////////////////////////////////////
@@ -47,11 +50,23 @@ Mixer mixer;
 //visual generators
 LedNetworkTransportEffect ledNetworkTransportEffect;
 LedNetworkNodeEffects ledNetworkNodeEffects;
+LedStripeFullActivationEffect ledStripeFullActivationEffect;
 
 int counter=0;
 
+// keep track of continuous key presses and control the LedStripeFullActivationEffect
+
+enum StripeChangeMode {
+  CYCLE_BLACK_STRIPE, CONTROL_BLACK_STRIPE_LEDS, CYCLE_ACTIVATED_STRIPES, CONTROL_ACTIVATED_STRIPES_LEDS
+}
+StripeChangeMode stripeChangeMode = StripeChangeMode.CYCLE_BLACK_STRIPE;
+
+// GUI for LedStripeFullActivationEffect
+ControlP5 cp5;
+
+
 void setup() { 
-  size(1200, 80, P3D);
+  size(1400, 120, P3D);
   frameRate(120);
   //opens the port to receive OSC
   oscP5 = new OscP5(this, 8001);
@@ -75,11 +90,12 @@ void setup() {
   //initialize visual effects
   ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, oscP5, oscOutput);
   ledNetworkNodeEffects = new LedNetworkNodeEffects("1", numLeds, ledNetInfo, listOfNodes);
+  ledStripeFullActivationEffect = new LedStripeFullActivationEffect("1", stripeInfos, numStripes);
 
   mixer = new Mixer(numLeds);
   mixer.addEffect(ledNetworkTransportEffect);
   mixer.addEffect(ledNetworkNodeEffects);
-  mixer.addEffect(new LedStripeFullActivationEffect("1", stripeInfos, 4));
+  mixer.addEffect(ledStripeFullActivationEffect);
 
   //to save the osc-adresses
   try {
@@ -89,6 +105,18 @@ void setup() {
   catch (FileNotFoundException e) {
     println("file not found");
   }
+  
+  //add GUI
+  cp5 = new ControlP5(this);
+  List l = Arrays.asList(StripeChangeMode.CYCLE_BLACK_STRIPE.name(), StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS.name(), StripeChangeMode.CYCLE_ACTIVATED_STRIPES.name(), StripeChangeMode.CONTROL_ACTIVATED_STRIPES_LEDS.name());
+  /* add a ScrollableList, by default it behaves like a DropdownList */
+  cp5.addScrollableList("dropdown")
+     .setPosition(1200, 0)
+     .setSize(200, 100)
+     .setBarHeight(20)
+     .setItemHeight(20)
+     .addItems(l)
+     ;
 }
 
 void draw() {
@@ -98,6 +126,7 @@ void draw() {
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
   image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
   //server.sendImage(canvas); // send the visuals over Syphon to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
+  ledStripeFullActivationEffect.changeStripe();
 }
 
 void oscEvent(OscMessage theOscMessage) {
@@ -123,4 +152,40 @@ void createRandomPipeTrigger() {
     oscP5.send(myMessage, localhost);
   }
   counter++;
+}
+
+void keyPressed() {
+  if (key == CODED) {
+    if (keyCode == UP) {
+      ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.INCREASE_BRIGHTNESS;
+    } else if (keyCode == DOWN) {
+      if(stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS){
+        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.DECREASE_BRIGHTNESS;
+      }
+    } else if (keyCode == RIGHT) {
+      if(stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS){
+        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_STRIPE_LED;
+      } else if (stripeChangeMode == StripeChangeMode.CYCLE_BLACK_STRIPE) {
+        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.NEXT_BLACK_STRIPE;
+      }
+    } else if (keyCode == LEFT) {
+      if(stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS){
+        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_STRIPE_LED;
+      }
+    } else if (stripeChangeMode == StripeChangeMode.CYCLE_BLACK_STRIPE) {
+        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.PREV_BLACK_STRIPE;
+    }
+  }
+}
+
+void keyReleased() {
+  if (key == CODED) {
+    ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.NONE;
+  }
+}
+
+//ControlP5 callback - method name must be the same as the string parameter of cp5.addScrollableList()
+void dropdown(int index) {
+  String selected = (String) cp5.get(ScrollableList.class, "dropdown").getItem(index).get("text");
+  stripeChangeMode = StripeChangeMode.valueOf(selected);
 }
