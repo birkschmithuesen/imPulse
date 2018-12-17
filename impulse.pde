@@ -57,7 +57,8 @@ int counter=0;
 // keep track of continuous key presses and control the LedStripeFullActivationEffect
 
 enum StripeChangeMode {
-  CYCLE_BLACK_STRIPE, CONTROL_BLACK_STRIPE_LEDS, CYCLE_ACTIVATED_STRIPES, CONTROL_ACTIVATED_STRIPES_LEDS
+  CYCLE_BLACK_STRIPE, CONTROL_BLACK_STRIPE_LEDS, CYCLE_BRIGHT_STRIPES, CONTROL_BRIGHT_STRIPE_LEDS,
+  ACTIVATE_ALL_BRIGHT_STRIPES;
 }
 StripeChangeMode stripeChangeMode = StripeChangeMode.CYCLE_BLACK_STRIPE;
 
@@ -108,7 +109,9 @@ void setup() {
   
   //add GUI
   cp5 = new ControlP5(this);
-  List l = Arrays.asList(StripeChangeMode.CYCLE_BLACK_STRIPE.name(), StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS.name(), StripeChangeMode.CYCLE_ACTIVATED_STRIPES.name(), StripeChangeMode.CONTROL_ACTIVATED_STRIPES_LEDS.name());
+  List l = Arrays.asList(StripeChangeMode.CYCLE_BLACK_STRIPE.name(), StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS.name(), 
+    StripeChangeMode.CYCLE_BRIGHT_STRIPES.name(), StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS.name(),
+    StripeChangeMode.ACTIVATE_ALL_BRIGHT_STRIPES.name());
   /* add a ScrollableList, by default it behaves like a DropdownList */
   cp5.addScrollableList("dropdown")
      .setPosition(1200, 0)
@@ -157,21 +160,29 @@ void createRandomPipeTrigger() {
 void keyPressed() {
   if (key == CODED) {
     if (keyCode == UP) {
-      ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.INCREASE_BRIGHTNESS;
+      ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.INCREASE_BRIGHTNESS);
     } else if (keyCode == DOWN) {
-      ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.DECREASE_BRIGHTNESS;
+      ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DECREASE_BRIGHTNESS);
     } else if (keyCode == RIGHT) {
       if(stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS){
-        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_STRIPE_LED;
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_STRIPE_LED);
       } else if (stripeChangeMode == StripeChangeMode.CYCLE_BLACK_STRIPE) {
-        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.NEXT_BLACK_STRIPE;
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.NEXT_BLACK_STRIPE);
+      } else if (stripeChangeMode == StripeChangeMode.CYCLE_BRIGHT_STRIPES) {
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.NEXT_BRIGHT_STRIPE);
+      } else if (stripeChangeMode == StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS) {
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_BRIGHT_STRIPE_LED);
       }
     } else if (keyCode == LEFT) {
       if(stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS){
-        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_STRIPE_LED;
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_STRIPE_LED);
       } else if (stripeChangeMode == StripeChangeMode.CYCLE_BLACK_STRIPE) {
-        ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.PREV_BLACK_STRIPE;
-      }  
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.PREV_BLACK_STRIPE);
+      } else if (stripeChangeMode == StripeChangeMode.CYCLE_BRIGHT_STRIPES) {
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.PREV_BRIGHT_STRIPE);
+      } else if (stripeChangeMode == StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS) {
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_BRIGHT_STRIPE_LED);
+      }
     }
   }
 }
@@ -186,4 +197,7 @@ void keyReleased() {
 void dropdown(int index) {
   String selected = (String) cp5.get(ScrollableList.class, "dropdown").getItem(index).get("text");
   stripeChangeMode = StripeChangeMode.valueOf(selected);
+  if(stripeChangeMode == StripeChangeMode.ACTIVATE_ALL_BRIGHT_STRIPES){
+    ledStripeFullActivationEffect.activateAllBrightStripes();
+  }
 }
