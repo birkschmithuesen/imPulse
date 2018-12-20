@@ -36,5 +36,8 @@ Max/MSP <- (OSC) <- Processing
 * [controlP5](http://www.sojamo.de/libraries/controlP5/)
 
 ## Controls for manual node selection
-* UP and DOWN keys for brightness
-* LEFT/RIGHT keys for decreasing/increasing the parameter selected in the drop down menu
+* <b>UP</b>/<b>DOWN</b> keys for brightness
+* <b>LEFT</b>/<b>RIGHT</b> keys for decreasing/increasing the parameter selected in the drop down menu
+* <b>n</b> to show loaded and newly created nodes
+* <b>ENTER</b> to save current node
+* <b>s</b> to save all created nodes
