@@ -190,6 +190,17 @@ void keyPressed() {
 void keyReleased() {
   if (key == CODED) {
     ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.NONE;
+    
+  } else if(key == ENTER || key == RETURN) {
+      ledStripeFullActivationEffect.saveCurrentNodeCrossing();
+  } else if(key == 's') {
+    try {
+      ledStripeFullActivationEffect.saveNodeCrossingsToFile();
+    } catch (IOException e) {
+      println(e);
+    }
+  } else if(key == 'n') {
+    ledStripeFullActivationEffect.toggleShowNodes();
   }
 }
 

@@ -1,5 +1,9 @@
 import java.time.Duration;
 import java.time.Instant;
+import java.util.*;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.io.IOException;
 
 
 ///////////////////////////////////////////////////////////
@@ -11,6 +15,11 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   String id;
   LedColor[] bufferLedColors;
   LedInStripeInfo[] stripeInfo;
+  
+  public boolean showNodes = false;
+  
+  ArrayList <TreeSet<Integer>> manualNodeCrossings = new ArrayList <TreeSet<Integer>>();
+  
   float stripesBrightness = 1;
   float stripesBrightnessDelta = 0.1f;
   int numStripes;
@@ -72,6 +81,17 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
         bufferLedColors[i] = new LedColor(1, 1, 1);
       } else {
         bufferLedColors[i] = new LedColor(0, 0, 0);
+      }
+      //display already set nodes if showNodes is set to true
+      if(showNodes) {
+        for(TreeSet<Integer> nodeCrossing: manualNodeCrossings) {
+          Iterator<Integer> itr = nodeCrossing.iterator();
+          while (itr.hasNext()) {
+            if(itr.next() == i) {
+              bufferLedColors[i] = new LedColor(0, 0, 0);
+            }
+          }
+        }
       }
       bufferLedColors[i].mult(stripesBrightness);
     }
@@ -191,6 +211,42 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
     setActivatedBrightStripeLength();
   }
   
+  public void saveNodeCrossingsToFile() throws IOException {
+    
+    FileWriter fileWriter = new FileWriter("/Users/kryptokommunist/Documents/Code/imPulse/node_crossings.txt", true); //Set true for append mode
+    PrintWriter printWriter = new PrintWriter(fileWriter);
+    
+    System.out.println("Iterating through manualNodeCrossings!");
+    
+    for(TreeSet<Integer> nodeCrossing: manualNodeCrossings){
+      Iterator<Integer> itr = nodeCrossing.iterator();
+      String indices = "";
+      while (itr.hasNext()) {
+        String ledIndexString = Integer.toString(itr.next());
+        indices += ledIndexString + " ";
+      }
+      System.out.println("Saving node crossings to file:");
+      System.out.println(indices);
+      printWriter.println(indices);
+    }
+    
+    printWriter.close();
+    
+  }
+  
+  public void saveCurrentNodeCrossing(){
+    System.out.println("Saving node crossing:");
+    Integer firstAbsoluteIndex = activatedStripeIndex * stripeInfo[0].stripeLength + ledStripeActivationIndex;
+    Integer secondAbsoluteIndex = brightLedStripeIndex * stripeInfo[0].stripeLength + brightLedStripeActivationIndex;
+    TreeSet<Integer> nodeCrossing = new TreeSet<Integer>(Arrays.asList(firstAbsoluteIndex, secondAbsoluteIndex));
+    System.out.println(nodeCrossing);
+    manualNodeCrossings.add(nodeCrossing);
+  }
+  
+  public void toggleShowNodes(){
+    showNodes = !showNodes;
+  }
+  
   //activate all bright Leds on stripe, necessary when getting out of cycling bright stripes
   public void activateAllBrightStripes(){
     brightLedStripeIndex = -1;
@@ -203,6 +259,11 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
       brightLedStripeIndex = 0;
     }
     stripeChange = _stripeChange;
+  }
+  
+  //return the node crossing
+  public void getNodeCrossing(){
+    //return ledStripeActivationIndex - 1, brightStripeActivationIndex - 1;
   }
   
   //call this function after setting the desired mode of change any time necessary

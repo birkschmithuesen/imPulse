@@ -146,6 +146,7 @@ class LedInNetInfo {
         }
       }
     }
+    System.out.println(nodes);
     return nodes;
   }
 
