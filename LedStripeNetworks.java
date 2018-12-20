@@ -1,5 +1,8 @@
 import processing.core.*;
 import java.util.*;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
 
 //represents a connection between multiple stripes
 class LedNetworkNode {
@@ -42,6 +45,8 @@ class LedInNetInfo {
   public int indexInStripe;
   public int stripeLength;
   public LedNetworkNode partOfNode; // is this led part of a connecting Node? which one? (set by StripeCrossInfo.buildClusterInfosetClusterInfo)
+  
+  private static String nodeCrossingsFilePath = "/Users/kryptokommunist/Documents/Code/imPulse/node_crossings.txt";
 
   public static LedInNetInfo[] buildNetInfo(int numStripes, int numLedsPerStripe) {
     LedInNetInfo[] result= new LedInNetInfo[numStripes*numLedsPerStripe];
@@ -55,7 +60,62 @@ class LedInNetInfo {
     return result;
   }
 
+  public static ArrayList<LedNetworkNode> loadListOfNodes(LedInNetInfo[] ledNetInfos) {
+    
+    System.out.println("Loading list of nodes from " + nodeCrossingsFilePath);
+    
+    int nLeds=ledNetInfos.length;
+    //each led can be member of one connectedcluster that contains all leds that are (also indirectly) connected by distances<thresh
+    // clusters are represented by sets of the ledIndices
+    ArrayList <TreeSet<Integer>> clusters=new ArrayList <TreeSet<Integer>>(); // here remember all the clusters we have built
+    ArrayList <TreeSet<Integer>> clusterOfLed=new ArrayList <TreeSet<Integer>>(nLeds); // here we remember which cluster a led is part of 
 
+    while (clusterOfLed.size()<nLeds)clusterOfLed.add(null);
+    
+    //read the node crossing from file
+    BufferedReader reader;
+    try {
+      reader = new BufferedReader(new FileReader(nodeCrossingsFilePath));
+      String line = reader.readLine();
+      while (line != null) {
+        System.out.println(line);
+        TreeSet<Integer> newCluster=new TreeSet<Integer>();
+        for(String curLedIndex: line.split(" ")){
+          Integer ledIndex = Integer.parseInt(curLedIndex);
+          newCluster.add(ledIndex);
+          clusterOfLed.set(ledIndex, newCluster);
+        }
+        clusters.add(newCluster);
+        // read next line
+        line = reader.readLine();
+      }
+      reader.close();
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+
+    ///////////////
+    // now go through all clusters
+    ArrayList<LedNetworkNode> nodes= new ArrayList<LedNetworkNode>();
+    int curNodeId=0;
+
+    for (TreeSet<Integer> curCluster : clusters) {
+      nodes.add(new LedNetworkNode(curNodeId, curCluster));
+    }
+
+    //set node info for all the leds:
+
+    for (LedNetworkNode curNode : nodes) {
+        curNode.id=curNodeId; //renumber after sorting
+      curNodeId++;
+      for (Integer thisLedIdx : curNode.ledIndices) {
+        ledNetInfos[thisLedIdx].partOfNode=curNode;
+      }
+    }
+
+    return nodes;
+    
+  }
 
   public static ArrayList<LedNetworkNode> buildClusterInfo(LedInNetInfo[] ledNetInfos) {
     ////////////////////////////////////////////////////////////////////////////

@@ -18,7 +18,11 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   
   public boolean showNodes = false;
   
+  private static String nodeCrossingsFilePath = "/Users/kryptokommunist/Documents/Code/imPulse/node_crossings.txt";
+  
   ArrayList <TreeSet<Integer>> manualNodeCrossings = new ArrayList <TreeSet<Integer>>();
+  LedInNetInfo[] ledNetInfo;
+  ArrayList <LedNetworkNode> listOfNodes;
   
   float stripesBrightness = 1;
   float stripesBrightnessDelta = 0.1f;
@@ -46,17 +50,20 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
     stripeInfo = _stripeInfo;
     numStripes = _numStripes;
     bufferLedColors = LedColor.createColorArray(stripeInfo.length);
+    int numLedsPerStripe = stripeInfo[0].stripeLength;
+    ledNetInfo = LedInNetInfo.buildNetInfo(numStripes, numLedsPerStripe);
+    listOfNodes = LedInNetInfo.loadListOfNodes(ledNetInfo);
   }
   
   private boolean activatedStripeLedIsInBounds(int activatedStripeLedCurrentIndex){
-    return activatedStripeLedCurrentIndex <= ledStripeActivationIndex && activatedStripeLedCurrentIndex >= (ledStripeActivationIndex - 3);
+    return activatedStripeLedCurrentIndex <= (ledStripeActivationIndex + 1) && activatedStripeLedCurrentIndex >= (ledStripeActivationIndex - 1);
   }
   
   private boolean brightStripeLedIsInBounds(int stripeIndex, int brightLedStripeLedCurrentIndex){
     if(brightLedStripeIndex >= 0){
       boolean res = stripeIndex == brightLedStripeIndex;
       if(brightLedStripeActivationIndex >= 0){
-       res = res && (brightLedStripeLedCurrentIndex <= brightLedStripeActivationIndex && brightLedStripeLedCurrentIndex >= (brightLedStripeActivationIndex - 3));
+       res = res && (brightLedStripeLedCurrentIndex <= (brightLedStripeActivationIndex + 1) && brightLedStripeLedCurrentIndex >= (brightLedStripeActivationIndex - 1));
       }
       return res;
     }
@@ -88,9 +95,12 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
           Iterator<Integer> itr = nodeCrossing.iterator();
           while (itr.hasNext()) {
             if(itr.next() == i) {
-              bufferLedColors[i] = new LedColor(0, 0, 0);
+              bufferLedColors[i] = new LedColor(255, 0, 0);
             }
           }
+        }
+        if(ledNetInfo[i].partOfNode != null){
+          bufferLedColors[i] = new LedColor(0, 255, 0);
         }
       }
       bufferLedColors[i].mult(stripesBrightness);
@@ -213,7 +223,7 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   
   public void saveNodeCrossingsToFile() throws IOException {
     
-    FileWriter fileWriter = new FileWriter("/Users/kryptokommunist/Documents/Code/imPulse/node_crossings.txt", true); //Set true for append mode
+    FileWriter fileWriter = new FileWriter(nodeCrossingsFilePath, true); //Set true for append mode
     PrintWriter printWriter = new PrintWriter(fileWriter);
     
     System.out.println("Iterating through manualNodeCrossings!");
@@ -247,9 +257,11 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
     showNodes = !showNodes;
   }
   
-  //activate all bright Leds on stripe, necessary when getting out of cycling bright stripes
-  public void activateAllBrightStripes(){
+  //call this function when you saved a node
+  public void resetCurrentStripeConfig(){
+    ledStripeActivationIndex = -1;
     brightLedStripeIndex = -1;
+    brightLedStripeActivationIndex = -1;    
   }
   
  public void setStripeChange(StripeChange _stripeChange) {

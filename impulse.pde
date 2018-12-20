@@ -86,7 +86,7 @@ void setup() {
   ledColors = LedColor.createColorArray(numLeds);        // build a color buffer with the length of the position file
   stripeInfos = stripeConfiguration.builtStripeInfo();   
   ledNetInfo = LedInNetInfo.buildNetInfo(numStripes, numLedsPerStripe); //create an Array with data for each LED if they are part of a node
-  listOfNodes = LedInNetInfo.buildClusterInfo(ledNetInfo);  // all sets of Leds that are on different stripes but close to each other
+  listOfNodes = LedInNetInfo.loadListOfNodes(ledNetInfo);  // all sets of Leds that are on different stripes but close to each other
 
   //initialize visual effects
   ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, oscP5, oscOutput);
@@ -209,6 +209,6 @@ void dropdown(int index) {
   String selected = (String) cp5.get(ScrollableList.class, "dropdown").getItem(index).get("text");
   stripeChangeMode = StripeChangeMode.valueOf(selected);
   if(stripeChangeMode == StripeChangeMode.ACTIVATE_ALL_BRIGHT_STRIPES){
-    ledStripeFullActivationEffect.activateAllBrightStripes();
+    ledStripeFullActivationEffect.resetCurrentStripeConfig();
   }
 }
