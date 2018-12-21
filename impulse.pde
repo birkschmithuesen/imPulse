@@ -58,7 +58,7 @@ int counter=0;
 
 enum StripeChangeMode {
   CYCLE_BLACK_STRIPE, CONTROL_BLACK_STRIPE_LEDS, CYCLE_BRIGHT_STRIPES, CONTROL_BRIGHT_STRIPE_LEDS,
-  ACTIVATE_ALL_BRIGHT_STRIPES;
+  ACTIVATE_ALL_BRIGHT_STRIPES, SET_SAME_STRIPE_FIRST_NODE, SET_SAME_STRIPE_SECOND_NODE;
 }
 StripeChangeMode stripeChangeMode = StripeChangeMode.CYCLE_BLACK_STRIPE;
 
@@ -94,8 +94,8 @@ void setup() {
   ledStripeFullActivationEffect = new LedStripeFullActivationEffect("1", stripeInfos, numStripes);
 
   mixer = new Mixer(numLeds);
-  mixer.addEffect(ledNetworkTransportEffect);
-  mixer.addEffect(ledNetworkNodeEffects);
+  //mixer.addEffect(ledNetworkTransportEffect);
+  //mixer.addEffect(ledNetworkNodeEffects);
   mixer.addEffect(ledStripeFullActivationEffect);
 
   //to save the osc-adresses
@@ -111,7 +111,8 @@ void setup() {
   cp5 = new ControlP5(this);
   List l = Arrays.asList(StripeChangeMode.CYCLE_BLACK_STRIPE.name(), StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS.name(), 
     StripeChangeMode.CYCLE_BRIGHT_STRIPES.name(), StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS.name(),
-    StripeChangeMode.ACTIVATE_ALL_BRIGHT_STRIPES.name());
+    StripeChangeMode.ACTIVATE_ALL_BRIGHT_STRIPES.name(), StripeChangeMode.SET_SAME_STRIPE_FIRST_NODE.name(),
+    StripeChangeMode.SET_SAME_STRIPE_SECOND_NODE.name());
   /* add a ScrollableList, by default it behaves like a DropdownList */
   cp5.addScrollableList("dropdown")
      .setPosition(1200, 0)
@@ -172,6 +173,10 @@ void keyPressed() {
         ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.NEXT_BRIGHT_STRIPE);
       } else if (stripeChangeMode == StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS) {
         ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_BRIGHT_STRIPE_LED);
+      } else if(stripeChangeMode == StripeChangeMode.SET_SAME_STRIPE_FIRST_NODE) {
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_SAME_STRIPE_LED_FIRST_NODE);
+      } else if(stripeChangeMode == StripeChangeMode.SET_SAME_STRIPE_SECOND_NODE){
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_SAME_STRIPE_LED_SECOND_NODE);
       }
     } else if (keyCode == LEFT) {
       if(stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS){
@@ -182,6 +187,10 @@ void keyPressed() {
         ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.PREV_BRIGHT_STRIPE);
       } else if (stripeChangeMode == StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS) {
         ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_BRIGHT_STRIPE_LED);
+      } else if(stripeChangeMode == StripeChangeMode.SET_SAME_STRIPE_FIRST_NODE) {
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_SAME_STRIPE_LED_FIRST_NODE);
+      } else if(stripeChangeMode == StripeChangeMode.SET_SAME_STRIPE_SECOND_NODE){
+        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_SAME_STRIPE_LED_SECOND_NODE);
       }
     }
   }
@@ -201,6 +210,8 @@ void keyReleased() {
     }
   } else if(key == 'n') {
     ledStripeFullActivationEffect.toggleShowNodes();
+  } else if(key == 'f') {
+    ledStripeFullActivationEffect.cycleSpeeds();
   }
 }
 

@@ -4,6 +4,8 @@ import java.util.*;
 import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 
 
 ///////////////////////////////////////////////////////////
@@ -35,15 +37,24 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   int activatedBrightStripeLength;
   int brightLedStripeIndex = -1;
   int brightLedStripeActivationIndex = -1;
+  
+  int sameStripeFirstNodeFullActivationIndex = -1;
  
   public static enum StripeChange {
     NONE, ACTIVATE_NEXT_STRIPE_LED, DEACTIVATE_LAST_STRIPE_LED, INCREASE_BRIGHTNESS,
     DECREASE_BRIGHTNESS, PREV_BLACK_STRIPE, NEXT_BLACK_STRIPE, PREV_BRIGHT_STRIPE, NEXT_BRIGHT_STRIPE,
-    ACTIVATE_NEXT_BRIGHT_STRIPE_LED, DEACTIVATE_LAST_BRIGHT_STRIPE_LED;
+    ACTIVATE_NEXT_BRIGHT_STRIPE_LED, DEACTIVATE_LAST_BRIGHT_STRIPE_LED,
+    ACTIVATE_NEXT_SAME_STRIPE_LED_FIRST_NODE, DEACTIVATE_LAST_SAME_STRIPE_LED_FIRST_NODE,
+    ACTIVATE_NEXT_SAME_STRIPE_LED_SECOND_NODE, DEACTIVATE_LAST_SAME_STRIPE_LED_SECOND_NODE;
   }
   StripeChange stripeChange = StripeChange.NONE;
   Instant lastChangeTime = Instant.now(); 
-  static int minMillisBetweenChanges = 100;
+  
+  private int speedSetting = 0;
+  private int minMillisBetweenChanges = 100;
+  private int minMillisBetweenChangesValues[] = {100, 10, 0};
+  
+  private static int sameStripeFullActivationOffset = 20;
 
   LedStripeFullActivationEffect(String _id, LedInStripeInfo[] _stripeInfo, int _numStripes) {
     id = _id;
@@ -56,14 +67,14 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   }
   
   private boolean activatedStripeLedIsInBounds(int activatedStripeLedCurrentIndex){
-    return activatedStripeLedCurrentIndex <= (ledStripeActivationIndex + 1) && activatedStripeLedCurrentIndex >= (ledStripeActivationIndex - 1);
+    return  (ledStripeActivationIndex - 3) <= activatedStripeLedCurrentIndex && activatedStripeLedCurrentIndex <= (ledStripeActivationIndex + 2);
   }
   
   private boolean brightStripeLedIsInBounds(int stripeIndex, int brightLedStripeLedCurrentIndex){
     if(brightLedStripeIndex >= 0){
       boolean res = stripeIndex == brightLedStripeIndex;
       if(brightLedStripeActivationIndex >= 0){
-       res = res && (brightLedStripeLedCurrentIndex <= (brightLedStripeActivationIndex + 1) && brightLedStripeLedCurrentIndex >= (brightLedStripeActivationIndex - 1));
+       res = res && (brightLedStripeActivationIndex - 3) <= brightLedStripeLedCurrentIndex && brightLedStripeLedCurrentIndex <= (brightLedStripeActivationIndex + 2);
       }
       return res;
     }
@@ -71,23 +82,25 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   }
 
   public LedColor[] drawMe() {
-    int activatedStripeLedCurrentIndex = 0;
     for(int i = 0; i < stripeInfo.length; i++){
       int currentStripeIndex = stripeInfo[i].whichStripeIndex;
       int ledIndexInStripe = stripeInfo[i].indexInStripe;
+      bufferLedColors[i] = new LedColor(0, 0, 0);
+      
       if(currentStripeIndex == activatedStripeIndex){
         LedColor col;
         if(activatedStripeLedIsInBounds(ledIndexInStripe)) {
-          col = new LedColor(1, 1, 1);
+          col = new LedColor(0, 1, 0);
+        } else if (sameStripeFirstNodeFullActivationIndex >= 0 && ledIndexInStripe >= sameStripeFirstNodeFullActivationIndex){
+          col = new LedColor(1, 0, 0);
         } else {
           col = new LedColor(0, 0, 0);
         }
         bufferLedColors[i] = col;
-        activatedStripeLedCurrentIndex++;
-      } else if(brightStripeLedIsInBounds(currentStripeIndex, ledIndexInStripe)) {
-        bufferLedColors[i] = new LedColor(1, 1, 1);
-      } else {
-        bufferLedColors[i] = new LedColor(0, 0, 0);
+      }
+      
+      if(brightStripeLedIsInBounds(currentStripeIndex, ledIndexInStripe) && (currentStripeIndex != activatedStripeIndex || (brightLedStripeActivationIndex >= 0))) {
+        bufferLedColors[i] = new LedColor(1, 0, 0);
       }
       //display already set nodes if showNodes is set to true
       if(showNodes) {
@@ -95,12 +108,12 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
           Iterator<Integer> itr = nodeCrossing.iterator();
           while (itr.hasNext()) {
             if(itr.next() == i) {
-              bufferLedColors[i] = new LedColor(255, 0, 0);
+              bufferLedColors[i] = new LedColor(0, 1, 1);
             }
           }
         }
         if(ledNetInfo[i].partOfNode != null){
-          bufferLedColors[i] = new LedColor(0, 255, 0);
+          bufferLedColors[i] = new LedColor(1, 0, 1);
         }
       }
       bufferLedColors[i].mult(stripesBrightness);
@@ -158,8 +171,31 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
     brightLedStripeActivationIndex--;
     brightLedStripeActivationIndex = Math.max(brightLedStripeActivationIndex, -1);
   }
+
+  private void activateNextSameStripeLedFirstNode(){
+    activateNextStripeLed();
+    sameStripeFirstNodeFullActivationIndex = ledStripeActivationIndex + sameStripeFullActivationOffset;
+  }
+  
+  private void deactivateLastSameStripeLedFirstNode(){
+    deactivateLastStripeLed();
+    sameStripeFirstNodeFullActivationIndex = ledStripeActivationIndex + sameStripeFullActivationOffset;
+  }
+  
+  private void activateNextSameStripeLedSecondNode(){
+    sameStripeFirstNodeFullActivationIndex = -1;
+    brightLedStripeIndex = activatedStripeIndex;
+    activateNextBrightStripeLed();
+  }
+  
+  private void deactivateLastSameStripeLedSecondNode(){
+    sameStripeFirstNodeFullActivationIndex = -1;
+    brightLedStripeIndex = activatedStripeIndex;
+    deactivateLastBrightStripeLed();
+  }
   
   private void nextBlackStripe(){
+    setChangesSpeedSlow();
     if(changeNotAllowed()){
       return;
     }
@@ -171,6 +207,7 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   }
   
   private void prevBlackStripe(){
+    setChangesSpeedSlow();
     if(changeNotAllowed()){
       return;
     }
@@ -200,6 +237,7 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   }
   
   private void nextBrightStripe(){
+    setChangesSpeedSlow();
     if(changeNotAllowed()){
       return;
     }
@@ -211,6 +249,7 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   }
   
   private void prevBrightStripe(){
+    setChangesSpeedSlow();
     if(changeNotAllowed()){
       return;
     }
@@ -278,6 +317,18 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
     //return ledStripeActivationIndex - 1, brightStripeActivationIndex - 1;
   }
   
+  //cycle through different speed settings
+  public void cycleSpeeds(){
+    speedSetting++;
+    if(speedSetting >= minMillisBetweenChangesValues.length) speedSetting = 0;
+     minMillisBetweenChanges = minMillisBetweenChangesValues[speedSetting];
+  }
+  
+  //set the speed of changes to slowest option
+  private void setChangesSpeedSlow(){
+    minMillisBetweenChanges = minMillisBetweenChangesValues[0];
+  }
+  
   //call this function after setting the desired mode of change any time necessary
   public void changeStripe(){
     if (stripeChange == StripeChange.INCREASE_BRIGHTNESS) {
@@ -300,6 +351,14 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
       this.activateNextBrightStripeLed();
     } else if (stripeChange == StripeChange.DEACTIVATE_LAST_BRIGHT_STRIPE_LED) {
       this.deactivateLastBrightStripeLed();
+    } else if (stripeChange == StripeChange.ACTIVATE_NEXT_SAME_STRIPE_LED_FIRST_NODE) {
+      this.activateNextSameStripeLedFirstNode();
+    } else if (stripeChange == StripeChange.DEACTIVATE_LAST_SAME_STRIPE_LED_FIRST_NODE) {
+      this.deactivateLastSameStripeLedFirstNode();
+    } else if (stripeChange == StripeChange.ACTIVATE_NEXT_SAME_STRIPE_LED_SECOND_NODE) {
+      this.activateNextSameStripeLedSecondNode();
+    } else if (stripeChange == StripeChange.DEACTIVATE_LAST_SAME_STRIPE_LED_SECOND_NODE) {
+      this.deactivateLastSameStripeLedSecondNode();
     }
     
   }

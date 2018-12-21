@@ -283,14 +283,12 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
               int forwPos=nodeLedIdx +jump;
               if (forwPos>0&&forwPos<nLeds) newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy));
               //do not go back the same stripe:
-              if (nodeLedIdx!=activationLedIdx) {
-                
+              if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
                 int backwPos=nodeLedIdx -jump;
                 if (backwPos>0&&backwPos<nLeds) newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
-              } else {
-                System.out.println("No backward on same node id");
               }
             }
+            return true;
           }
         }
         return false;
