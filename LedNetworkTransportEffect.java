@@ -191,9 +191,13 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     float speed; // [leds/second] also encodes direction in sign
     float energy; // some measure of strength
   }
-
-
-
+  
+  //represents fillers needed when high travelling speeds lead to skipping some leds in each frame
+  public class TravellingActivationFiller extends TravellingActivation {
+    TravellingActivationFiller(float ledIdxPos_, int stripeIdx_, float speed_, float energy_){
+      super(ledIdxPos_, stripeIdx_, speed_, energy_);
+    }
+  }
 
   //simulate one time step
   public LedColor[] drawMe() { 
@@ -208,16 +212,46 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     lastCyclePos=currentTime;
     float speed=impulseSpeed.getValue(); 
     float energyLoss=impulseDecay.getValue();
-    int nLeds=ledNetInfo.length;
     //iterate through activations and build a new list of activations in the meanwhile.
     LinkedList<TravellingActivation> newActivations=new LinkedList<TravellingActivation>();
 
     for (TravellingActivation curActivation : activations) {
+      int prevActivationLedIdx=curActivation.getLedIndex();
       // let each activation travel a bit in it's direction
       curActivation.ledIdxPos+=curActivation.speed*timeStep;
       // if the activation hasn't fallen off the end of the stripe...
       int activationLedIdx=curActivation.getLedIndex(); // global led position
-      // should the activation survive this round?
+      if (activationLedIdx - prevActivationLedIdx >= 2) System.out.println("LED skipped, LedId1 - LedId2 = " + (activationLedIdx - prevActivationLedIdx));
+      for(int curActivationLedIdx = prevActivationLedIdx; curActivationLedIdx <= activationLedIdx; curActivationLedIdx++){
+        if (activationDiedOrEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss)) break;
+        if(curActivationLedIdx == activationLedIdx){
+          newActivations.add(curActivation);
+        } else {
+          LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
+          newActivations.add(new TravellingActivation(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy ));
+        }
+      }
+    }
+    
+    activations=newActivations;
+
+    //draw all
+    LedColor.mult (bufferLedColors, new LedColor(fadeOutR.getValue(), fadeOutG.getValue(), fadeOutB.getValue()));
+    for (LedNetworkTransportEffect.TravellingActivation curActivation : activations) {
+      int curLedIndex=curActivation.getLedIndex(); // global led position
+      float fade=(float)Math.pow(curActivation.energy, gamma);
+      bufferLedColors[curLedIndex].set(spotR*fade, spotG*fade, spotB*fade);
+      //bufferLedColors[curLedIndex].set(1, 0, 0);
+      //if the travelling activation is a filler remove it
+      if(curActivation.getClass() == TravellingActivationFiller.class) activations.remove(curActivation);
+    }
+
+    return bufferLedColors;
+  }
+  
+  private boolean activationDiedOrEncounteredNode(Integer activationLedIdx, TravellingActivation curActivation, LinkedList<TravellingActivation> newActivations, double currentTime, float energyLoss){
+    int nLeds=ledNetInfo.length;
+     // should the activation survive this round?
       if (
         activationLedIdx>=0&&activationLedIdx<=(nLeds-1)&& //ledIndex is valid
         ledNetInfo[activationLedIdx].stripeIndex==curActivation.stripeIdx&& // activation is in it's original stripe
@@ -259,24 +293,13 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
               }
             }
           }
+          return true;
         } else {
           //nothing special has happened, keep the activation for next round.
-          newActivations.add(curActivation);
+          return false;
         }
-      }
-    }
-    activations=newActivations;
-
-    //draw all
-    LedColor.mult (bufferLedColors, new LedColor(fadeOutR.getValue(), fadeOutG.getValue(), fadeOutB.getValue()));
-    for (LedNetworkTransportEffect.TravellingActivation curActivation : activations) {
-      int curLedIndex=curActivation.getLedIndex(); // global led position
-      float fade=(float)Math.pow(curActivation.energy, gamma);
-      bufferLedColors[curLedIndex].set(spotR*fade, spotG*fade, spotB*fade);
-      //bufferLedColors[curLedIndex].set(1, 0, 0);
-    }
-
-    return bufferLedColors;
+     }
+     return true;
   }
 
   void createRandomActivation() {

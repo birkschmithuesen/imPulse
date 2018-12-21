@@ -1,7 +1,7 @@
 import netP5.*;
 import oscP5.*;
 import controlP5.*;
-//import codeanticode.syphon.*;
+import codeanticode.syphon.*;
 
 import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
@@ -25,7 +25,7 @@ import java.util.List;
 // width: length of led stripes
 // height: number of stripes 
 PGraphics canvas;
-//SyphonServer server;
+SyphonServer server;
 
 OscP5 oscP5;
 NetAddress oscOutput;
@@ -75,7 +75,7 @@ void setup() {
   oscOutput = new NetAddress("192.168.111.100", 8002);
   
   // Create syhpon server to send frames out.
-  //server = new SyphonServer(this, "Lightstrument");
+  server = new SyphonServer(this, "Lightstrument");
   // create stripe information
   stripeConfiguration = new StripeConfigurator(numStripes, numLedsPerStripe); // used to generate per led info.
 
@@ -128,7 +128,7 @@ void draw() {
   ledColors=mixer.mix(); // calculate the visuals  
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
   image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
-  //server.sendImage(canvas); // send the visuals over Syphon to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
+  server.sendImage(canvas); // send the visuals over Syphon to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
   ledStripeFullActivationEffect.changeStripe();
 }
 
