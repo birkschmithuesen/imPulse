@@ -72,7 +72,7 @@ void setup() {
   //opens the port to receive OSC
   oscP5 = new OscP5(this, 8001);
   //when a node is activated an osc impuls is send to Ableton Live
-  oscOutput = new NetAddress("192.168.111.100", 8002);
+  oscOutput = new NetAddress("127.0.0.1", 8002);//("192.168.88.253", 8002);
   
   // Create syhpon server to send frames out.
   server = new SyphonServer(this, "Lightstrument");

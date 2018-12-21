@@ -68,7 +68,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
     fadeOutR= new RemoteControlledFloatParameter("/net/impulse/fadeOut/r", 0.98f, 0f, 1f); // color of travelling impulse
     fadeOutG= new RemoteControlledFloatParameter("/net/impulse/fadeOut/g", 0.97f, 0f, 1f); // color of travelling impulse
-    fadeOutB= new RemoteControlledFloatParameter("/net/impulse/fadeOut/b", 0.95f, 0f, 1f); // color of travelling impulse
+    fadeOutB= new RemoteControlledFloatParameter("/net/impulse/fadeOut/b", 0.55f, 0f, 1f); // color of travelling impulse
 
     OscMessageDistributor.registerAdress("/net/activateNode", this);
     OscMessageDistributor.registerAdress("/net/activateStripe", this);
@@ -221,14 +221,16 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       curActivation.ledIdxPos+=curActivation.speed*timeStep;
       // if the activation hasn't fallen off the end of the stripe...
       int activationLedIdx=curActivation.getLedIndex(); // global led position
-      if (activationLedIdx - prevActivationLedIdx >= 2) System.out.println("LED skipped, LedId1 - LedId2 = " + (activationLedIdx - prevActivationLedIdx));
-      for(int curActivationLedIdx = prevActivationLedIdx; curActivationLedIdx <= activationLedIdx; curActivationLedIdx++){
-        if (activationDiedOrEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss)) break;
+      int direction;// needed to reuse loop for positive and negative speeds
+      if(curActivation.speed > 0) direction = 1;
+      else direction = -1;
+      for(int curActivationLedIdx = prevActivationLedIdx+direction; curActivationLedIdx*direction <= activationLedIdx*direction; curActivationLedIdx+=direction){
+        if (activationDiedOrEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime, energyLoss)) break;
         if(curActivationLedIdx == activationLedIdx){
           newActivations.add(curActivation);
         } else {
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
-          newActivations.add(new TravellingActivation(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy ));
+          newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy));
         }
       }
     }
@@ -236,14 +238,16 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     activations=newActivations;
 
     //draw all
-    LedColor.mult (bufferLedColors, new LedColor(fadeOutR.getValue(), fadeOutG.getValue(), fadeOutB.getValue()));
-    for (LedNetworkTransportEffect.TravellingActivation curActivation : activations) {
+    LedColor.mult(bufferLedColors, new LedColor(fadeOutR.getValue(), fadeOutG.getValue(), fadeOutB.getValue()));
+    ListIterator<TravellingActivation> iter = activations.listIterator();
+    while(iter.hasNext()){
+      TravellingActivation curActivation = iter.next();
       int curLedIndex=curActivation.getLedIndex(); // global led position
       float fade=(float)Math.pow(curActivation.energy, gamma);
       bufferLedColors[curLedIndex].set(spotR*fade, spotG*fade, spotB*fade);
       //bufferLedColors[curLedIndex].set(1, 0, 0);
       //if the travelling activation is a filler remove it
-      if(curActivation.getClass() == TravellingActivationFiller.class) activations.remove(curActivation);
+      if(curActivation.getClass() == TravellingActivationFiller.class) iter.remove();
     }
 
     return bufferLedColors;
@@ -262,17 +266,9 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           LedNetworkNode hitNode=ledNetInfo[activationLedIdx].partOfNode;
           // only multiply at nodes that have not been active for a while
           if (currentTime-hitNode.lastActivationTime>nodeDeadTime.getValue()) {
-
             hitNode.lastActivationTime=currentTime;
             //send osc Notification
-            OscMessage myMessage = new OscMessage("/net/hitNode");
-            myMessage.add(hitNode.id);
-            myMessage.add(curActivation.energy);
-            //myMessage.add(hitNode.position.x);
-            //myMessage.add(hitNode.position.y);
-            //myMessage.add(hitNode.position.z);
-            oscP5.send(myMessage, remoteLocation);
-
+            sendOscMessage(hitNode, curActivation);
 
             float nActivations=hitNode.ledIndices.size();
             for (Integer nodeLedIdx : hitNode.ledIndices) {
@@ -284,22 +280,32 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
               if (curActivation.speed>0)jump=1;
               else jump=-1;
               //  activation spreads in boths directions
-              int forwPos=nodeLedIdx +jump;           
-              if (forwPos>0&&forwPos<nLeds)newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy ));
+              int forwPos=nodeLedIdx +jump;
+              if (forwPos>0&&forwPos<nLeds) newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy));
               //do not go back the same stripe:
               if (nodeLedIdx!=activationLedIdx) {
-                int backwPos=nodeLedIdx -jump;            
-                if (backwPos>0&&backwPos<nLeds)newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
+                
+                int backwPos=nodeLedIdx -jump;
+                if (backwPos>0&&backwPos<nLeds) newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
+              } else {
+                System.out.println("No backward on same node id");
               }
             }
           }
-          return true;
-        } else {
-          //nothing special has happened, keep the activation for next round.
-          return false;
         }
+        return false;
      }
      return true;
+  }
+  
+  private void sendOscMessage(LedNetworkNode hitNode, TravellingActivation curActivation){
+    OscMessage myMessage = new OscMessage("/net/hitNode");
+            myMessage.add(hitNode.id);
+            myMessage.add(curActivation.energy);
+            //myMessage.add(hitNode.position.x);
+            //myMessage.add(hitNode.position.y);
+            //myMessage.add(hitNode.position.z);
+            oscP5.send(myMessage, remoteLocation);
   }
 
   void createRandomActivation() {
