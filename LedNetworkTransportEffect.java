@@ -59,7 +59,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     remoteLocation=_remoteLocation;
 
     nodeDeadTime= new RemoteControlledFloatParameter("/net/impulse/nodeDeadTime", 0f, 0.0f, 10);
-    impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.05f, 0.0001f, 0.5f);
+    impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.012f, 0.0001f, 0.5f);
     impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 160, 1, 200);
 
     impulseR= new RemoteControlledFloatParameter("/net/impulse/color/r", 1, 0, 1); // color of travelling impulse
