@@ -22,6 +22,11 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   LedColor[] bufferLedColors;
   ArrayList <LedNetworkNode> nodes;	
   double lastCyclePos=(double)System.currentTimeMillis()/1000;
+  
+  LedColor[] stripeColors = {new LedColor(68/255f,0/255f,62/255f), new LedColor(189/255f,103/255f,0/255f), new LedColor(236/255f,204/255f,0/255f), new LedColor(221/255f,65/255f,8/255f),
+                             new LedColor(187/255f,213/255f,67/255f), new LedColor(126/255f,201/255f,232/255f), new LedColor(210/255f,39/255f,45/255f), new LedColor(234/255f,147/255f,44/255f)};
+
+  int[] pipeMapping = {2, 1, 0, 7, 6, 5, 4, 3};
 
   LinkedList<TravellingActivation> activations= new LinkedList<TravellingActivation>();
 
@@ -33,10 +38,13 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   //settings
   RemoteControlledFloatParameter nodeDeadTime; // Time between two activations of a node
   RemoteControlledFloatParameter impulseDecay; // loss of energy/second
+  RemoteControlledFloatParameter impulseDecayFactor;
+  RemoteControlledIntParameter impulseEnergyExponent;
   RemoteControlledIntParameter impulseSpeed; // speed (leds/second)
 
   RemoteControlledFloatParameter impulseGamma= new RemoteControlledFloatParameter("/net/impulse/color/gamma", 0f, 0.1f, 5f);
 
+  RemoteControlledIntParameter impulseUseRemoteCol; 
   RemoteControlledFloatParameter impulseR;
   RemoteControlledFloatParameter impulseG;
   RemoteControlledFloatParameter impulseB;
@@ -58,17 +66,20 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     oscP5=_oscP5;
     remoteLocation=_remoteLocation;
 
-    nodeDeadTime= new RemoteControlledFloatParameter("/net/impulse/nodeDeadTime", 0f, 0.0f, 10);
+    nodeDeadTime= new RemoteControlledFloatParameter("/net/impulse/nodeDeadTime", 1f, 0.0f, 10);
     impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.012f, 0.0001f, 0.5f);
+    impulseDecayFactor= new RemoteControlledFloatParameter("/net/impulse/energyDecayfactor", 1/5f, 0.0001f, 1f);
     impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 160, 1, 200);
+    impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
 
+    impulseUseRemoteCol = new RemoteControlledIntParameter("/net/impulse/color/useRemoteCol", 0, 0, 1);
     impulseR= new RemoteControlledFloatParameter("/net/impulse/color/r", 1, 0, 1); // color of travelling impulse
     impulseG= new RemoteControlledFloatParameter("/net/impulse/color/g", 1, 0, 1); // color of travelling impulse
     impulseB= new RemoteControlledFloatParameter("/net/impulse/color/b", 1, 0, 1); // color of travelling impulse
 
-    fadeOutR= new RemoteControlledFloatParameter("/net/impulse/fadeOut/r", 0.98f, 0f, 1f); // color of travelling impulse
-    fadeOutG= new RemoteControlledFloatParameter("/net/impulse/fadeOut/g", 0.97f, 0f, 1f); // color of travelling impulse
-    fadeOutB= new RemoteControlledFloatParameter("/net/impulse/fadeOut/b", 0.55f, 0f, 1f); // color of travelling impulse
+    fadeOutR= new RemoteControlledFloatParameter("/net/impulse/fadeOut/r", 0.97f, 0f, 1f); // color of travelling impulse
+    fadeOutG= new RemoteControlledFloatParameter("/net/impulse/fadeOut/g", 0.96f, 0f, 1f); // color of travelling impulse
+    fadeOutB= new RemoteControlledFloatParameter("/net/impulse/fadeOut/b", 0.56f, 0f, 1f); // color of travelling impulse
 
     OscMessageDistributor.registerAdress("/net/activateNode", this);
     OscMessageDistributor.registerAdress("/net/activateStripe", this);
@@ -117,12 +128,21 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), 1f ));
     }
     
+    System.out.println(newMessage);
     
     //receive a bang on one of the tubes
     if (newMessage.checkAddrPattern("/tube/trigger") && newMessage.arguments().length>0) {
-      int theValue=newMessage.get(0).intValue();
+      int theValue=newMessage.get(0).intValue()-1;
+      float energy= 1f;
+      if(newMessage.arguments().length > 1) energy = newMessage.get(1).floatValue();
+      if(energy < 0) energy = 0;
+      for(int i = 1; i < impulseEnergyExponent.getValue(); i++){
+        energy *= energy;
+      }
+      System.out.println("Calculated Energy: "  + energy);
       PApplet.println(theValue);
-      if (theValue<nStripes)activations.add(new TravellingActivation(theValue*nLedsInStripe, (int)theValue, impulseSpeed.getValue(), 1f ));
+      theValue = pipeMapping[theValue];
+      if (theValue<nStripes)activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), energy));
     }
     
     // just for the Wisp session : quick and dirty
@@ -201,6 +221,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   //simulate one time step
   public LedColor[] drawMe() { 
+    int useRemoteCol = impulseUseRemoteCol.getValue();
     float spotR=impulseR.getValue(); 
     float spotG=impulseG.getValue();
     float spotB=impulseB.getValue();
@@ -219,6 +240,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       int prevActivationLedIdx=curActivation.getLedIndex();
       // let each activation travel a bit in it's direction
       curActivation.ledIdxPos+=curActivation.speed*timeStep;
+      // loose energy
+      curActivation.energy -= timeStep*impulseDecayFactor.getValue();
       // if the activation hasn't fallen off the end of the stripe...
       int activationLedIdx=curActivation.getLedIndex(); // global led position
       int direction;// needed to reuse loop for positive and negative speeds
@@ -244,10 +267,12 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       TravellingActivation curActivation = iter.next();
       int curLedIndex=curActivation.getLedIndex(); // global led position
       float fade=(float)Math.pow(curActivation.energy, gamma);
-      bufferLedColors[curLedIndex].set(spotR*fade, spotG*fade, spotB*fade);
-      //bufferLedColors[curLedIndex].set(1, 0, 0);
+      LedColor col = stripeColors[ledNetInfo[curLedIndex].stripeIndex];
+      bufferLedColors[curLedIndex].set(col.x*fade, col.y*fade, col.z*fade);
+      if(useRemoteCol == 1) bufferLedColors[curLedIndex].set(spotR*fade, spotG*fade, spotB*fade);
       //if the travelling activation is a filler remove it
       if(curActivation.getClass() == TravellingActivationFiller.class) iter.remove();
+      else if(curActivation.speed < 0 && curLedIndex <= (ledNetInfo[curLedIndex].stripeIndex*nLedsInStripe+27)) iter.remove();
     }
 
     return bufferLedColors;
@@ -283,7 +308,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
               int forwPos=nodeLedIdx +jump;
               if (forwPos>0&&forwPos<nLeds) newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy));
               //do not go back the same stripe:
-              if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
+              if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex || activationLedIdx < nodeLedIdx){//ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
                 int backwPos=nodeLedIdx -jump;
                 if (backwPos>0&&backwPos<nLeds) newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
               }

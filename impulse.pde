@@ -1,7 +1,7 @@
 import netP5.*;
 import oscP5.*;
 import controlP5.*;
-import codeanticode.syphon.*;
+import spout.*;
 
 import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
@@ -25,7 +25,7 @@ import java.util.List;
 // width: length of led stripes
 // height: number of stripes 
 PGraphics canvas;
-SyphonServer server;
+Spout server;
 
 OscP5 oscP5;
 NetAddress oscOutput;
@@ -72,10 +72,11 @@ void setup() {
   //opens the port to receive OSC
   oscP5 = new OscP5(this, 8001);
   //when a node is activated an osc impuls is send to Ableton Live
-  oscOutput = new NetAddress("127.0.0.1", 8002);//("192.168.88.253", 8002);
+  oscOutput = new NetAddress("2.0.0.2", 8002);//("192.168.88.253", 8002);
   
   // Create syhpon server to send frames out.
-  server = new SyphonServer(this, "Lightstrument");
+  server = new Spout(this);
+  server.createSender("Lightstrument");
   // create stripe information
   stripeConfiguration = new StripeConfigurator(numStripes, numLedsPerStripe); // used to generate per led info.
 
@@ -100,7 +101,8 @@ void setup() {
 
   //to save the osc-adresses
   try {
-    DataOutputStream dataOut = new DataOutputStream(new FileOutputStream(dataPath("remoteSettings.txt")));
+    System.out.println(dataPath("remoteSettings.txt"));
+    DataOutputStream dataOut = new DataOutputStream(new FileOutputStream("C:\\Users\\VideoServer\\Desktop\\impulsPlayground\\imPulse\\data\\remoteSettings.txt"));
     OscMessageDistributor.dumpParameterInfo(dataOut);
   } 
   catch (FileNotFoundException e) {
@@ -125,11 +127,11 @@ void setup() {
 
 void draw() {
   OscMessageDistributor.distributeMessages();
-  createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
+  //createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
   ledColors=mixer.mix(); // calculate the visuals  
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
   image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
-  server.sendImage(canvas); // send the visuals over Syphon to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
+  server.sendTexture(canvas); // send the visuals over Syphon to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
   ledStripeFullActivationEffect.changeStripe();
 }
 
@@ -151,7 +153,8 @@ void createRandomPipeTrigger() {
   if (counter > 60) {
     counter=0;    
     OscMessage myMessage = new OscMessage("/tube/trigger");
-    myMessage.add((int)random(numStripes));
+    myMessage.add((int)random(1,numStripes));
+    myMessage.add((float)random(0.6, 1));
     NetAddress localhost = new NetAddress("127.0.0.1", 8001);
     oscP5.send(myMessage, localhost);
   }

@@ -45,8 +45,7 @@ class LedInNetInfo {
   public int indexInStripe;
   public int stripeLength;
   public LedNetworkNode partOfNode; // is this led part of a connecting Node? which one? (set by StripeCrossInfo.buildClusterInfosetClusterInfo)
-  
-  private static String nodeCrossingsFilePath = "/Users/kryptokommunist/Documents/Code/imPulse/node_crossings.txt";
+  private static String nodeCrossingsFilePath = "C:\\Users\\VideoServer\\Desktop\\impulsTestedVersion\\imPulse\\node_crossings.txt";
 
   public static LedInNetInfo[] buildNetInfo(int numStripes, int numLedsPerStripe) {
     LedInNetInfo[] result= new LedInNetInfo[numStripes*numLedsPerStripe];
