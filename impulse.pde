@@ -127,7 +127,7 @@ void setup() {
 
 void draw() {
   OscMessageDistributor.distributeMessages();
-  //createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
+  createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
   ledColors=mixer.mix(); // calculate the visuals  
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
   image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes

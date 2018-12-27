@@ -69,7 +69,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     nodeDeadTime= new RemoteControlledFloatParameter("/net/impulse/nodeDeadTime", 1f, 0.0f, 10);
     impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.012f, 0.0001f, 0.5f);
     impulseDecayFactor= new RemoteControlledFloatParameter("/net/impulse/energyDecayfactor", 1/5f, 0.0001f, 1f);
-    impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 160, 1, 200);
+    impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 160, 1, 1500);
     impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
 
     impulseUseRemoteCol = new RemoteControlledIntParameter("/net/impulse/color/useRemoteCol", 0, 0, 1);
@@ -247,15 +247,15 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       int direction;// needed to reuse loop for positive and negative speeds
       if(curActivation.speed > 0) direction = 1;
       else direction = -1;
-      for(int curActivationLedIdx = prevActivationLedIdx+direction; curActivationLedIdx*direction <= activationLedIdx*direction; curActivationLedIdx+=direction){
-        if (activationDiedOrEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime, energyLoss)) break;
-        if(curActivationLedIdx == activationLedIdx){
-          newActivations.add(curActivation);
-        } else {
+      if(activationLedIdx != prevActivationLedIdx){
+        for(int curActivationLedIdx = prevActivationLedIdx+direction; curActivationLedIdx*direction < activationLedIdx*direction; curActivationLedIdx+=direction){
+          if( !activationIsValid(activationLedIdx, curActivation)) break;
+          if (activationEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime, energyLoss)) break;
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
           newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy));
         }
       }
+      if(activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss))) newActivations.add(curActivation);
     }
     
     activations=newActivations;
@@ -278,14 +278,17 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     return bufferLedColors;
   }
   
-  private boolean activationDiedOrEncounteredNode(Integer activationLedIdx, TravellingActivation curActivation, LinkedList<TravellingActivation> newActivations, double currentTime, float energyLoss){
+  private boolean activationIsValid(int activationLedIdx, TravellingActivation curActivation){
     int nLeds=ledNetInfo.length;
-     // should the activation survive this round?
-      if (
+    return
         activationLedIdx>=0&&activationLedIdx<=(nLeds-1)&& //ledIndex is valid
         ledNetInfo[activationLedIdx].stripeIndex==curActivation.stripeIdx&& // activation is in it's original stripe
-        curActivation.energy>0
-        ) {
+        curActivation.energy>0;
+  }
+  
+  private boolean activationEncounteredNode(Integer activationLedIdx, TravellingActivation curActivation, LinkedList<TravellingActivation> newActivations, double currentTime, float energyLoss){
+    int nLeds=ledNetInfo.length;
+     // should the activation survive this round?
         //if activation hits a stripe crossing, create a new activation for each of the branches
         if (ledNetInfo[activationLedIdx].partOfNode!=null) {
           LedNetworkNode hitNode=ledNetInfo[activationLedIdx].partOfNode;
@@ -315,11 +318,11 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
             }
             return true;
           }
+
         }
         return false;
      }
-     return true;
-  }
+
   
   private void sendOscMessage(LedNetworkNode hitNode, TravellingActivation curActivation){
     OscMessage myMessage = new OscMessage("/net/hitNode");
