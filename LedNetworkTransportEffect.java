@@ -23,17 +23,16 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   ArrayList <LedNetworkNode> nodes;	
   double lastCyclePos=(double)System.currentTimeMillis()/1000;
   
-  LedColor[] Mapping = {new LedColor(68/255f,0/255f,62/255f), new LedColor(189/255f,103/255f,0/255f), new LedColor(236/255f,204/255f,0/255f), new LedColor(221/255f,65/255f,8/255f),
+  LedColor[] stripeColorMapping = {new LedColor(68/255f,0/255f,62/255f), new LedColor(189/255f,103/255f,0/255f), new LedColor(236/255f,204/255f,0/255f), new LedColor(221/255f,65/255f,8/255f),
                              new LedColor(187/255f,213/255f,67/255f), new LedColor(126/255f,201/255f,232/255f), new LedColor(210/255f,39/255f,45/255f), new LedColor(234/255f,147/255f,44/255f)};
 
   int[] pipeMapping = {2, 1, 0, 7, 6, 5, 4, 3};
 
-  LinkedList<TravellingActivation> activations= new LinkedList<TravellingActivation>();
+  LinkedList<TravellingActivation> activations = new LinkedList<TravellingActivation>();
 
   //osc out
   OscP5 oscP5;
   NetAddress remoteLocation;
-
 
   //settings
   RemoteControlledFloatParameter nodeDeadTime; // Time between two activations of a node
@@ -52,8 +51,6 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledFloatParameter fadeOutR;
   RemoteControlledFloatParameter fadeOutG;
   RemoteControlledFloatParameter fadeOutB;
-
-
 
   LedNetworkTransportEffect(String _id, int _numLeds, int _nStripes, int _nLedsInStripe, LedInNetInfo[] _ledNetInfo, 	ArrayList <LedNetworkNode> nodes_, OscP5 _oscP5, NetAddress _remoteLocation) {
     id=_id;
@@ -89,7 +86,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   public void digestMessage(OscMessage newMessage) {
     if (newMessage.checkAddrPattern("/net/activateNode") &&
-      newMessage.arguments().length>0&&
+      newMessage.arguments().length >0 &&
       newMessage.getTypetagAsBytes()[0]=='i'
       ) {
       int theValue=newMessage.get(0).intValue();
@@ -217,7 +214,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       TravellingActivation curActivation = iter.next();
       int curLedIndex=curActivation.getLedIndex(); // global led position
       float fade=(float)Math.pow(curActivation.energy, gamma);
-      LedColor col = stripeColors[ledNetInfo[curLedIndex].stripeIndex];
+      LedColor col = stripeColorMapping[ledNetInfo[curLedIndex].stripeIndex];
       bufferLedColors[curLedIndex].set(col.x*fade, col.y*fade, col.z*fade);
       if(useRemoteCol == 1) bufferLedColors[curLedIndex].set(spotR*fade, spotG*fade, spotB*fade);
       //if the travelling activation is a filler remove it
