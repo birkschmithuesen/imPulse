@@ -20,8 +20,6 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   
   public boolean showNodes = false;
   
-  private static String nodeCrossingsFilePath = "/Users/kryptokommunist/Documents/Code/imPulse/node_crossings.txt";
-  
   ArrayList <TreeSet<Integer>> manualNodeCrossings = new ArrayList <TreeSet<Integer>>();
   LedInNetInfo[] ledNetInfo;
   ArrayList <LedNetworkNode> listOfNodes;
@@ -56,14 +54,13 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
   
   private static int sameStripeFullActivationOffset = 20;
 
-  LedStripeFullActivationEffect(String _id, LedInStripeInfo[] _stripeInfo, int _numStripes) {
+  LedStripeFullActivationEffect(String _id, LedInStripeInfo[] _stripeInfo, int _numStripes, LedInNetInfo[] _ledNetInfo, ArrayList<LedNetworkNode> _listOfNodes) {
     id = _id;
     stripeInfo = _stripeInfo;
     numStripes = _numStripes;
+    ledNetInfo = _ledNetInfo;
+    listOfNodes = _listOfNodes;
     bufferLedColors = LedColor.createColorArray(stripeInfo.length);
-    int numLedsPerStripe = stripeInfo[0].stripeLength;
-    ledNetInfo = LedInNetInfo.buildNetInfo(numStripes, numLedsPerStripe);
-    listOfNodes = LedInNetInfo.loadListOfNodes(ledNetInfo);
   }
   
   private boolean activatedStripeLedIsInBounds(int activatedStripeLedCurrentIndex){
@@ -260,7 +257,7 @@ public class LedStripeFullActivationEffect implements runnableLedEffect {
     setActivatedBrightStripeLength();
   }
   
-  public void saveNodeCrossingsToFile() throws IOException {
+  public void saveNodeCrossingsToFile(String nodeCrossingsFilePath) throws IOException {
     
     FileWriter fileWriter = new FileWriter(nodeCrossingsFilePath, true); //Set true for append mode
     PrintWriter printWriter = new PrintWriter(fileWriter);
