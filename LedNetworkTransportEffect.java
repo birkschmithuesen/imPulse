@@ -1,11 +1,12 @@
-import oscP5.*;
-import processing.core.PApplet;
-import processing.core.PVector;
-import netP5.*;
-
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.*;
+
+import oscP5.*;
+import netP5.*;
+
+import processing.core.PApplet;
+import processing.core.PVector;
 
 ///////////////////////////////////////////////////////////
 // models a set of activations travelling along the stripes
@@ -20,7 +21,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   StripeInfo[] stripeInfos;
   LedInNetInfo[] ledNetInfo;
   LedColor[] bufferLedColors;
-  ArrayList <LedNetworkNode> nodes;	
+  ArrayList <LedNetworkNode> nodes;
   double lastCyclePos=(double)System.currentTimeMillis()/1000;
   
   LedColor[] stripeColorMapping = {new LedColor(68/255f,0/255f,62/255f), new LedColor(189/255f,103/255f,0/255f), new LedColor(236/255f,204/255f,0/255f), new LedColor(221/255f,65/255f,8/255f),
@@ -97,10 +98,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
           //  activation spreads in boths directions
           int forwPos=nodeLedIdx +1;           
-          if (forwPos>0&&forwPos<nLeds)activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, impulseSpeed.getValue(), 1f ));
+          if (forwPos>0&&forwPos<nLeds) {
+			activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, impulseSpeed.getValue(), 1f ));
+		}
           //do not go back the same stripe:
           int backwPos=nodeLedIdx -1;            
-          if (backwPos>0&&backwPos<nLeds)activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -impulseSpeed.getValue(), 1f));
+          if (backwPos>0&&backwPos<nLeds) {
+			activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -impulseSpeed.getValue(), 1f));
+		}
         }
       }
     }
@@ -118,15 +123,21 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     if (newMessage.checkAddrPattern("/tube/trigger") && newMessage.arguments().length>0) {
       int theValue=newMessage.get(0).intValue()-1;
       float energy= 1f;
-      if(newMessage.arguments().length > 1) energy = newMessage.get(1).floatValue();
-      if(energy < 0) energy = 0;
+      if(newMessage.arguments().length > 1) {
+		energy = newMessage.get(1).floatValue();
+	}
+      if(energy < 0) {
+		energy = 0;
+	}
       for(int i = 1; i < impulseEnergyExponent.getValue(); i++){
         energy *= energy;
       }
       System.out.println("Calculated Energy: "  + energy);
       PApplet.println(theValue);
       theValue = pipeMapping[theValue];
-      if (theValue<nStripes)activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), energy));
+      if (theValue<nStripes) {
+		activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), energy));
+	}
     }
   }
   
@@ -192,17 +203,26 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // if the activation hasn't fallen off the end of the stripe...
       int activationLedIdx=curActivation.getLedIndex(); // global led position
       int direction;// needed to reuse loop for positive and negative speeds
-      if(curActivation.speed > 0) direction = 1;
-      else direction = -1;
+      if(curActivation.speed > 0) {
+		direction = 1;
+	} else {
+		direction = -1;
+	}
       if(activationLedIdx != prevActivationLedIdx){
         for(int curActivationLedIdx = prevActivationLedIdx+direction; curActivationLedIdx*direction < activationLedIdx*direction; curActivationLedIdx+=direction){
-          if( !activationIsValid(activationLedIdx, curActivation)) break;
-          if (activationEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime, energyLoss)) break;
+          if( !activationIsValid(activationLedIdx, curActivation)) {
+			break;
+		}
+          if (activationEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime, energyLoss)) {
+			break;
+		}
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
           newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy));
         }
       }
-      if(activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss))) newActivations.add(curActivation);
+      if(activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss))) {
+		newActivations.add(curActivation);
+	}
     }
     
     activations=newActivations;
@@ -216,10 +236,15 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       float fade=(float)Math.pow(curActivation.energy, gamma);
       LedColor col = stripeColorMapping[ledNetInfo[curLedIndex].stripeIndex];
       bufferLedColors[curLedIndex].set(col.x*fade, col.y*fade, col.z*fade);
-      if(useRemoteCol == 1) bufferLedColors[curLedIndex].set(spotR*fade, spotG*fade, spotB*fade);
+      if(useRemoteCol == 1) {
+		bufferLedColors[curLedIndex].set(spotR*fade, spotG*fade, spotB*fade);
+	}
       //if the travelling activation is a filler remove it
-      if(curActivation.getClass() == TravellingActivationFiller.class) iter.remove();
-      else if(curActivation.speed < 0 && curLedIndex <= (ledNetInfo[curLedIndex].stripeIndex*nLedsInStripe+27)) iter.remove();
+      if(curActivation.getClass() == TravellingActivationFiller.class) {
+		iter.remove();
+	} else if(curActivation.speed < 0 && curLedIndex <= (ledNetInfo[curLedIndex].stripeIndex*nLedsInStripe+27)) {
+		iter.remove();
+	}
     }
 
     return bufferLedColors;
@@ -252,15 +277,22 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
               float childEnergy=curActivation.energy/nActivations/2.0f-energyLoss;
 
               int jump; // jump one led to avoid activating the same node over and over again
-              if (curActivation.speed>0)jump=1;
-              else jump=-1;
+              if (curActivation.speed>0) {
+				jump=1;
+			} else {
+				jump=-1;
+			}
               //  activation spreads in boths directions
               int forwPos=nodeLedIdx +jump;
-              if (forwPos>0&&forwPos<nLeds) newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy));
+              if (forwPos>0&&forwPos<nLeds) {
+				newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy));
+			}
               //do not go back the same stripe:
               if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex || activationLedIdx < nodeLedIdx){//ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
                 int backwPos=nodeLedIdx -jump;
-                if (backwPos>0&&backwPos<nLeds) newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
+                if (backwPos>0&&backwPos<nLeds) {
+					newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
+				}
               }
             }
             return true;
