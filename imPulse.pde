@@ -91,12 +91,12 @@ void setup() {
   ledColors = LedColor.createColorArray(numLeds);        // build a color buffer with the length of the position file
   stripeInfos = stripeConfiguration.builtStripeInfo();   
   ledNetInfo = LedInNetInfo.buildNetInfo(numStripes, numLedsPerStripe); //create an Array with data for each LED if they are part of a node
-  listOfNodes = LedInNetInfo.loadListOfNodes(ledNetInfo);  // all sets of Leds that are on different stripes but close to each other
+  listOfNodes = LedInNetInfo.loadListOfNodes(dataPath("nodeCrossings.txt"), ledNetInfo);  // all sets of Leds that are on different stripes but close to each other
 
   //initialize visual effects
   ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, oscP5, oscOutput);
   ledNetworkNodeEffects = new LedNetworkNodeEffects("1", numLeds, ledNetInfo, listOfNodes);
-  ledStripeFullActivationEffect = new LedStripeFullActivationEffect("1", stripeInfos, numStripes);
+  ledStripeFullActivationEffect = new LedStripeFullActivationEffect("1", stripeInfos, numStripes, ledNetInfo, listOfNodes);
 
   mixer = new Mixer(numLeds);
   mixer.addEffect(ledNetworkTransportEffect);
@@ -213,7 +213,7 @@ void keyReleased() {
       ledStripeFullActivationEffect.saveCurrentNodeCrossing();
   } else if(key == 's') {
     try {
-      ledStripeFullActivationEffect.saveNodeCrossingsToFile();
+      ledStripeFullActivationEffect.saveNodeCrossingsToFile(dataPath("nodeCrossings.txt"));
     } catch (IOException e) {
       println(e);
     }

@@ -45,7 +45,6 @@ class LedInNetInfo {
   public int indexInStripe;
   public int stripeLength;
   public LedNetworkNode partOfNode; // is this led part of a connecting Node? which one? (set by StripeCrossInfo.buildClusterInfosetClusterInfo)
-  private static String nodeCrossingsFilePath = "C:\\Users\\VideoServer\\Desktop\\impulsTestedVersion\\imPulse\\node_crossings.txt";
 
   public static LedInNetInfo[] buildNetInfo(int numStripes, int numLedsPerStripe) {
     LedInNetInfo[] result= new LedInNetInfo[numStripes*numLedsPerStripe];
@@ -59,10 +58,8 @@ class LedInNetInfo {
     return result;
   }
 
-  public static ArrayList<LedNetworkNode> loadListOfNodes(LedInNetInfo[] ledNetInfos) {
-    
+  public static ArrayList<LedNetworkNode> loadListOfNodes(String nodeCrossingsFilePath, LedInNetInfo[] ledNetInfos) {
     System.out.println("Loading list of nodes from " + nodeCrossingsFilePath);
-    
     int nLeds=ledNetInfos.length;
     //each led can be member of one connectedcluster that contains all leds that are (also indirectly) connected by distances<thresh
     // clusters are represented by sets of the ledIndices
@@ -70,7 +67,7 @@ class LedInNetInfo {
     ArrayList <TreeSet<Integer>> clusterOfLed=new ArrayList <TreeSet<Integer>>(nLeds); // here we remember which cluster a led is part of 
 
     while (clusterOfLed.size()<nLeds)clusterOfLed.add(null);
-    
+
     //read the node crossing from file
     BufferedReader reader;
     try {
