@@ -1,14 +1,16 @@
-import netP5.*;
-import oscP5.*;
-import controlP5.*;
-import spout.*;
-
 import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
+import netP5.*;
+import oscP5.*;
+import controlP5.*;
+
+//import spout.*; //use this on Windows
+import codeanticode.syphon.*; //use this on MacOS
 
 
 //////////////////////////////////////////////////////////////////////////
@@ -25,7 +27,8 @@ import java.util.List;
 // width: length of led stripes
 // height: number of stripes 
 PGraphics canvas;
-Spout server;
+//Spout server; //use this on Windows
+SyphonServer server; //use this on MacOS
 
 OscP5 oscP5;
 NetAddress oscOutput;
@@ -74,9 +77,10 @@ void setup() {
   //when a node is activated an osc impuls is send to Ableton Live
   oscOutput = new NetAddress("2.0.0.2", 8002);//("192.168.88.253", 8002);
   
-  // Create syhpon server to send frames out.
-  server = new Spout(this);
-  server.createSender("Lightstrument");
+  // Create Syhpon/Spout server to send frames out directly shared on gpu.
+  //server = new Spout(this); //use this on Windows
+  //server.createSender("Lightstrument"); //use this on Windows
+  server = new SyphonServer(this, "Lightstrument"); //use this on MacOs
   // create stripe information
   stripeConfiguration = new StripeConfigurator(numStripes, numLedsPerStripe); // used to generate per led info.
 
@@ -131,7 +135,9 @@ void draw() {
   ledColors=mixer.mix(); // calculate the visuals  
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
   image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
-  server.sendTexture(canvas); // send the visuals over Syphon to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
+  // send the visuals over Syphon/Spout to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
+  //server.sendTexture(canvas); //use this on Windows
+  server.sendImage(canvas); //use this on MacOS
   ledStripeFullActivationEffect.changeStripe();
 }
 

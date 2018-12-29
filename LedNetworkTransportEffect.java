@@ -23,7 +23,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   ArrayList <LedNetworkNode> nodes;	
   double lastCyclePos=(double)System.currentTimeMillis()/1000;
   
-  LedColor[] stripeColors = {new LedColor(68/255f,0/255f,62/255f), new LedColor(189/255f,103/255f,0/255f), new LedColor(236/255f,204/255f,0/255f), new LedColor(221/255f,65/255f,8/255f),
+  LedColor[] Mapping = {new LedColor(68/255f,0/255f,62/255f), new LedColor(189/255f,103/255f,0/255f), new LedColor(236/255f,204/255f,0/255f), new LedColor(221/255f,65/255f,8/255f),
                              new LedColor(187/255f,213/255f,67/255f), new LedColor(126/255f,201/255f,232/255f), new LedColor(210/255f,39/255f,45/255f), new LedColor(234/255f,147/255f,44/255f)};
 
   int[] pipeMapping = {2, 1, 0, 7, 6, 5, 4, 3};
@@ -38,8 +38,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   //settings
   RemoteControlledFloatParameter nodeDeadTime; // Time between two activations of a node
   RemoteControlledFloatParameter impulseDecay; // loss of energy/second
-  RemoteControlledFloatParameter impulseDecayFactor;
-  RemoteControlledIntParameter impulseEnergyExponent;
+  RemoteControlledFloatParameter impulseDecayFactor; // impulseEnergy -= factor*time 
+  RemoteControlledIntParameter impulseEnergyExponent; // Exponent applied to input volume provided by /tube/trigger
   RemoteControlledIntParameter impulseSpeed; // speed (leds/second)
 
   RemoteControlledFloatParameter impulseGamma= new RemoteControlledFloatParameter("/net/impulse/color/gamma", 0f, 0.1f, 5f);
@@ -85,19 +85,6 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     OscMessageDistributor.registerAdress("/net/activateStripe", this);
 
     OscMessageDistributor.registerAdress("/tube/trigger", this);
-  
-    //just for the Wisp Session:
-    // leave it here for the moment because the sender from MaxMSP gives this addresses
-    /*
-    OscMessageDistributor.registerAdress("/tube_1/trigger", this);
-    OscMessageDistributor.registerAdress("/tube_2/trigger", this);
-    OscMessageDistributor.registerAdress("/tube_3/trigger", this);
-    OscMessageDistributor.registerAdress("/tube_4/trigger", this);
-    OscMessageDistributor.registerAdress("/tube_5/trigger", this);
-    OscMessageDistributor.registerAdress("/tube_6/trigger", this);
-    OscMessageDistributor.registerAdress("/tube_7/trigger", this);
-    OscMessageDistributor.registerAdress("/tube_8/trigger", this);
-    */
   }
 
   public void digestMessage(OscMessage newMessage) {
@@ -144,43 +131,6 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       theValue = pipeMapping[theValue];
       if (theValue<nStripes)activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), energy));
     }
-    
-    // just for the Wisp session : quick and dirty
-    // leave it here for the moment because the sender from MaxMSP gives this addresses
-    /*
-    if (newMessage.checkAddrPattern("/tube_1/trigger") && newMessage.arguments().length>0) {
-      float theValue=newMessage.get(0).floatValue();
-      if (theValue>0)activations.add(new TravellingActivation(0*nLedsInStripe, 0, impulseSpeed.getValue(), 1f ));
-    }
-    if (newMessage.checkAddrPattern("/tube_2/trigger") && newMessage.arguments().length>0) {
-      float theValue=newMessage.get(0).floatValue();
-      if (theValue>0)activations.add(new TravellingActivation(1*nLedsInStripe, 1, impulseSpeed.getValue(), 1f ));
-    }
-    if (newMessage.checkAddrPattern("/tube_3/trigger") && newMessage.arguments().length>0) {
-      float theValue=newMessage.get(0).floatValue();
-      if (theValue>0)activations.add(new TravellingActivation(2*nLedsInStripe, 2, impulseSpeed.getValue(), 1f ));
-    }
-    if (newMessage.checkAddrPattern("/tube_4/trigger") && newMessage.arguments().length>0) {
-      float theValue=newMessage.get(0).floatValue();
-      if (theValue>0)activations.add(new TravellingActivation(3*nLedsInStripe, 3, impulseSpeed.getValue(), 1f ));
-    }
-    if (newMessage.checkAddrPattern("/tube_5/trigger") && newMessage.arguments().length>0) {
-      float theValue=newMessage.get(0).floatValue();
-      if (theValue>0)activations.add(new TravellingActivation(4*nLedsInStripe, 4, impulseSpeed.getValue(), 1f ));
-    }
-    if (newMessage.checkAddrPattern("/tube_6/trigger") && newMessage.arguments().length>0) {
-      float theValue=newMessage.get(0).floatValue();
-      if (theValue>0)activations.add(new TravellingActivation(5*nLedsInStripe, 5, impulseSpeed.getValue(), 1f ));
-    }
-    if (newMessage.checkAddrPattern("/tube_7/trigger") && newMessage.arguments().length>0) {
-      float theValue=newMessage.get(0).floatValue();
-      if (theValue>0)activations.add(new TravellingActivation(6*nLedsInStripe, 6, impulseSpeed.getValue(), 1f ));
-    }
-    if (newMessage.checkAddrPattern("/tube_8/trigger") && newMessage.arguments().length>0) {
-      float theValue=newMessage.get(0).floatValue();
-      if (theValue>0)activations.add(new TravellingActivation(7*nLedsInStripe, 7, impulseSpeed.getValue(), 1f ));
-    }
-    */
   }
   
   public void writeToStream(DataOutputStream outStream) {
