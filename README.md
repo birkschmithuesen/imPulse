@@ -38,6 +38,35 @@ Max/MSP <- (OSC) <- Processing
 ## Controls for manual node selection
 * <b>UP</b>/<b>DOWN</b> keys for brightness
 * <b>LEFT</b>/<b>RIGHT</b> keys for decreasing/increasing the parameter selected in the drop down menu
+* <b>f</b> to cycle through speeds for decreasing/increasing
 * <b>n</b> to show loaded and newly created nodes
 * <b>ENTER</b> to save current node
 * <b>s</b> to save all created nodes
+
+#### How to set crossings on different stripes:
+
+1. select a black stripe (```CYCLE_BLACK_STRIPE```)
+2. select an led on that stripe that crosses with another stripe (```CONTROL_BLACK_STRIPE_LEDS```)
+ * use <b>f</b>-key to speed up/slow down the control
+3. select the other stripe that matches the previously selected crossing (```CYCLE_BRIGHT_STRIPES```)
+4. select an led on that stripe that crosses with another stripe (```CONTROL_BRIGHT_STRIPE_LEDS```)
+ * use <b>f</b>-key to speed up/slow down the control
+5. Hit <b>ENTER</b> to save the crossing as a node
+ * with <b>n</b> you can show all currently set nodes
+6. reset the bright stripes (```ACTIVATE_ALL_BRIGHT_STRIPES```)
+7. repeat starting at 1.
+
+When you are done, save the configuration to a file by hitting the <b>s</b>-key.
+
+#### How to set crossings of one stripe with itself
+
+1. select a black stripe (```CYCLE_BLACK_STRIPE```)
+2. select an led on that stripe that crosses with the same stripe (```SET_SAME_STRIPE_FIRST_NODE```)
+ * use <b>f</b>-key to speed up/slow down the control
+3. select matching led on that stripe (```SET_SAME_STRIPE_SECOND_NODE```)
+4. Hit <b>ENTER</b> to save the crossing as a node
+ * with <b>n</b> you can show all currently set nodes
+5. *optional*: reset the bright stripes if you want to switch the stripe (```ACTIVATE_ALL_BRIGHT_STRIPES```)
+6. repeat starting at 1.
+
+When you are done, save the configuration to a file by hitting the <b>s</b>-key.
