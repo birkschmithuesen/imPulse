@@ -53,8 +53,8 @@ Max/MSP <- (OSC) <- Processing
  * use <b>f</b>-key to speed up/slow down the control
 5. Hit <b>ENTER</b> to save the crossing as a node
  * with <b>n</b> you can show all currently set nodes
-6. reset the bright stripes (```ACTIVATE_ALL_BRIGHT_STRIPES```)
-7. repeat starting at 1.
+6. *optional*: reset the bright stripes if you want to switch the stripe (```ACTIVATE_ALL_BRIGHT_STRIPES```)
+7. repeat starting at 1. (if you want to switch the stripe) or 2.
 
 When you are done, save the configuration to a file by hitting the <b>s</b>-key.
 
@@ -67,6 +67,6 @@ When you are done, save the configuration to a file by hitting the <b>s</b>-key.
 4. Hit <b>ENTER</b> to save the crossing as a node
  * with <b>n</b> you can show all currently set nodes
 5. *optional*: reset the bright stripes if you want to switch the stripe (```ACTIVATE_ALL_BRIGHT_STRIPES```)
-6. repeat starting at 1.
+6. repeat starting at 1. (if you want to switch the stripe) or 2.
 
 When you are done, save the configuration to a file by hitting the <b>s</b>-key.
