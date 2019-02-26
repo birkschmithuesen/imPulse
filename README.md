@@ -34,6 +34,7 @@ Max/MSP <- (OSC) <- Processing
 ## libraries to be imported into Processing
 * [oscP5](http://www.sojamo.de/libraries/oscP5/)
 * [controlP5](http://www.sojamo.de/libraries/controlP5/)
+* [ArtNet](https://github.com/cansik/artnet4j)
 
 ## Controls for manual node selection
 * <b>UP</b>/<b>DOWN</b> keys for brightness
