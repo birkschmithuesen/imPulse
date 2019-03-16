@@ -17,14 +17,14 @@ class Mixer {
 		outputBufferLedColors = LedColor.createColorArray(nLeds); // creates a new ledColorBuffer as output of the mixer
 		effectList = new ArrayList<runnableLedEffect>();
 		opacityList = new ArrayList<RemoteControlledFloatParameter>();
-		traceControl = new RemoteControlledFloatParameter("Master/trace", 0.23f, 0f, 1f);
+		traceControl = new RemoteControlledFloatParameter("Master/trace", 0f, 0f, 1f);
 	}
 
 	// adds an effect to the effect ArrayList
 	public void addEffect(runnableLedEffect _theEffect) {
 		effectList.add(_theEffect);
 		opacityList.add(new RemoteControlledFloatParameter("Master/" + opacityList.size() + "/opacity/"
-				+ papplet.str(opacityList.size()) + "." + _theEffect.getName(), 0.7f, 0, 1f));
+				+ papplet.str(opacityList.size()) + "." + _theEffect.getName(), 1f, 0, 1f));
 
 	}
 
