@@ -65,7 +65,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     remoteLocation=_remoteLocation;
 
     nodeDeadTime= new RemoteControlledFloatParameter("/net/impulse/nodeDeadTime", 1f, 0.0f, 10);
-    impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.012f, 0.0001f, 0.5f);
+    impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.01f, 0.0001f, 0.5f);
     impulseDecayFactor= new RemoteControlledFloatParameter("/net/impulse/energyDecayfactor", 1/5f, 0.0001f, 1f);
     impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 160, 1, 1500);
     impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
@@ -116,36 +116,36 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       int theValue=newMessage.get(0).intValue();
       activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), 1f ));
     }
-    
-    System.out.println(newMessage);
-    
+
+    //System.out.println(newMessage);
+
     //receive a bang on one of the tubes
     if (newMessage.checkAddrPattern("/tube/trigger") && newMessage.arguments().length>0) {
       int theValue=newMessage.get(0).intValue()-1;
       float energy= 1f;
-      if(newMessage.arguments().length > 1) {
-		energy = newMessage.get(1).floatValue();
-	}
-      if(energy < 0) {
-		energy = 0;
-	}
-      for(int i = 1; i < impulseEnergyExponent.getValue(); i++){
+      if (newMessage.arguments().length > 1) {
+        energy = newMessage.get(1).floatValue();
+      }
+      if (energy < 0) {
+        energy = 0;
+      }
+      for (int i = 1; i < impulseEnergyExponent.getValue(); i++) {
         energy *= energy;
       }
-      System.out.println("Calculated Energy: "  + energy);
-      PApplet.println(theValue);
-      theValue = pipeMapping[theValue];
+      //System.out.println("Calculated Energy: "  + energy);
+      //PApplet.println(theValue);
+      //theValue = pipeMapping[theValue];
       if (theValue<nStripes) {
-		activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), energy));
-	}
+        activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), energy));
+      }
     }
   }
-  
+
   public void writeToStream(DataOutputStream outStream) {
-    String outData="int"+"\t"+"/net/activateNode"+"\t"+"sactivateNode"+"\t"+0+"\t"+0+"\t"+(nodes.size()-1)+"\n"+"int"+"\t"+"/net/activateStripe"+"\t"+"activateStripe"+"\t"+0+"\t"+0+"\t"+(nStripes-1)+"\n";   
+    String outData="int"+"\t"+"/net/activateNode"+"\t"+"sactivateNode"+"\t"+0+"\t"+0+"\t"+(nodes.size()-1)+"\n"+"int"+"\t"+"/net/activateStripe"+"\t"+"activateStripe"+"\t"+0+"\t"+0+"\t"+(nStripes-1)+"\n";
     try {
       outStream.writeBytes(outData);
-    }  
+    }
     catch (
       IOException e) {
       System.err.println("Could not write to file"+e);
@@ -168,19 +168,20 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     int stripeIdx; // stripe the activation was created on
     float speed; // [leds/second] also encodes direction in sign
     float energy; // some measure of strength
+    void setEnergy(float _energy){energy=_energy;}
   }
-  
+
   //represents fillers needed when high travelling speeds lead to skipping some leds in each frame
   public class TravellingActivationFiller extends TravellingActivation {
-    TravellingActivationFiller(float ledIdxPos_, int stripeIdx_, float speed_, float energy_){
+    TravellingActivationFiller(float ledIdxPos_, int stripeIdx_, float speed_, float energy_) {
       super(ledIdxPos_, stripeIdx_, speed_, energy_);
     }
   }
 
   //simulate one time step
-  public LedColor[] drawMe() { 
+  public LedColor[] drawMe() {
     int useRemoteCol = impulseUseRemoteCol.getValue();
-    float spotR=impulseR.getValue(); 
+    float spotR=impulseR.getValue();
     float spotG=impulseG.getValue();
     float spotB=impulseB.getValue();
     float gamma =impulseGamma.getValue();
@@ -203,114 +204,116 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // if the activation hasn't fallen off the end of the stripe...
       int activationLedIdx=curActivation.getLedIndex(); // global led position
       int direction;// needed to reuse loop for positive and negative speeds
-      if(curActivation.speed > 0) {
-		direction = 1;
-	} else {
-		direction = -1;
-	}
-      if(activationLedIdx != prevActivationLedIdx){
-        for(int curActivationLedIdx = prevActivationLedIdx+direction; curActivationLedIdx*direction < activationLedIdx*direction; curActivationLedIdx+=direction){
-          if( !activationIsValid(activationLedIdx, curActivation)) {
-			break;
-		}
+      if (curActivation.speed > 0) {
+        direction = 1;
+      } else {
+        direction = -1;
+      }
+      if (activationLedIdx != prevActivationLedIdx) {
+        for (int curActivationLedIdx = prevActivationLedIdx+direction; curActivationLedIdx*direction < activationLedIdx*direction; curActivationLedIdx+=direction) {
+          if ( !activationIsValid(activationLedIdx, curActivation)) {
+            break;
+          }
           if (activationEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime, energyLoss)) {
-			break;
-		}
+            break;
+          }
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
           newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy));
         }
       }
-      if(activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss))) {
-		newActivations.add(curActivation);
-	}
+      if (activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss))) {
+        newActivations.add(curActivation);
+      }
     }
-    
+
     activations=newActivations;
 
     //draw all
     LedColor.mult(bufferLedColors, new LedColor(fadeOutR.getValue(), fadeOutG.getValue(), fadeOutB.getValue()));
     ListIterator<TravellingActivation> iter = activations.listIterator();
-    while(iter.hasNext()){
+    while (iter.hasNext()) {
       TravellingActivation curActivation = iter.next();
       int curLedIndex=curActivation.getLedIndex(); // global led position
       float fade=(float)Math.pow(curActivation.energy, gamma);
-      LedColor col = stripeColorMapping[ledNetInfo[curLedIndex].stripeIndex];
-      bufferLedColors[curLedIndex].set(col.x*fade, col.y*fade, col.z*fade);
-      if(useRemoteCol == 1) {
-		bufferLedColors[curLedIndex].set(spotR*fade, spotG*fade, spotB*fade);
-	}
-      //if the travelling activation is a filler remove it
-      if(curActivation.getClass() == TravellingActivationFiller.class) {
-		iter.remove();
-	} else if(curActivation.speed < 0 && curLedIndex <= (ledNetInfo[curLedIndex].stripeIndex*nLedsInStripe+27)) {
-		iter.remove();
-	}
-    }
+      if (useRemoteCol == 1) {
+        bufferLedColors[curLedIndex].set(spotR*fade*curActivation.energy, spotG*fade*curActivation.energy, spotB*fade*curActivation.energy);
+      } else {
+        LedColor col = stripeColorMapping[ledNetInfo[curLedIndex].stripeIndex]; //color lookup made for 8 outputs
 
+      bufferLedColors[curLedIndex].set(col.x*fade, col.y*fade, col.z*fade);
+      }
+      //if the travelling activation is a filler remove it
+      if (curActivation.getClass() == TravellingActivationFiller.class) {
+        iter.remove();
+      } else if (curActivation.speed < 0 && curLedIndex <= (ledNetInfo[curLedIndex].stripeIndex*nLedsInStripe+27)) {
+        iter.remove();
+      }
+    }
     return bufferLedColors;
   }
-  
-  private boolean activationIsValid(int activationLedIdx, TravellingActivation curActivation){
+
+  private boolean activationIsValid(int activationLedIdx, TravellingActivation curActivation) {
     int nLeds=ledNetInfo.length;
     return
-        activationLedIdx>=0&&activationLedIdx<=(nLeds-1)&& //ledIndex is valid
-        ledNetInfo[activationLedIdx].stripeIndex==curActivation.stripeIdx&& // activation is in it's original stripe
-        curActivation.energy>0;
+      activationLedIdx>=0&&activationLedIdx<=(nLeds-1)&& //ledIndex is valid
+      ledNetInfo[activationLedIdx].stripeIndex==curActivation.stripeIdx&& // activation is in it's original stripe
+      curActivation.energy>0;
   }
-  
-  private boolean activationEncounteredNode(Integer activationLedIdx, TravellingActivation curActivation, LinkedList<TravellingActivation> newActivations, double currentTime, float energyLoss){
+
+  private boolean activationEncounteredNode(Integer activationLedIdx, TravellingActivation curActivation, LinkedList<TravellingActivation> newActivations, double currentTime, float energyLoss) {
     int nLeds=ledNetInfo.length;
-     // should the activation survive this round?
-        //if activation hits a stripe crossing, create a new activation for each of the branches
-        if (ledNetInfo[activationLedIdx].partOfNode!=null) {
-          LedNetworkNode hitNode=ledNetInfo[activationLedIdx].partOfNode;
-          // only multiply at nodes that have not been active for a while
-          if (currentTime-hitNode.lastActivationTime>nodeDeadTime.getValue()) {
-            hitNode.lastActivationTime=currentTime;
-            //send osc Notification
-            sendOscMessage(hitNode, curActivation);
+    // should the activation survive this round?
+    //if activation hits a stripe crossing, create a new activation for each of the branches
+    if (ledNetInfo[activationLedIdx].partOfNode!=null) {
+      LedNetworkNode hitNode=ledNetInfo[activationLedIdx].partOfNode;
+      // only multiply at nodes that have not been active for a while
+      if (currentTime-hitNode.lastActivationTime>nodeDeadTime.getValue()) {
+        hitNode.lastActivationTime=currentTime;
+        //send osc Notification
+        sendOscMessage(hitNode, curActivation);
+        float nActivations=hitNode.ledIndices.size();
+        //float childEnergy=curActivation.energy/nActivations/2.0f-energyLoss;
+        //curActivation.setEnergy(childEnergy);
+        float childEnergy=curActivation.energy;
+        for (Integer nodeLedIdx : hitNode.ledIndices) {
+          LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
 
-            float nActivations=hitNode.ledIndices.size();
-            for (Integer nodeLedIdx : hitNode.ledIndices) {
-              LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
 
-              float childEnergy=curActivation.energy/nActivations/2.0f-energyLoss;
 
-              int jump; // jump one led to avoid activating the same node over and over again
-              if (curActivation.speed>0) {
-				jump=1;
-			} else {
-				jump=-1;
-			}
-              //  activation spreads in boths directions
-              int forwPos=nodeLedIdx +jump;
-              if (forwPos>0&&forwPos<nLeds) {
-				newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy));
-			}
-              //do not go back the same stripe:
-              if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex || activationLedIdx < nodeLedIdx){//ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
-                int backwPos=nodeLedIdx -jump;
-                if (backwPos>0&&backwPos<nLeds) {
-					newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
-				}
-              }
-            }
-            return true;
+          int jump; // jump one led to avoid activating the same node over and over again
+          if (curActivation.speed>0) {
+            jump=1;
+          } else {
+            jump=-1;
           }
-
+          //  activation spreads in boths directions
+          int forwPos=nodeLedIdx +jump;
+          if (forwPos>0&&forwPos<nLeds) {
+            newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy));
+          }
+          //do not go back the same stripe:
+          if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex || activationLedIdx < nodeLedIdx) {//ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
+            int backwPos=nodeLedIdx -jump;
+            if (backwPos>0&&backwPos<nLeds) {
+              newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
+            }
+          }
         }
-        return false;
-     }
+        return true;
+      }
+    }
+    return false;
+  }
 
-  
-  private void sendOscMessage(LedNetworkNode hitNode, TravellingActivation curActivation){
+
+  private void sendOscMessage(LedNetworkNode hitNode, TravellingActivation curActivation) {
     OscMessage myMessage = new OscMessage("/net/hitNode");
-            myMessage.add(hitNode.id);
-            myMessage.add(curActivation.energy);
-            //myMessage.add(hitNode.position.x);
-            //myMessage.add(hitNode.position.y);
-            //myMessage.add(hitNode.position.z);
-            oscP5.send(myMessage, remoteLocation);
+    myMessage.add(hitNode.id);
+    myMessage.add(curActivation.energy);
+    //myMessage.add(hitNode.position.x);
+    //myMessage.add(hitNode.position.y);
+    //myMessage.add(hitNode.position.z);
+    oscP5.send(myMessage, remoteLocation);
   }
 
   void createRandomActivation() {
