@@ -31,19 +31,19 @@ public class LedNetworkNodeEffects implements runnableLedEffect {
 			3, 0, 10); // size of the spot arounf the connected LEDs
 
 	RemoteControlledColorParameter centralSpotColorWaiting = new RemoteControlledColorParameter(
-			"/nodes/colors/central/waiting", 0, 0, 1);
+			"/nodes/colors/central/waiting", 0, 1, 1);
 	RemoteControlledColorParameter outerRegionColorWaiting = new RemoteControlledColorParameter(
-			"/nodes/colors/outer/waiting", 0, 0, 1);
+			"/nodes/colors/outer/waiting", 0, 1, 1);
 
 	RemoteControlledColorParameter centralSpotColorFiring = new RemoteControlledColorParameter(
-			"/nodes/colors/central/fired", 1, 0, 1);
+			"/nodes/colors/central/fired", 1, 1, 1);
 	RemoteControlledColorParameter outerRegionColorFiring = new RemoteControlledColorParameter(
 			"/nodes/colors/outer/fired", 1, 1, 1);
 
 	RemoteControlledColorParameter centralSpotColorInactive = new RemoteControlledColorParameter(
-			"/nodes/colors/central/inactive", 0.1f, 0, 0.1f);
+			"/nodes/colors/central/inactive", 0.1f, 1, 0.1f);
 	RemoteControlledColorParameter outerRegionColorInactive = new RemoteControlledColorParameter(
-			"/nodes/colors/outer/inactive", 0.1f, 0, 0.1f);
+			"/nodes/colors/outer/inactive", 0.1f, 1, 0.1f);
 
 	RemoteControlledFloatParameter fadeOutGamma; // influences the fadeout towards the sides
 
