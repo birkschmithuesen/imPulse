@@ -48,14 +48,14 @@ LedColor[] ledColors;
 LedInStripeInfo[] stripeInfos;
 LedInNetInfo[] ledNetInfo;
 // create an array with all the nodes/crossings
-ArrayList <LedNetworkNode> listOfNodes; 
+ArrayList <LedNetworkNode> listOfNodes;
 
 // the stripe configuration
-int numStripes = 2;
-int numLedsPerStripe = 576;
-int numStripesPerController = 16; //just important when we send the ArtNet data directly out 
+int numStripes = 16;
+int numLedsPerStripe = 720;
+int numStripesPerController = 16; //just important when we send the ArtNet data directly out
 int numLeds = numStripes * numLedsPerStripe;
-StripeConfigurator stripeConfiguration; 
+StripeConfigurator stripeConfiguration;
 
 // a mixer object where all visuals come together and are merged
 Mixer mixer;
@@ -79,31 +79,31 @@ StripeChangeMode stripeChangeMode = StripeChangeMode.CYCLE_BLACK_STRIPE;
 ControlP5 cp5;
 
 
-void setup() { 
-  size(1400, 120, P3D);
-  //frameRate(120);
+void setup() {
+  size(1400, 300, P3D);
+  frameRate(44);
   //opens the port to receive OSC
   oscP5 = new OscP5(this, 8001);
   //when a node is activated an osc impuls is send to Ableton Live
-  oscOutput = new NetAddress("2.0.0.2", 8002);//("192.168.88.253", 8002);
+  oscOutput = new NetAddress("127.0.0.1", 8002);//("192.168.88.253", 8002);
 
   // create stripe information
   stripeConfiguration = new StripeConfigurator(numStripes, numLedsPerStripe, numStripesPerController); // used to generate per led info.
 
-  
+
   // Create Syhpon/Spout server to send frames out directly shared on gpu.
   //server = new Spout(this); //use this on Windows
   //server.createSender("Lightstrument"); //use this on Windows
-  server = new SyphonServer(this, "Lightstrument"); //use this on MacOs
-  
+  //server = new SyphonServer(this, "Lightstrument"); //use this on MacOs
+
   artNetSender = new ArtNetSender(stripeConfiguration, ipPrefix, startIP); // used to send data to leds
-  
+
   // use the canvas to create the visuals to send over syphon
   // the size depends on the stripe configuration
   canvas = createGraphics(numLedsPerStripe, numStripes, P3D);
 
   ledColors = LedColor.createColorArray(numLeds);        // build a color buffer with the length of the position file
-  stripeInfos = stripeConfiguration.builtStripeInfo();   
+  stripeInfos = stripeConfiguration.builtStripeInfo();
   ledNetInfo = LedInNetInfo.buildNetInfo(numStripes, numLedsPerStripe); //create an Array with data for each LED if they are part of a node
   listOfNodes = LedInNetInfo.loadListOfNodes(dataPath("nodeCrossings.txt"), ledNetInfo);  // all sets of Leds that are on different stripes but close to each other
 
@@ -120,18 +120,19 @@ void setup() {
   //to save the osc-adresses
   try {
     System.out.println(dataPath("remoteSettings.txt"));
-    DataOutputStream dataOut = new DataOutputStream(new FileOutputStream("C:\\Users\\VideoServer\\Desktop\\impulsPlayground\\imPulse\\data\\remoteSettings.txt"));
+ //   DataOutputStream dataOut = new DataOutputStream(new FileOutputStream("C:\\Users\\VideoServer\\Desktop\\impulsPlayground\\imPulse\\data\\remoteSettings.txt"));
+ DataOutputStream dataOut = new DataOutputStream(new FileOutputStream(dataPath("remoteSettings.txt")));
     OscMessageDistributor.dumpParameterInfo(dataOut);
-  } 
+  }
   catch (FileNotFoundException e) {
     println("file not found");
   }
 
   //add GUI
   cp5 = new ControlP5(this);
-  List l = Arrays.asList(StripeChangeMode.CYCLE_BLACK_STRIPE.name(), StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS.name(), 
-    StripeChangeMode.CYCLE_BRIGHT_STRIPES.name(), StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS.name(), 
-    StripeChangeMode.ACTIVATE_ALL_BRIGHT_STRIPES.name(), StripeChangeMode.SET_SAME_STRIPE_FIRST_NODE.name(), 
+  List l = Arrays.asList(StripeChangeMode.CYCLE_BLACK_STRIPE.name(), StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS.name(),
+    StripeChangeMode.CYCLE_BRIGHT_STRIPES.name(), StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS.name(),
+    StripeChangeMode.ACTIVATE_ALL_BRIGHT_STRIPES.name(), StripeChangeMode.SET_SAME_STRIPE_FIRST_NODE.name(),
     StripeChangeMode.SET_SAME_STRIPE_SECOND_NODE.name());
   /* add a ScrollableList, by default it behaves like a DropdownList */
   cp5.addScrollableList("dropdown")
@@ -145,17 +146,17 @@ void setup() {
 
 void draw() {
   OscMessageDistributor.distributeMessages();
-  createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
-  ledColors=mixer.mix(); // calculate the visuals  
+  //createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
+  ledColors=mixer.mix(); // calculate the visuals
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
   image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
   // send the visuals over Syphon/Spout to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
   //server.sendTexture(canvas); //use this on Windows
-  server.sendImage(canvas); //use this on MacOS
+  //server.sendImage(canvas); //use this on MacOS
   //send data directly to ArtNet Interface withoput MadMapper in between
   artNetSender.sendToLeds(ledColors);
   ledStripeFullActivationEffect.changeStripe(); //this effect is need for node calibration
-  
+
 }
 
 void oscEvent(OscMessage theOscMessage) {
