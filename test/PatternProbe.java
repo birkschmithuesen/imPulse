@@ -57,7 +57,6 @@ public class PatternProbe {
 
     int lastPrintedStripe = -1;
     String lastPrintedColor = null;
-    long startTime = System.currentTimeMillis();
 
     long end = System.currentTimeMillis() + seconds * 1000L;
     while (System.currentTimeMillis() < end) {
@@ -79,8 +78,13 @@ public class PatternProbe {
         String color = patterns.currentColorName();
         if (!color.equals(lastPrintedColor)) {
           lastPrintedColor = color;
-          long secs = (System.currentTimeMillis() - startTime) / 1000;
-          System.out.println(String.format("[%2d s] senden: %s", secs, color));
+          // dieselbe Zeitbasis wie pattern4() selbst - siehe elapsedMillis()
+          double secs = patterns.elapsedMillis() / 1000.0;
+          int phase = patterns.currentColorPhase();
+          String label = phase == 0 ? "Startmarke: " + color
+                       : phase == 4 ? "Folge beendet, alles schwarz"
+                       : "senden: " + color;
+          System.out.println(String.format("[%4.1f s] %s", secs, label));
         }
       } else if (pattern == 5) {
         TestPatterns.pattern5(buffer);
@@ -115,7 +119,8 @@ public class PatternProbe {
             + "die Reserve-Slots des vorherigen Outputs durch.");
         break;
       case 4:
-        System.out.println("Testbild 4 - Rot, Gruen, Blau im Wechsel, je zwei Sekunden.");
+        System.out.println("Testbild 4 - einmalige Folge: 2 s Weiss (Startmarke), dann je 3 s "
+            + "Rot, Gruen, Blau, danach dauerhaft schwarz. Keine Wiederholung.");
         System.out.println("Darauf achten: Rot ist rot, Gruen ist gruen, Blau ist blau. Kommen "
             + "die Farben vertauscht, in ArtNetOutput.java R_OFFSET und B_OFFSET tauschen.");
         break;

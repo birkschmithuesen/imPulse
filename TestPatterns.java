@@ -76,21 +76,40 @@ class TestPatterns {
 
   // Farbphase von Muster 4 - eigenes Feld statt Wiederverwendung von
   // patternStripe/patternLed, damit currentColorName() unabhaengig von den
-  // anderen Mustern lesbar bleibt.
+  // anderen Mustern lesbar bleibt. 0 Weiss, 1 Rot, 2 Gruen, 3 Blau, 4 Ende
+  // (schwarz, Folge bleibt hier stehen).
   private int patternColorPhase = 0;
 
-  // Muster 4: Rot, Gruen, Blau im Wechsel, je zwei Sekunden. Die Phase haengt
-  // an der Zeit seit dem letzten reset() (patternLastStep), nicht an der
-  // Wanduhr - sonst waere die Startfarbe bei jedem Lauf zufaellig, und genau
-  // das soll dieses Testbild ja klaeren. patternLastStep wird hier nur
-  // gelesen, nicht veraendert - unschaedlich, da nie gleichzeitig mit
-  // Muster 1/2 aktiv (reset() setzt den Stempel bei jedem Musterwechsel neu).
+  // Grenzen der einmaligen Folge, kumulierte Millisekunden seit reset():
+  // 2 s Weiss (Startmarke, eindeutiger Beginn), dann je 3 s Rot/Gruen/Blau,
+  // danach fuer immer schwarz - kein Neubeginn, keine Schleife. Weiss als
+  // Startmarke und die genauen Sekundenwerte waren eine Nutzer-Vorgabe, nachdem
+  // zwei Abnahmelaeufe wegen unklarem Folgenanfang widerspruechlich ausfielen.
+  private static final long PHASE4_WHITE_END = 2000;
+  private static final long PHASE4_RED_END = PHASE4_WHITE_END + 3000;
+  private static final long PHASE4_GREEN_END = PHASE4_RED_END + 3000;
+  private static final long PHASE4_BLUE_END = PHASE4_GREEN_END + 3000;
+
+  // Muster 4: einmalige Folge Weiss/Rot/Gruen/Blau/Schwarz, siehe
+  // PHASE4_*_END. Die Phase haengt an der Zeit seit dem letzten reset()
+  // (patternLastStep), nicht an der Wanduhr - sonst waere die Startfarbe bei
+  // jedem Lauf zufaellig, und genau das soll dieses Testbild ja klaeren.
+  // patternLastStep wird hier nur gelesen, nicht veraendert - unschaedlich,
+  // da nie gleichzeitig mit Muster 1/2 aktiv (reset() setzt den Stempel bei
+  // jedem Musterwechsel neu, auch bei erneutem Druck auf "4").
   String pattern4(LedColor[] buffer) {
-    long now = System.currentTimeMillis();
-    int phase = (int) (((now - patternLastStep) / 2000) % 3);
+    long elapsed = System.currentTimeMillis() - patternLastStep;
+    int phase = elapsed < PHASE4_WHITE_END ? 0
+              : elapsed < PHASE4_RED_END ? 1
+              : elapsed < PHASE4_GREEN_END ? 2
+              : elapsed < PHASE4_BLUE_END ? 3
+              : 4;
     patternColorPhase = phase;
-    LedColor c = phase == 0 ? new LedColor(1, 0, 0)
-               : phase == 1 ? new LedColor(0, 1, 0) : new LedColor(0, 0, 1);
+    LedColor c = phase == 0 ? new LedColor(1, 1, 1)
+               : phase == 1 ? new LedColor(1, 0, 0)
+               : phase == 2 ? new LedColor(0, 1, 0)
+               : phase == 3 ? new LedColor(0, 0, 1)
+               : new LedColor(0, 0, 0);
     LedColor.set(buffer, c);
     return "Testbild 4 - " + colorName(phase);
   }
@@ -99,8 +118,26 @@ class TestPatterns {
   // (PatternProbe gibt sie bei jedem Wechsel auf der Konsole aus).
   String currentColorName() { return colorName(patternColorPhase); }
 
+  // Fuer Aufrufer, die zwischen "laeuft noch" und "Folge beendet"
+  // unterscheiden muessen (PatternProbe formuliert die letzte Zeile anders).
+  int currentColorPhase() { return patternColorPhase; }
+
+  // Verstrichene Zeit seit reset(), dieselbe Zeitbasis wie pattern4() intern
+  // verwendet. Frueher fuehrte eine zweite, unabhaengig in PatternProbe
+  // erfasste Startzeit zu widerspruechlichen Sekundenangaben auf der Konsole:
+  // zwischen reset() und der zweiten Zeitmessung lief noch Code (Verbindungs-
+  // aufbau des ArtNet-Senders), wodurch die beiden Uhren auseinanderliefen.
+  // Aufrufer sollen fuer Zeitangaben ausschliesslich diese Methode nutzen.
+  long elapsedMillis() { return System.currentTimeMillis() - patternLastStep; }
+
   private static String colorName(int phase) {
-    return phase == 0 ? "Rot" : phase == 1 ? "Gruen" : "Blau";
+    switch (phase) {
+      case 0: return "Weiss";
+      case 1: return "Rot";
+      case 2: return "Gruen";
+      case 3: return "Blau";
+      default: return "Schwarz";
+    }
   }
 
   // Muster 5: flaechig weiss.
