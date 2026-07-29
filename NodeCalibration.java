@@ -35,9 +35,15 @@ public class NodeCalibration implements runnableLedEffect {
 
   // Taste zum vollstaendigen Verwerfen aller Kreuzungen, auch der geladenen -
   // fuer den Fall, dass die Kalibrierung aus einer anderen Geometrie stammt.
-  // Erfordert eine ausdrueckliche Bestaetigung: erster Druck kuendigt an,
-  // erst ein zweiter innerhalb von CLEAR_ALL_CONFIRM_MILLIS fuehrt aus.
-  private static final long CLEAR_ALL_CONFIRM_MILLIS = 5000;
+  // Erfordert eine ausdrueckliche Bestaetigung: erster Druck kuendigt an, ein
+  // zweiter Druck zwischen CLEAR_ALL_CONFIRM_MIN_MILLIS und
+  // CLEAR_ALL_CONFIRM_MAX_MILLIS danach fuehrt aus. Die Untergrenze wehrt
+  // Tastenwiederholung ab (ein gehaltenes L darf nicht beide Schritte in
+  // Millisekunden ausloesen). Jede andere Taste - auch Pfeiltasten und das
+  // Umschalten des Kalibriermodus mit C - verwirft die Ankuendigung
+  // stillschweigend, siehe handleCommand/handleKeyPressed/handleKeyReleased.
+  private static final long CLEAR_ALL_CONFIRM_MIN_MILLIS = 300;
+  private static final long CLEAR_ALL_CONFIRM_MAX_MILLIS = 5000;
   private boolean clearAllPending = false;
   private long clearAllArmedAt = 0;
 
@@ -127,6 +133,9 @@ public class NodeCalibration implements runnableLedEffect {
   private static final int KEY_DOWN = 40;
 
   void handleKeyPressed(int keyCode, char key) {
+    // Pfeiltasten laufen nicht ueber handleCommand() - eine angekuendigte
+    // Verwerfen-Bestaetigung muss trotzdem verfallen
+    clearAllPending = false;
     if (keyCode == KEY_LEFT) { heldLed = -1; }
     else if (keyCode == KEY_RIGHT) { heldLed = 1; }
     else if (keyCode == KEY_UP) { heldStripe = -1; }
@@ -134,6 +143,10 @@ public class NodeCalibration implements runnableLedEffect {
   }
 
   void handleKeyReleased() {
+    // wird auch beim Umschalten des Kalibriermodus mit C gerufen (vor
+    // handleCommand()) - deshalb hier zusaetzlich zuruecksetzen, nicht nur
+    // in handleCommand()
+    clearAllPending = false;
     heldLed = 0;
     heldStripe = 0;
   }
@@ -168,7 +181,13 @@ public class NodeCalibration implements runnableLedEffect {
     }
     if (key == 'l' || key == 'L') {
       long now = System.currentTimeMillis();
-      if (clearAllPending && now - clearAllArmedAt <= CLEAR_ALL_CONFIRM_MILLIS) {
+      long sinceArmed = now - clearAllArmedAt;
+      if (clearAllPending && sinceArmed < CLEAR_ALL_CONFIRM_MIN_MILLIS) {
+        // Tastenwiederholung eines gehaltenen L - weder bestaetigen noch
+        // die Ankuendigung erneuern, einfach ignorieren
+        return true;
+      }
+      if (clearAllPending && sinceArmed <= CLEAR_ALL_CONFIRM_MAX_MILLIS) {
         store.clearAll();
         message = store.lastMessage();
         System.out.println(message);

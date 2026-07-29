@@ -142,6 +142,12 @@ void draw() {
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
   image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
   if (calibrationMode) {
+    // P3D behaelt den Inhalt des vorherigen Frames - ohne dieses Loeschen
+    // wuerde sich der HUD-Text unterhalb der Vorschau zu einem unlesbaren
+    // Klumpen stapeln, statt jeden Frame ersetzt zu werden
+    fill(0);
+    noStroke();
+    rect(0, numStripes * 10, width, height - numStripes * 10);
     fill(255);
     text(nodeCalibration.hudText(), 10, numStripes * 10 + 20);
   }
