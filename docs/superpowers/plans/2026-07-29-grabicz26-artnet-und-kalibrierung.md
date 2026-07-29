@@ -1818,12 +1818,18 @@ public class NodeCalibration implements runnableLedEffect {
     }
   }
 
+  // Pfeiltasten. Entspricht PConstants.LEFT/UP/RIGHT/DOWN, hier benannt,
+  // weil diese Klasse nicht von PApplet erbt.
+  private static final int KEY_LEFT = 37;
+  private static final int KEY_UP = 38;
+  private static final int KEY_RIGHT = 39;
+  private static final int KEY_DOWN = 40;
+
   void handleKeyPressed(int keyCode, char key) {
-    // Pfeiltasten: 37 links, 38 hoch, 39 rechts, 40 runter
-    if (keyCode == 37) { heldLed = -1; }
-    else if (keyCode == 39) { heldLed = 1; }
-    else if (keyCode == 38) { heldStripe = -1; }
-    else if (keyCode == 40) { heldStripe = 1; }
+    if (keyCode == KEY_LEFT) { heldLed = -1; }
+    else if (keyCode == KEY_RIGHT) { heldLed = 1; }
+    else if (keyCode == KEY_UP) { heldStripe = -1; }
+    else if (keyCode == KEY_DOWN) { heldStripe = 1; }
   }
 
   void handleKeyReleased() {
