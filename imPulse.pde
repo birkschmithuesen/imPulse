@@ -49,7 +49,6 @@ NodeCrossingStore crossingStore;
 int numLedsPerStripe = 600;                                   // 2 x 5 m je Output
 int numStripes = controllerOctets.length * ArtNetOutput.OUTPUTS_PER_CONTROLLER;
 int numLeds = numStripes * numLedsPerStripe;
-StripeConfigurator stripeConfiguration;
 
 // a mixer object where all visuals come together and are merged
 Mixer mixer;
@@ -82,10 +81,6 @@ void setup() {
   oscP5 = new OscP5(this, 8001);
   //when a node is activated an osc impuls is send to Ableton Live
   oscOutput = new NetAddress("127.0.0.1", 8002);//("192.168.88.253", 8002);
-
-  // create stripe information
-  stripeConfiguration = new StripeConfigurator(numStripes, numLedsPerStripe); // used to generate per led info.
-
 
   // Create Syhpon/Spout server to send frames out directly shared on gpu.
   //server = new Spout(this); //use this on Windows
@@ -195,6 +190,9 @@ void keyReleased() {
     calibrationMode = !calibrationMode;
     println(calibrationMode ? "Kalibriermodus an" : "Kalibriermodus aus");
     nodeCalibration.handleKeyReleased();
+    // sonst zeigt ein Wiedereintritt das zuletzt gewaehlte Testbild statt
+    // der Kalibrierung
+    nodeCalibration.setPattern(0);
     return;
   }
   if (!calibrationMode) {

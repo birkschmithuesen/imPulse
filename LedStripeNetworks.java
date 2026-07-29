@@ -14,26 +14,6 @@ class LedNetworkNode {
 	}
 }
 
-class StripeInfo {
-	public int id;
-	public int startLedIndex;
-	public int endLedIndex;
-
-	StripeInfo(int id_, int startLedIndex_, int endLedIndex_) {
-		id = id_;
-		startLedIndex = startLedIndex_;
-		endLedIndex = endLedIndex_;
-	}
-
-	static StripeInfo[] buildStripeInfo(int nStripes, int nLedsPerStripe) {
-		StripeInfo[] result = new StripeInfo[nStripes];
-		for (int i = 0; i < nStripes; i++) {
-			result[i] = new StripeInfo(i, i * nLedsPerStripe, (i + 1) * nLedsPerStripe - 1);
-		}
-		return result;
-	}
-};
-
 // information about how an led is embedded in the topolgy of a network.
 class LedInNetInfo {
 	LedInNetInfo(int stripeIndex_, int indexInStripe_, int stripeLength_) {
@@ -87,17 +67,5 @@ class LedInNetInfo {
 			nodeId++;
 		}
 		System.out.println(target.size() + " Nodes uebernommen");
-	}
-
-	static void paintNodes(ArrayList<LedNetworkNode> nodes, LedColor[] ledColors) {
-		int clustIdx = 0;
-		for (LedNetworkNode curNode : nodes) {
-			for (Integer thisLedIdx : curNode.ledIndices) {
-				ledColors[thisLedIdx].set(new LedColor((float) (Math.sin(clustIdx) * 0.5 + 0.5),
-						(float) (Math.cos(clustIdx * 4.1) * 0.5 + 0.5),
-						(float) (Math.sin(clustIdx * 0.1 + 2) * 0.5 + 0.5), 1.0f));
-			}
-			clustIdx++;
-		}
 	}
 }

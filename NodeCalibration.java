@@ -22,7 +22,7 @@ public class NodeCalibration implements runnableLedEffect {
   private final String filePath;
   private final LedColor[] buffer;
 
-  private final int[] cursorStripe = { 0, 1 };
+  private final int[] cursorStripe = { 0, 0 };
   private final int[] cursorLed = { 0, 0 };
   private int active = 0;
   private int stepIndex = 1;

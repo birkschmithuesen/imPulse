@@ -19,6 +19,13 @@ SOURCES="LedColor.java ArtNetOutput.java"
 
 javac -nowarn -cp "$CORE" -d build $SOURCES test/*.java
 
+# Ohne Argumente alle vier Suiten starten - ein leerer Aufruf soll nicht
+# stillschweigend als "alles bestanden" durchgehen, ohne ueberhaupt etwas
+# geprueft zu haben.
+if [ "$#" -eq 0 ]; then
+  set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest
+fi
+
 status=0
 for t in "$@"; do
   echo "== $t"

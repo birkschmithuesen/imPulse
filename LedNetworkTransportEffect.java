@@ -18,7 +18,6 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   String name = "Impulse";
   String id;
   int numLeds, nStripes, nLedsInStripe;
-  StripeInfo[] stripeInfos;
   LedInNetInfo[] ledNetInfo;
   LedColor[] bufferLedColors;
   ArrayList <LedNetworkNode> nodes;
@@ -26,8 +25,6 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   
   LedColor[] stripeColorMapping = {new LedColor(68/255f,0/255f,62/255f), new LedColor(189/255f,103/255f,0/255f), new LedColor(236/255f,204/255f,0/255f), new LedColor(221/255f,65/255f,8/255f),
                              new LedColor(187/255f,213/255f,67/255f), new LedColor(126/255f,201/255f,232/255f), new LedColor(210/255f,39/255f,45/255f), new LedColor(234/255f,147/255f,44/255f)};
-
-  int[] pipeMapping = {2, 1, 0, 7, 6, 5, 4, 3};
 
   LinkedList<TravellingActivation> activations = new LinkedList<TravellingActivation>();
 
@@ -134,7 +131,6 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       }
       //System.out.println("Calculated Energy: "  + energy);
       //PApplet.println(theValue);
-      //theValue = pipeMapping[theValue];
       if (theValue<nStripes) {
         activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), energy));
       }
