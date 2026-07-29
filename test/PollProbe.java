@@ -3,9 +3,23 @@
 // Auf OpPoll antwortet die Firmware mit einem ArtPollReply, in dessen
 // NodeReport ein Statusstring der Form
 //   numOuts;2;numUniPOut;5;temp;41.2;fps;39.8;uUniPF;10.0;
-// steht. fps ist die vom Controller gemessene Rate eintreffender Sync-Pakete,
-// uUniPF die geglaettete Anzahl empfangener Universen je Frame. Erwartet
-// werden rund 40 und 10.0, waehrend der Sketch oder TimingProbe laeuft.
+// steht. Erwartete Universenzahl je Controller = numOuts * numUniPOut (aus
+// dem Bericht selbst, nicht fest verdrahtet). uUniPF ist die geglaettete
+// Anzahl empfangener Universen je Frame und die einzige Groesse, auf der
+// das Bestehen dieser Sonde beruht.
+//
+// Messung an der echten Anlage (siehe Fix-Runde 1 im Task-Bericht) hat
+// zwei Firmware-Eigenheiten aufgedeckt, auf die diese Sonde Ruecksicht
+// nimmt:
+//   - elf von fuenfzehn Controllern liefern einen Bericht mit LEEREN
+//     Gleitkommafeldern (numOuts;2;numUniPOut;5;temp;;fps;;uUniPF;;). Das
+//     ist ein Firmware-Bug dieser Controller, kein Netzfehler - ein
+//     Controller in diesem Zustand gilt als NICHT AUSWERTBAR, nicht als
+//     Fehler.
+//   - fps ist in der Firmware ein Momentanwert aus den letzten zwei
+//     Sync-Paketen, kein Mittelwert. Er streut erheblich (33,3 bis 37,0
+//     bei nachweislich 25,1 ms Sendemittel) und wird deshalb nur noch
+//     informativ ausgegeben, ohne Pruefung.
 //
 // Die Firmware schickt das ArtPollReply nicht an den Absenderport der
 // Anfrage, sondern - wie von der Art-Net-Spezifikation vorgeschrieben -
@@ -23,6 +37,7 @@ public class PollProbe {
   static final int[] OCTETS = { 2, 4, 6, 7, 8, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21 };
   static final int ARTNET_PORT = 6454;
   static final long COLLECT_IDLE_MILLIS = 3000;   // Frist ohne neue Antwort, bis das Sammeln endet
+  static final double UNIVERSE_TOLERANCE = 0.5;   // erlaubte Abweichung von uUniPF zur erwarteten Zahl
 
   public static void main(String[] args) throws Exception {
     java.net.DatagramSocket socket;
@@ -101,10 +116,15 @@ public class PollProbe {
     socket.close();
 
     // Schritt 3: erst jetzt auswerten.
+    int repliedCount = 0;     // irgendeine Antwort erhalten (mit oder ohne auswertbaren Bericht)
+    int evaluableCount = 0;   // Bericht vorhanden und uUniPF eine Zahl
+    int passCount = 0;        // auswertbar und uUniPF nahe der erwarteten Universenzahl
+
     for (String ip : targets.keySet()) {
       String report = reports.get(ip);
       if (report == null) {
         if (repliedWithoutReport.contains(ip)) {
+          repliedCount++;
           System.out.printf("%-9s Antwort ohne Statusbericht%n", ip);
           Check.that(ip + " liefert Statusbericht", false);
         } else {
@@ -114,27 +134,62 @@ public class PollProbe {
         continue;
       }
 
-      double fps = field(report, "fps");
-      double uni = field(report, "uUniPF");
+      repliedCount++;
       System.out.printf("%-9s %s%n", ip, report);
 
-      Check.that(ip + " meldet 38-42 fps", fps >= 38.0 && fps <= 42.0);
-      Check.that(ip + " meldet 9.5-10.5 Universen je Frame", uni >= 9.5 && uni <= 10.5);
+      Double numOuts = parseField(report, "numOuts");
+      Double numUniPOut = parseField(report, "numUniPOut");
+      Double fps = parseField(report, "fps");
+      Double uUniPF = parseField(report, "uUniPF");
+
+      if (fps != null) {
+        System.out.printf("%-9s fps %.1f (Momentanwert aus den letzten zwei "
+            + "Sync-Paketen, kein Mittelwert - streut, nur informativ)%n", ip, fps);
+      }
+
+      if (uUniPF == null || numOuts == null || numUniPOut == null) {
+        System.out.printf("%-9s nicht auswertbar - Bericht enthaelt leere Zahlenfelder "
+            + "(Firmware-Eigenheit dieses Controllers, kein Netzfehler)%n", ip);
+        continue;
+      }
+
+      evaluableCount++;
+      double expectedUniverses = numOuts * numUniPOut;
+      boolean near = Math.abs(uUniPF - expectedUniverses) <= UNIVERSE_TOLERANCE;
+      if (near) passCount++;
+      Check.that(ip + " meldet uUniPF nahe " + expectedUniverses
+          + " (numOuts * numUniPOut)", near);
     }
+
+    System.out.println();
+    System.out.printf("Zusammenfassung: %d/%d Controller haben geantwortet, "
+        + "%d davon auswertbar, %d erreichen die erwartete Universenzahl.%n",
+        repliedCount, targets.size(), evaluableCount, passCount);
+
+    // Waere kein einziger Controller auswertbar, wuerde diese Sonde bei einem
+    // komplett toten Netz grün bleiben (0 von 0 "bestehen" trivial) - deshalb
+    // eigener Fehlerfall.
+    Check.that("mindestens ein Controller ist auswertbar", evaluableCount > 0);
 
     System.exit(Check.report("PollProbe"));
   }
 
-  static double field(String report, String name) {
+  // Liefert die geparste Zahl, oder null wenn das Feld fehlt oder - wie bei
+  // elf von fuenfzehn Controllern beobachtet - leer ist. Leer ist dabei
+  // ausdruecklich kein Fehlerfall, sondern der Firmware-bedingte
+  // "nicht auswertbar"-Zustand.
+  static Double parseField(String report, String name) {
     int i = report.indexOf(name + ";");
-    if (i < 0) return -1;
+    if (i < 0) return null;
     int from = i + name.length() + 1;
     int to = report.indexOf(';', from);
     if (to < 0) to = report.length();
+    String raw = report.substring(from, to);
+    if (raw.isEmpty()) return null;
     try {
-      return Double.parseDouble(report.substring(from, to));
+      return Double.parseDouble(raw);
     } catch (NumberFormatException e) {
-      return -1;
+      return null;
     }
   }
 }

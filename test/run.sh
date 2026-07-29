@@ -15,6 +15,7 @@ mkdir -p build
 SOURCES="LedColor.java ArtNetOutput.java"
 [ -f NodeCrossingStore.java ] && SOURCES="$SOURCES NodeCrossingStore.java"
 [ -f LedStripeNetworks.java ] && SOURCES="$SOURCES LedStripeNetworks.java"
+[ -f TestPatterns.java ] && SOURCES="$SOURCES TestPatterns.java"
 
 javac -nowarn -cp "$CORE" -d build $SOURCES test/*.java
 

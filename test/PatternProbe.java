@@ -7,11 +7,9 @@
 // Programm speist dieselben fuenf Muster direkt ueber ArtNetOutput ein, ganz
 // ohne Processing-Laufzeit.
 //
-// WICHTIG: Die Musterlogik unten (Methode buildPattern) ist eine bewusste
-// Kopie von NodeCalibration.drawPattern(). Aenderungen an den fuenf Mustern
-// muessen an beiden Stellen nachgezogen werden:
-//   - NodeCalibration.java, Methode drawPattern()
-//   - test/PatternProbe.java, Methode buildPattern()
+// Die Musterlogik selbst steht nur einmal in TestPatterns.java (Repo-Wurzel)
+// und wird von hier wie von NodeCalibration.drawPattern() aufgerufen - keine
+// zweite Kopie, die auseinanderlaufen koennte.
 public class PatternProbe {
 
   static final int[] OCTETS = { 2, 4, 6, 7, 8, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21 };
@@ -44,69 +42,40 @@ public class PatternProbe {
       return;
     }
     int seconds = args.length > 1 ? Integer.parseInt(args[1]) : 60;
-    int patternStripe2 = args.length > 2 ? Integer.parseInt(args[2]) : 0;
+    int stripeForPattern2 = args.length > 2 ? Integer.parseInt(args[2]) : 0;
 
     ArtNetOutput out = new ArtNetOutput(OCTETS, LEDS_PER_STRIPE);
     out.setMasterLevel(MASTER_LEVEL);   // fest - siehe MASTER_LEVEL oben
     int numStripes = out.numStripes();
 
-    printIntro(pattern, seconds, patternStripe2, numStripes);
+    printIntro(pattern, seconds, stripeForPattern2, numStripes);
 
     LedColor[] buffer = LedColor.createColorArray(numStripes * LEDS_PER_STRIPE);
+    TestPatterns patterns = new TestPatterns();
+    patterns.reset();
     out.start();
 
-    int patternStripe = 0;
-    int patternLed = 0;
-    long lastStep = 0;
     int lastPrintedStripe = -1;
 
     long end = System.currentTimeMillis() + seconds * 1000L;
     while (System.currentTimeMillis() < end) {
-      long now = System.currentTimeMillis();
       LedColor.set(buffer, new LedColor(0, 0, 0));
 
       if (pattern == 1) {
-        // ein Stripe nach dem anderen, eine Sekunde je Stripe
-        if (now - lastStep > 1000) {
-          lastStep = now;
-          patternStripe = (patternStripe + 1) % numStripes;
+        patterns.pattern1(buffer, numStripes, LEDS_PER_STRIPE);
+        int stripe = patterns.currentStripe();
+        if (stripe != lastPrintedStripe) {
+          lastPrintedStripe = stripe;
+          System.out.println("  Stripe " + stripe + " leuchtet");
         }
-        dimStripe(buffer, patternStripe, 1f, 1f, 1f);
-        if (patternStripe != lastPrintedStripe) {
-          lastPrintedStripe = patternStripe;
-          System.out.println("  Stripe " + patternStripe + " leuchtet");
-        }
-
       } else if (pattern == 2) {
-        // Lauflicht ueber einen Stripe, deckt die Universumsgrenzen ab
-        if (now - lastStep > 20) {
-          lastStep = now;
-          patternLed = (patternLed + 1) % LEDS_PER_STRIPE;
-        }
-        int base = patternStripe2 * LEDS_PER_STRIPE;
-        for (int i = 0; i < 4 && patternLed + i < LEDS_PER_STRIPE; i++) {
-          buffer[base + patternLed + i].set(new LedColor(1, 1, 1));
-        }
-
+        patterns.pattern2(buffer, stripeForPattern2, LEDS_PER_STRIPE);
       } else if (pattern == 3) {
-        // nur die letzten vier LEDs jedes Stripes - leuchtet dabei der Anfang
-        // des naechsten Outputs, schlagen die Reserve-Slots durch
-        for (int s = 0; s < numStripes; s++) {
-          int base = s * LEDS_PER_STRIPE;
-          for (int i = LEDS_PER_STRIPE - 4; i < LEDS_PER_STRIPE; i++) {
-            buffer[base + i].set(new LedColor(1, 1, 1));
-          }
-        }
-
+        TestPatterns.pattern3(buffer, numStripes, LEDS_PER_STRIPE);
       } else if (pattern == 4) {
-        // Rot, Gruen, Blau im Wechsel, je zwei Sekunden
-        int phase = (int) ((now / 2000) % 3);
-        LedColor c = phase == 0 ? new LedColor(1, 0, 0)
-                   : phase == 1 ? new LedColor(0, 1, 0) : new LedColor(0, 0, 1);
-        LedColor.set(buffer, c);
-
+        TestPatterns.pattern4(buffer);
       } else if (pattern == 5) {
-        LedColor.set(buffer, new LedColor(1, 1, 1));
+        TestPatterns.pattern5(buffer);
       }
 
       out.publish(buffer);
@@ -117,14 +86,7 @@ public class PatternProbe {
     System.out.println("Fertig, Ausgabe gestoppt.");
   }
 
-  private static void dimStripe(LedColor[] buffer, int stripe, float r, float g, float b) {
-    int base = stripe * LEDS_PER_STRIPE;
-    for (int i = 0; i < LEDS_PER_STRIPE; i++) {
-      buffer[base + i].set(new LedColor(r, g, b));
-    }
-  }
-
-  private static void printIntro(int pattern, int seconds, int patternStripe2, int numStripes) {
+  private static void printIntro(int pattern, int seconds, int stripeForPattern2, int numStripes) {
     System.out.println("Master-Pegel fest auf " + MASTER_LEVEL
         + " - laesst sich ueber Argumente nicht erhoehen.");
     System.out.println("Laufzeit " + seconds + " s, " + numStripes + " Stripes.");
@@ -135,7 +97,7 @@ public class PatternProbe {
             + "(15 Controller, je zwei Outputs, Oktette 2,4,6,7,8,10,12,13,14,16,17,18,19,20,21).");
         break;
       case 2:
-        System.out.println("Testbild 2 - Lauflicht ueber Stripe " + patternStripe2 + ".");
+        System.out.println("Testbild 2 - Lauflicht ueber Stripe " + stripeForPattern2 + ".");
         System.out.println("Darauf achten: keine Luecke im Lauflicht, besonders an den "
             + "Universumsgrenzen bei LED 128, 256, 384 und 512.");
         break;

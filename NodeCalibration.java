@@ -35,16 +35,16 @@ public class NodeCalibration implements runnableLedEffect {
 
   // Testbilder fuer die Abnahme am Aufbau. 0 = Kalibrierung, 1..5 siehe
   // Abschnitt 6 der Spezifikation. Alle laufen mit dem Master-Pegel des
-  // Senders, die Stripes vertragen keine volle Helligkeit.
+  // Senders, die Stripes vertragen keine volle Helligkeit. Die eigentliche
+  // Musterlogik steht in TestPatterns, damit test/PatternProbe.java exakt
+  // dieselben fuenf Muster zeigt statt einer zweiten, moeglicherweise
+  // abweichenden Fassung.
   private int pattern = 0;
-  private int patternStripe = 0;
-  private int patternLed = 0;
-  private long patternLastStep = 0;
+  private final TestPatterns testPatterns = new TestPatterns();
 
   void setPattern(int p) {
     pattern = p;
-    patternStripe = 0;
-    patternLed = 0;
+    testPatterns.reset();
     message = pattern == 0 ? "Kalibrierung" : "Testbild " + pattern;
   }
 
@@ -53,53 +53,18 @@ public class NodeCalibration implements runnableLedEffect {
   private boolean drawPattern() {
     if (pattern == 0) return false;
     LedColor.set(buffer, new LedColor(0, 0, 0));
-    long now = System.currentTimeMillis();
 
     if (pattern == 1) {
-      // ein Stripe nach dem anderen, eine Sekunde je Stripe
-      if (now - patternLastStep > 1000) {
-        patternLastStep = now;
-        patternStripe = (patternStripe + 1) % numStripes;
-      }
-      dimStripe(patternStripe, 1f, 1f, 1f);
-      message = "Testbild 1 - Stripe " + patternStripe;
-
+      message = testPatterns.pattern1(buffer, numStripes, numLedsPerStripe);
     } else if (pattern == 2) {
-      // Lauflicht ueber einen Stripe, deckt die Universumsgrenzen ab
-      if (now - patternLastStep > 20) {
-        patternLastStep = now;
-        patternLed = (patternLed + 1) % numLedsPerStripe;
-      }
-      int base = cursorStripe[0] * numLedsPerStripe;
-      for (int i = 0; i < 4 && patternLed + i < numLedsPerStripe; i++) {
-        buffer[base + patternLed + i].set(new LedColor(1, 1, 1));
-      }
-      message = "Testbild 2 - Stripe " + cursorStripe[0] + " LED " + patternLed
-          + "  (Grenzen bei 128 256 384 512)";
-
+      // welcher Stripe gezeigt wird, bestimmt der Kalibrier-Cursor
+      message = testPatterns.pattern2(buffer, cursorStripe[0], numLedsPerStripe);
     } else if (pattern == 3) {
-      // nur die letzten vier LEDs jedes Stripes - leuchtet dabei der Anfang
-      // des naechsten Outputs, schlagen die Reserve-Slots durch
-      for (int s = 0; s < numStripes; s++) {
-        int base = s * numLedsPerStripe;
-        for (int i = numLedsPerStripe - 4; i < numLedsPerStripe; i++) {
-          buffer[base + i].set(new LedColor(1, 1, 1));
-        }
-      }
-      message = "Testbild 3 - nur LED " + (numLedsPerStripe - 4) + ".."
-          + (numLedsPerStripe - 1) + ". Leuchtet sonst etwas, ist es Reserve-Durchschlag";
-
+      message = TestPatterns.pattern3(buffer, numStripes, numLedsPerStripe);
     } else if (pattern == 4) {
-      // Rot, Gruen, Blau im Wechsel, je zwei Sekunden
-      int phase = (int) ((now / 2000) % 3);
-      LedColor c = phase == 0 ? new LedColor(1, 0, 0)
-                 : phase == 1 ? new LedColor(0, 1, 0) : new LedColor(0, 0, 1);
-      LedColor.set(buffer, c);
-      message = "Testbild 4 - " + (phase == 0 ? "Rot" : phase == 1 ? "Gruen" : "Blau");
-
+      message = TestPatterns.pattern4(buffer);
     } else if (pattern == 5) {
-      LedColor.set(buffer, new LedColor(1, 1, 1));
-      message = "Testbild 5 - flaechig weiss";
+      message = TestPatterns.pattern5(buffer);
     }
     return true;
   }
