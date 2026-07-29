@@ -196,4 +196,150 @@ class ArtNetOutput {
     p[10] = 0; p[11] = 14;
     p[12] = 0; p[13] = 0;                // Aux1, Aux2
   }
+
+  // ---- Versand ----
+  //
+  // Drei Puffer: einer wird gebaut, einer wartet, einer wird gesendet. Die
+  // Referenzen werden nur unter der Sperre getauscht, ausserhalb beruehrt
+  // draw() nur buildBuf und der Sender nur sendBuf. Damit kein Frame beim
+  // Senden ueberschrieben wird.
+  private final Object lock = new Object();
+  private Frame buildBuf, readyBuf, sendBuf;
+  private boolean hasNew = false;
+
+  private java.net.DatagramSocket socket;
+  private Thread sender;
+  private volatile boolean running = false;
+  private boolean syncBroadcast = false;
+
+  private static final long PERIOD_NANOS = 25_000_000L;   // 40 fps
+
+  // Taktmessung fuer Test 1c
+  private final Object statsLock = new Object();
+  private long lastSendNanos = 0;
+  private long intervalCount = 0;
+  private double intervalSum = 0, intervalSumSq = 0;
+  private long intervalMin = Long.MAX_VALUE, intervalMax = 0;
+
+  void start() {
+    if (running) return;
+    buildBuf = newFrame();
+    readyBuf = newFrame();
+    sendBuf = newFrame();
+    try {
+      socket = new java.net.DatagramSocket();
+    } catch (java.net.SocketException e) {
+      throw new RuntimeException("Art-Net-Socket liess sich nicht oeffnen", e);
+    }
+    running = true;
+    sender = new Thread(new Runnable() {
+      public void run() { runSendLoop(); }
+    }, "artnet-sender");
+    sender.setDaemon(true);
+    sender.start();
+  }
+
+  void stop() {
+    running = false;
+    if (sender != null) {
+      try { sender.join(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+      sender = null;
+    }
+    if (socket != null) { socket.close(); socket = null; }
+  }
+
+  // Sync einzeln an jeden Controller oder als Broadcast. Welches sauberer
+  // laeuft, entscheidet die Messung von uUniPF aus Test 1d.
+  void setSyncBroadcast(boolean on) {
+    syncBroadcast = on;
+  }
+
+  // Aus draw() aufgerufen. Baut ausserhalb der Sperre und tauscht nur die
+  // Referenz darin.
+  void publish(LedColor[] ledColors) {
+    if (!running) return;
+    buildFrame(ledColors, buildBuf);
+    synchronized (lock) {
+      Frame t = buildBuf; buildBuf = readyBuf; readyBuf = t;
+      hasNew = true;
+    }
+  }
+
+  private Frame takeFrame() {
+    synchronized (lock) {
+      if (hasNew) {
+        Frame t = sendBuf; sendBuf = readyBuf; readyBuf = t;
+        hasNew = false;
+      }
+      return sendBuf;
+    }
+  }
+
+  private void runSendLoop() {
+    // Absolute Zeitpunkte statt sleep(25), damit sich kein Versatz aufsummiert.
+    long deadline = System.nanoTime();
+    while (running) {
+      deadline += PERIOD_NANOS;
+      try {
+        sendFrame(takeFrame());
+      } catch (Exception e) {
+        System.err.println("Art-Net-Versand fehlgeschlagen: " + e);
+      }
+      long wait = deadline - System.nanoTime();
+      if (wait > 0) {
+        try {
+          Thread.sleep(wait / 1_000_000L, (int) (wait % 1_000_000L));
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          return;
+        }
+      } else {
+        // zu spaet - Takt neu aufsetzen statt hinterherzuhetzen
+        deadline = System.nanoTime();
+      }
+    }
+  }
+
+  private void sendFrame(Frame frame) throws java.io.IOException {
+    long now = System.nanoTime();
+    synchronized (statsLock) {
+      if (lastSendNanos != 0) {
+        long d = now - lastSendNanos;
+        intervalCount++;
+        intervalSum += d;
+        intervalSumSq += (double) d * (double) d;
+        if (d < intervalMin) intervalMin = d;
+        if (d > intervalMax) intervalMax = d;
+      }
+      lastSendNanos = now;
+    }
+
+    for (int p = 0; p < frame.data.length; p++) {
+      boolean isSync = frame.lengths[p] == SYNC_PACKET_LEN;
+      String host = (isSync && syncBroadcast) ? "2.255.255.255" : frame.targets[p];
+      java.net.InetAddress addr = java.net.InetAddress.getByName(host);
+      if (isSync && syncBroadcast) {
+        socket.setBroadcast(true);
+      }
+      socket.send(new java.net.DatagramPacket(frame.data[p], frame.lengths[p], addr, ARTNET_PORT));
+    }
+  }
+
+  // {Anzahl, Mittelwert, Minimum, Maximum, Standardabweichung} in Nanosekunden
+  long[] intervalStatsNanos() {
+    synchronized (statsLock) {
+      if (intervalCount == 0) return new long[] { 0, 0, 0, 0, 0 };
+      double mean = intervalSum / intervalCount;
+      double variance = intervalSumSq / intervalCount - mean * mean;
+      if (variance < 0) variance = 0;
+      return new long[] { intervalCount, (long) mean, intervalMin, intervalMax, (long) Math.sqrt(variance) };
+    }
+  }
+
+  void resetIntervalStats() {
+    synchronized (statsLock) {
+      lastSendNanos = 0; intervalCount = 0; intervalSum = 0; intervalSumSq = 0;
+      intervalMin = Long.MAX_VALUE; intervalMax = 0;
+    }
+  }
 }
