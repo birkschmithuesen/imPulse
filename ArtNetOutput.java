@@ -19,10 +19,20 @@ class ArtNetOutput {
   static final int SYNC_PACKET_LEN = 14;
 
   // Kanalreihenfolge im DMX-Paket. Das vierte Byte je LED bleibt immer 0.
-  // Kommen die Farben vertauscht an, hier drehen: R=2, G=1, B=0.
-  static final int R_OFFSET = 0;
-  static final int G_OFFSET = 1;
-  static final int B_OFFSET = 2;
+  //
+  // Am 2026-07-30 an der Installation mit Testbild 4 gemessen (nicht aus der
+  // Firmware abgeleitet): gesendetes Rot kam gruen an, gesendetes Gruen kam
+  // blau an, gesendetes Blau kam rot an. Das ist eine Rotation der drei Bytes,
+  // kein einfacher Tausch zweier Kanaele - Byte 0 steuert Gruen, Byte 1
+  // steuert Blau, Byte 2 steuert Rot. Zwei vorherige Firmware-Analysen hatten
+  // ein Vertauschen von nur Rot und Blau (R=2, G=1, B=0) nahegelegt; das haette
+  // den gemessenen Befund NICHT erklaert bzw. behoben, da Gruen dabei
+  // faelschlich unveraendert bliebe. Vor einer erneuten Aenderung hier: mit
+  // Testbild 4 an der echten Anlage nachmessen, nicht aus dem Schaltplan
+  // ableiten.
+  static final int R_OFFSET = 2;
+  static final int G_OFFSET = 0;
+  static final int B_OFFSET = 1;
 
   final int[] octets;
   final int numLedsPerStripe;

@@ -90,9 +90,9 @@ public class ArtNetOutputTest {
             Check.eq(where + " Byte 4 bei LED " + i, 0, buf[o + 3] & 0xFF);
             if (inStripe < LEDS_PER_STRIPE) {
               LedColor c = colors[stripe * LEDS_PER_STRIPE + inStripe];
-              Check.eq(where + " R bei LED " + i, Math.round(c.x * 255f), buf[o + 0] & 0xFF);
-              Check.eq(where + " G bei LED " + i, Math.round(c.y * 255f), buf[o + 1] & 0xFF);
-              Check.eq(where + " B bei LED " + i, Math.round(c.z * 255f), buf[o + 2] & 0xFF);
+              Check.eq(where + " R bei LED " + i, Math.round(c.x * 255f), buf[o + ArtNetOutput.R_OFFSET] & 0xFF);
+              Check.eq(where + " G bei LED " + i, Math.round(c.y * 255f), buf[o + ArtNetOutput.G_OFFSET] & 0xFF);
+              Check.eq(where + " B bei LED " + i, Math.round(c.z * 255f), buf[o + ArtNetOutput.B_OFFSET] & 0xFF);
             } else {
               // die 40 Reserve-Slots des letzten Universums je Output
               Check.eq(where + " Reserve R bei LED " + i, 0, buf[o + 0] & 0xFF);

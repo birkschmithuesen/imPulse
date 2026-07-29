@@ -30,7 +30,9 @@ Processing can also send Art-Net directly to the LED controllers, bypassing Syph
 The current installation has 30 led stripes of 600 LEDs each (18,000 LEDs total), driven by 15 Pixel2LED controllers. Each controller has two outputs and drives two stripes (controller `k` -> stripes `2k` and `2k+1`). Controllers are addressed by the last octet of their IP (`2.2.2.<octet>`); the octets in use are `2, 4, 6, 7, 8, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21`.
 
 ## Art-Net output
-`ArtNetOutput` sends Art-Net directly to the controllers, no MadMapper in between. Each LED takes 4 bytes (R, G, B, and an unused 4th byte), so one universe (512 DMX channels) carries 128 LEDs. At 600 LEDs per output that's 5 universes, the last one only filled to 88 real LEDs (the remaining slots are zeroed, not left over from a previous frame). The start universe follows the convention `octet * 100`.
+`ArtNetOutput` sends Art-Net directly to the controllers, no MadMapper in between. Each LED takes 4 bytes, so one universe (512 DMX channels) carries 128 LEDs. At 600 LEDs per output that's 5 universes, the last one only filled to 88 real LEDs (the remaining slots are zeroed, not left over from a previous frame). The start universe follows the convention `octet * 100`.
+
+The byte order within those 4 bytes is **not** R, G, B, 0 - it's a rotation, measured against the physical installation on 2026-07-30 with test pattern 4 (not derived from the firmware): byte 0 drives green, byte 1 drives blue, byte 2 drives red, byte 3 is unused. See `R_OFFSET`/`G_OFFSET`/`B_OFFSET` in `ArtNetOutput.java`.
 
 An **ArtSync** packet (OpSync) is sent after each controller's universes and is mandatory, not optional - without it the firmware would display each universe as soon as it arrives, tearing the image across outputs. Sending happens on its own 40 Hz thread with triple buffering (build/ready/send buffers), so `draw()` never blocks waiting on the network. `describeMapping()` prints the full controller/universe/stripe table to the console at startup, useful for checking against the controllers' web interface before anything is connected.
 
