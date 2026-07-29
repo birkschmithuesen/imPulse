@@ -262,6 +262,11 @@ class ArtNetOutput {
 
   // Aus draw() aufgerufen. Baut ausserhalb der Sperre und tauscht nur die
   // Referenz darin.
+  //
+  // Darf nur von genau einem Thread aufgerufen werden. Der Zugriff auf
+  // buildBuf ist bewusst ungesperrt - das ist nur sicher, solange nie zwei
+  // Aufrufer gleichzeitig hineinschreiben. Darauf beruht die gesamte
+  // Dreifachpufferung (buildBuf/readyBuf/sendBuf).
   void publish(LedColor[] ledColors) {
     if (!running) return;
     buildFrame(ledColors, buildBuf);
