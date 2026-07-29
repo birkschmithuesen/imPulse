@@ -2,12 +2,9 @@ import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 
 import netP5.*;
 import oscP5.*;
-import controlP5.*;
 
 //import spout.*; //use this on Windows
 import codeanticode.syphon.*; //use this on MacOS
@@ -43,8 +40,6 @@ NetAddress oscOutput;
 
 // an array of LedColor objects. One for each LED
 LedColor[] ledColors;
-//can be usefull to gather information for each LED
-LedInStripeInfo[] stripeInfos;
 LedInNetInfo[] ledNetInfo;
 // create an array with all the nodes/crossings
 ArrayList <LedNetworkNode> listOfNodes;
@@ -62,20 +57,13 @@ Mixer mixer;
 //visual generators
 LedNetworkTransportEffect ledNetworkTransportEffect;
 LedNetworkNodeEffects ledNetworkNodeEffects;
-LedStripeFullActivationEffect ledStripeFullActivationEffect;
 
 int counter=0;
 
-// keep track of continuous key presses and control the LedStripeFullActivationEffect
-
-enum StripeChangeMode {
-  CYCLE_BLACK_STRIPE, CONTROL_BLACK_STRIPE_LEDS, CYCLE_BRIGHT_STRIPES, CONTROL_BRIGHT_STRIPE_LEDS, 
-    ACTIVATE_ALL_BRIGHT_STRIPES, SET_SAME_STRIPE_FIRST_NODE, SET_SAME_STRIPE_SECOND_NODE;
-}
-StripeChangeMode stripeChangeMode = StripeChangeMode.CYCLE_BLACK_STRIPE;
-
-// GUI for LedStripeFullActivationEffect
-ControlP5 cp5;
+// Zwei-Cursor-Werkzeug fuer die Node-Kalibrierung (ersetzt das alte
+// Dropdown-Menue mit sieben Modi).
+NodeCalibration nodeCalibration;
+boolean calibrationMode = false;
 
 
 void setup() {
@@ -105,23 +93,22 @@ void setup() {
   canvas = createGraphics(numLedsPerStripe, numStripes, P3D);
 
   ledColors = LedColor.createColorArray(numLeds);        // build a color buffer with the length of the position file
-  stripeInfos = stripeConfiguration.builtStripeInfo();
   ledNetInfo = LedInNetInfo.buildNetInfo(numStripes, numLedsPerStripe); //create an Array with data for each LED if they are part of a node
   crossingStore = new NodeCrossingStore(numStripes, numLedsPerStripe);
   crossingStore.load(dataPath("nodeCrossings.txt"));
   System.out.println(crossingStore.lastMessage());
   listOfNodes = new ArrayList<LedNetworkNode>();
   LedInNetInfo.applyCrossings(crossingStore.crossings(), ledNetInfo, listOfNodes);  // all sets of Leds that are on different stripes but close to each other
+  nodeCalibration = new NodeCalibration(crossingStore, ledNetInfo, listOfNodes,
+      numStripes, numLedsPerStripe, dataPath("nodeCrossings.txt"));
 
   //initialize visual effects
   ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, oscP5, oscOutput);
   ledNetworkNodeEffects = new LedNetworkNodeEffects("1", numLeds, ledNetInfo, listOfNodes);
-  ledStripeFullActivationEffect = new LedStripeFullActivationEffect("1", stripeInfos, numStripes, ledNetInfo, listOfNodes);
 
   mixer = new Mixer(numLeds);
   mixer.addEffect(ledNetworkTransportEffect);
   mixer.addEffect(ledNetworkNodeEffects);
-  //mixer.addEffect(ledStripeFullActivationEffect);
 
   //to save the osc-adresses
   try {
@@ -133,37 +120,29 @@ void setup() {
   catch (FileNotFoundException e) {
     println("file not found");
   }
-
-  //add GUI
-  cp5 = new ControlP5(this);
-  List l = Arrays.asList(StripeChangeMode.CYCLE_BLACK_STRIPE.name(), StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS.name(),
-    StripeChangeMode.CYCLE_BRIGHT_STRIPES.name(), StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS.name(),
-    StripeChangeMode.ACTIVATE_ALL_BRIGHT_STRIPES.name(), StripeChangeMode.SET_SAME_STRIPE_FIRST_NODE.name(),
-    StripeChangeMode.SET_SAME_STRIPE_SECOND_NODE.name());
-  /* add a ScrollableList, by default it behaves like a DropdownList */
-  cp5.addScrollableList("dropdown")
-    .setPosition(1200, 0)
-    .setSize(200, 100)
-    .setBarHeight(20)
-    .setItemHeight(20)
-    .addItems(l)
-    ;
 }
 
 void draw() {
   OscMessageDistributor.distributeMessages();
   //createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
-  ledColors=mixer.mix(); // calculate the visuals
+  if (calibrationMode) {
+    nodeCalibration.update();
+    ledColors = nodeCalibration.drawMe();
+  } else {
+    ledColors = mixer.mix();
+  }
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
   image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
+  if (calibrationMode) {
+    fill(255);
+    text(nodeCalibration.hudText(), 10, numStripes * 10 + 20);
+  }
   // send the visuals over Syphon/Spout to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
   //server.sendTexture(canvas); //use this on Windows
   //server.sendImage(canvas); //use this on MacOS
   //send data directly to ArtNet Interface withoput MadMapper in between
   artNetOutput.setMasterLevel(masterLevel.getValue());
   artNetOutput.publish(ledColors);
-  ledStripeFullActivationEffect.changeStripe(); //this effect is need for node calibration
-
 }
 
 void oscEvent(OscMessage theOscMessage) {
@@ -193,67 +172,23 @@ void createRandomPipeTrigger() {
 }
 
 void keyPressed() {
-  if (key == CODED) {
-    if (keyCode == UP) {
-      ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.INCREASE_BRIGHTNESS);
-    } else if (keyCode == DOWN) {
-      ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DECREASE_BRIGHTNESS);
-    } else if (keyCode == RIGHT) {
-      if (stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_STRIPE_LED);
-      } else if (stripeChangeMode == StripeChangeMode.CYCLE_BLACK_STRIPE) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.NEXT_BLACK_STRIPE);
-      } else if (stripeChangeMode == StripeChangeMode.CYCLE_BRIGHT_STRIPES) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.NEXT_BRIGHT_STRIPE);
-      } else if (stripeChangeMode == StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_BRIGHT_STRIPE_LED);
-      } else if (stripeChangeMode == StripeChangeMode.SET_SAME_STRIPE_FIRST_NODE) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_SAME_STRIPE_LED_FIRST_NODE);
-      } else if (stripeChangeMode == StripeChangeMode.SET_SAME_STRIPE_SECOND_NODE) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.ACTIVATE_NEXT_SAME_STRIPE_LED_SECOND_NODE);
-      }
-    } else if (keyCode == LEFT) {
-      if (stripeChangeMode == StripeChangeMode.CONTROL_BLACK_STRIPE_LEDS) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_STRIPE_LED);
-      } else if (stripeChangeMode == StripeChangeMode.CYCLE_BLACK_STRIPE) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.PREV_BLACK_STRIPE);
-      } else if (stripeChangeMode == StripeChangeMode.CYCLE_BRIGHT_STRIPES) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.PREV_BRIGHT_STRIPE);
-      } else if (stripeChangeMode == StripeChangeMode.CONTROL_BRIGHT_STRIPE_LEDS) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_BRIGHT_STRIPE_LED);
-      } else if (stripeChangeMode == StripeChangeMode.SET_SAME_STRIPE_FIRST_NODE) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_SAME_STRIPE_LED_FIRST_NODE);
-      } else if (stripeChangeMode == StripeChangeMode.SET_SAME_STRIPE_SECOND_NODE) {
-        ledStripeFullActivationEffect.setStripeChange(LedStripeFullActivationEffect.StripeChange.DEACTIVATE_LAST_SAME_STRIPE_LED_SECOND_NODE);
-      }
-    }
+  if (calibrationMode && key == CODED) {
+    nodeCalibration.handleKeyPressed(keyCode, key);
   }
 }
 
 void keyReleased() {
-  if (key == CODED) {
-    ledStripeFullActivationEffect.stripeChange = LedStripeFullActivationEffect.StripeChange.NONE;
-  } else if (key == ENTER || key == RETURN) {
-    ledStripeFullActivationEffect.saveCurrentNodeCrossing();
-  } else if (key == 's') {
-    try {
-      ledStripeFullActivationEffect.saveNodeCrossingsToFile(dataPath("nodeCrossings.txt"));
-    } 
-    catch (IOException e) {
-      println(e);
-    }
-  } else if (key == 'n') {
-    ledStripeFullActivationEffect.toggleShowNodes();
-  } else if (key == 'f') {
-    ledStripeFullActivationEffect.cycleSpeeds();
+  if (key == 'c' || key == 'C') {
+    calibrationMode = !calibrationMode;
+    println(calibrationMode ? "Kalibriermodus an" : "Kalibriermodus aus");
+    return;
   }
-}
-
-//ControlP5 callback - method name must be the same as the string parameter of cp5.addScrollableList()
-void dropdown(int index) {
-  String selected = (String) cp5.get(ScrollableList.class, "dropdown").getItem(index).get("text");
-  stripeChangeMode = StripeChangeMode.valueOf(selected);
-  if (stripeChangeMode == StripeChangeMode.ACTIVATE_ALL_BRIGHT_STRIPES) {
-    ledStripeFullActivationEffect.resetCurrentStripeConfig();
+  if (!calibrationMode) {
+    return;
+  }
+  if (key == CODED) {
+    nodeCalibration.handleKeyReleased();
+  } else {
+    nodeCalibration.handleCommand(key);
   }
 }
