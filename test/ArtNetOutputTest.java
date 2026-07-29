@@ -40,7 +40,7 @@ public class ArtNetOutputTest {
     for (int i = 0; i < numLeds; i++) {
       colors[i].x = ((i) % 251) / 255f;
       colors[i].y = ((i / 251) % 241) / 255f;
-      colors[i].z = ((i / 60541) % 239) / 255f;
+      colors[i].z = ((i / 71) % 233) / 255f;
     }
 
     ArtNetOutput.Frame frame = out.newFrame();

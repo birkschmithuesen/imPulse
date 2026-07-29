@@ -151,9 +151,9 @@ class ArtNetOutput {
               buf[o + G_OFFSET] = level(c.y);
               buf[o + B_OFFSET] = level(c.z);
             } else {
-              buf[o + 0] = 0;
-              buf[o + 1] = 0;
-              buf[o + 2] = 0;
+              buf[o + R_OFFSET] = 0;
+              buf[o + G_OFFSET] = 0;
+              buf[o + B_OFFSET] = 0;
             }
             buf[o + 3] = 0;
           }
