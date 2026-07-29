@@ -19,10 +19,23 @@ https://vimeo.com/244515640
 Max/MSP -> (OSC) -> Processing -> (Syphon) -> Madmapper -> (ArtNet) -> APA 102</br>
 Max/MSP <- (OSC) <- Processing
 
+Processing can also send Art-Net directly to the LED controllers, bypassing Syphon/MadMapper entirely - this is the currently active output path, see "Art-Net output" below.
+
 ## rules
 * create a new impulse when a tube is hit at the beginning of its coresponding led srtipe
 * the impulse travels along the stripe. split up into three impulses, when a node - crossing of two led stripes is reached
 * play the corresponding note when a node is reached by an impulse
+
+## geometry
+The current installation has 30 led stripes of 600 LEDs each (18,000 LEDs total), driven by 15 Pixel2LED controllers. Each controller has two outputs and drives two stripes (controller `k` -> stripes `2k` and `2k+1`). Controllers are addressed by the last octet of their IP (`2.2.2.<octet>`); the octets in use are `2, 4, 6, 7, 8, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21`.
+
+## Art-Net output
+`ArtNetOutput` sends Art-Net directly to the controllers, no MadMapper in between. Each LED takes 4 bytes (R, G, B, and an unused 4th byte), so one universe (512 DMX channels) carries 128 LEDs. At 600 LEDs per output that's 5 universes, the last one only filled to 88 real LEDs (the remaining slots are zeroed, not left over from a previous frame). The start universe follows the convention `octet * 100`.
+
+An **ArtSync** packet (OpSync) is sent after each controller's universes and is mandatory, not optional - without it the firmware would display each universe as soon as it arrives, tearing the image across outputs. Sending happens on its own 40 Hz thread with triple buffering (build/ready/send buffers), so `draw()` never blocks waiting on the network. `describeMapping()` prints the full controller/universe/stripe table to the console at startup, useful for checking against the controllers' web interface before anything is connected.
+
+## master level - a safety limit, not a creative control
+`/master/level` sets a hardware safety ceiling on everything sent to the LEDs - show, test patterns and calibration alike. It defaults to 0.1 and is clamped to **0..0.3**, not 0..1: at full white, 10 m stripes already show a voltage drop according to the strip's datasheet, so full brightness must not be reachable at all, neither from the remote fader nor from a stray OSC message.
 
 ## parameters
 * /net/impulse/speed
@@ -30,44 +43,34 @@ Max/MSP <- (OSC) <- Processing
 * /net/impulse/nodeDeadTime
 * /nodes/times/fire
 * /nodes/times/recover
+* /master/level (see "master level" above)
 
 ## libraries to be imported into Processing
-* [oscP5](http://www.sojamo.de/libraries/oscP5/)
-* [controlP5](http://www.sojamo.de/libraries/controlP5/)
-* [ArtNet](https://github.com/cansik/artnet4j)
+* [oscP5](http://www.sojamo.de/libraries/oscP5/) (also provides `netP5`)
+* [Syphon](https://github.com/Syphon/Processing) (macOS) / Spout (Windows) - used to preview/share the LED canvas as a texture
 
-## Controls for manual node selection
-* <b>UP</b>/<b>DOWN</b> keys for brightness
-* <b>LEFT</b>/<b>RIGHT</b> keys for decreasing/increasing the parameter selected in the drop down menu
-* <b>f</b> to cycle through speeds for decreasing/increasing
-* <b>n</b> to show loaded and newly created nodes
-* <b>ENTER</b> to save current node
-* <b>s</b> to save all created nodes
+`controlP5` and `artnet4j` are **no longer needed**. The old dropdown-based calibration UI (which used controlP5) has been replaced by the two-cursor calibration described below, and Art-Net output is now handled by the self-written `ArtNetOutput` class instead of the `artnet4j` library.
 
-#### How to set crossings on different stripes:
+## Node calibration
+Node crossings are recorded by hand into `data/nodeCrossings.txt` (one line per node, space-separated global LED indices) using a two-cursor tool (`NodeCalibration`) - not the seven-mode dropdown of earlier versions. `NodeCrossingStore` handles validation, undo and file I/O; `LedInNetInfo.applyCrossings(...)` turns the stored crossings into the actual node objects the transport effect reacts to.
 
-1. select a black stripe (```CYCLE_BLACK_STRIPE```)
-2. select an led on that stripe that crosses with another stripe (```CONTROL_BLACK_STRIPE_LEDS```)
- * use <b>f</b>-key to speed up/slow down the control
-3. select the other stripe that matches the previously selected crossing (```CYCLE_BRIGHT_STRIPES```)
-4. select an led on that stripe that crosses with another stripe (```CONTROL_BRIGHT_STRIPE_LEDS```)
- * use <b>f</b>-key to speed up/slow down the control
-5. Hit <b>ENTER</b> to save the crossing as a node
- * with <b>n</b> you can show all currently set nodes
-6. *optional*: reset the bright stripes if you want to switch the stripe (```ACTIVATE_ALL_BRIGHT_STRIPES```)
-7. repeat starting at 1. (if you want to switch the stripe) or 2.
+Press <b>c</b>/<b>C</b> to toggle calibration mode (`calibrationMode`). While active, the preview shows both cursor stripes dimly lit (cursor A green, cursor B red) with a bright dot at each cursor's LED, and a HUD below the preview shows both cursor positions, the loaded/new node count, the current step size and the last message.
 
-When you are done, save the configuration to a file by hitting the <b>s</b>-key.
+Key bindings while calibration mode is active:
+* <b>arrow keys</b> move the active cursor (left/right = LED index, up/down = stripe)
+* <b>TAB</b> switch between cursor A and cursor B
+* <b>ENTER</b> add the current cursor pair as a node crossing; rejections (out of range, identical LED, too close on the same stripe, duplicate) are shown in the HUD **and** printed to the console, in case the HUD isn't visible
+* <b>BACKSPACE</b> undo the last crossing added in this session - crossings loaded from file at startup are deliberately protected and cannot be undone this way
+* <b>f</b> cycle the arrow-key step size (1/10/100)
+* <b>s</b> write the full list to `data/nodeCrossings.txt` (atomic write via a temp file + rename, **not** append - saving repeatedly in one session never duplicates entries)
+* <b>r</b> re-apply the current crossings at runtime, without restarting the sketch
+* <b>n</b> toggle display of loaded (magenta) and newly added (cyan) crossings
+* <b>0-5</b> switch test patterns - `0` is the calibration view itself, `1`-`5` are the five acceptance test patterns; leaving calibration mode with `C` resets this back to `0`, so re-entering calibration doesn't show a leftover test pattern
+* <b>l</b> discard **all** crossings, including the ones loaded from file - for when a calibration file turns out to be from a different stripe geometry and `BACKSPACE`'s protection needs to be overridden on purpose. Requires explicit confirmation: the first press announces how many crossings would be discarded, a second press within a few seconds actually clears the list
 
-#### How to set crossings of one stripe with itself
+`data/nodeCrossings_16x720.txt` and `data/nodeCrossings_35C3.txt` are topologies of earlier installations, kept as a record but not loaded.
 
-1. select a black stripe (```CYCLE_BLACK_STRIPE```)
-2. select an led on that stripe that crosses with the same stripe (```SET_SAME_STRIPE_FIRST_NODE```)
- * use <b>f</b>-key to speed up/slow down the control
-3. select matching led on that stripe (```SET_SAME_STRIPE_SECOND_NODE```)
-4. Hit <b>ENTER</b> to save the crossing as a node
- * with <b>n</b> you can show all currently set nodes
-5. *optional*: reset the bright stripes if you want to switch the stripe (```ACTIVATE_ALL_BRIGHT_STRIPES```)
-6. repeat starting at 1. (if you want to switch the stripe) or 2.
+## Tests
+`test/run.sh` compiles the Processing- and network-independent classes together with everything in `test/` and runs them. Called with no arguments it runs all four suites: `ArtNetOutputTest`, `ArtNetDecoderTest`, `NodeCrossingStoreTest`, `ApplyCrossingsTest`.
 
-When you are done, save the configuration to a file by hitting the <b>s</b>-key.
+The same folder also has three standalone probes that talk to the real hardware and are **not** part of the default run: `TimingProbe` (measures the actual 40 Hz send rate against the real network), `PollProbe` (queries the controllers over Art-Net's ArtPoll) and `PatternProbe` (drives the five acceptance test patterns straight through `ArtNetOutput`, without the Processing sketch). Run these individually and deliberately, e.g. `test/run.sh TimingProbe` - never as part of an unattended check.

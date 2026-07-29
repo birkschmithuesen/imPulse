@@ -10,22 +10,35 @@ Signalkette: `Max/MSP --OSC:8001--> Processing --Syphon--> MadMapper --ArtNet-->
 
 ## Ausführen
 
-Kein Build-System, keine Tests, kein Linter — reines Processing-Projekt.
+Kein Build-System für den Sketch selbst — reines Processing-Projekt. Für die netz- und processingunabhängigen Teile (`ArtNetOutput`, `NodeCrossingStore`, `LedStripeNetworks`, `TestPatterns`) gibt es aber eine eigene Testsuite, siehe „Tests" unten.
 
 - **IDE**: `imPulse.pde` in Processing 3 öffnen, Play. Der Sketch-Ordner **muss** `imPulse` heissen (Processing-Konvention: Ordnername == Name der Haupt-`.pde`).
 - **CLI**: `processing-java --sketch=/Users/macbook/Projekte/_gitHub/imPulse --run`
 
 ### Bibliotheken
 
-`oscP5`, `controlP5`, `Syphon` liegen als Kopie in `libraries/`, aber Processing löst Bibliotheken **aus dem Sketchbook** (`~/Documents/Processing/libraries`) auf, nicht aus dem Sketch-Ordner. Sie müssen dort per Contribution Manager installiert sein. `artnet4j` (`ch.bildspur.artnet`) ist gar nicht mit eingecheckt und muss ebenfalls installiert werden — ohne sie kompiliert der Sketch nicht.
+`oscP5` (bringt auch `netP5` mit) und `Syphon` liegen als Kopie in `libraries/`, aber Processing löst Bibliotheken **aus dem Sketchbook** (`~/Documents/Processing/libraries`) auf, nicht aus dem Sketch-Ordner. Sie müssen dort per Contribution Manager installiert sein.
+
+`artnet4j` (`ch.bildspur.artnet`) wird **nicht mehr gebraucht** — der aktive Ausgabepfad ist die selbstgeschriebene `ArtNetOutput`-Klasse, die bewusst nur an `LedColor` und der Java-Standardbibliothek hängt. `controlP5` wird ebenfalls nicht mehr gebraucht — das Dropdown-basierte Kalibrier-UI ist der Zwei-Cursor-Kalibrierung (`NodeCalibration`) gewichen, die direkt über Tastatur und das HUD im Sketch-Fenster läuft.
+
+### Tests
+
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `LedStripeNetworks`, `TestPatterns`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle vier Suiten:
+
+- `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
+- `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
+- `NodeCrossingStoreTest` — Validierung, Undo, Laden/Speichern der Kreuzungsdatei, inklusive `clearAll()`
+- `ApplyCrossingsTest` — `LedInNetInfo.applyCrossings` baut die Node-Zuordnung korrekt neu auf, auch beim wiederholten Aufruf mit weniger Kreuzungen
+
+Daneben liegen im selben Ordner drei Sonden, die **echte Hardware ansprechen** und deshalb nicht Teil der Default-Suite sind: `TimingProbe` (misst den 40-Hz-Sendetakt am echten Netz), `PollProbe` (fragt die Controller per ArtPoll nach ihrem Befinden ab) und `PatternProbe` (speist die fünf Testbilder direkt über `ArtNetOutput` ein, ohne Processing-Laufzeit). Diese drei gezielt einzeln aufrufen, z. B. `test/run.sh TimingProbe`, niemals ungefragt gegen die Installation.
 
 ## Architektur
 
 ### Globaler LED-Index
 
-Alles rechnet auf einem flachen Array über alle Stripes: `ledIndex = stripeIndex * numLedsPerStripe + indexInStripe`. Konfiguration steht als Feld in `imPulse.pde` (aktuell `numStripes = 16`, `numLedsPerStripe = 720`). Jeder Effekt hält einen eigenen `LedColor[numLeds]`-Puffer und gibt ihn aus `drawMe()` zurück.
+Alles rechnet auf einem flachen Array über alle Stripes: `ledIndex = stripeIndex * numLedsPerStripe + indexInStripe`. Konfiguration steht als Feld in `imPulse.pde` (aktuell `numLedsPerStripe = 600`, `numStripes` ergibt sich aus `controllerOctets.length * ArtNetOutput.OUTPUTS_PER_CONTROLLER` = 15 Controller × 2 Outputs = 30 Stripes, macht 18 000 LEDs insgesamt). Jeder Effekt hält einen eigenen `LedColor[numLeds]`-Puffer und gibt ihn aus `drawMe()` zurück.
 
-`LedColor` (LedColor.java) erbt von `PVector`; `x/y/z` sind `r/g/b` im Bereich **0..1**. Die Skalierung auf 0..255 passiert erst beim Output (`ArtNetSender.buildPackage`, `drawLedColorsToCanvas`).
+`LedColor` (LedColor.java) erbt von `PVector`; `x/y/z` sind `r/g/b` im Bereich **0..1**. Die Skalierung auf 0..255 (genauer: auf 0..255 je Kanal mal Master-Pegel) passiert erst beim Output (`ArtNetOutput.buildFrame`/`level()`, `drawLedColorsToCanvas`).
 
 ### Effekt-Pipeline
 
@@ -36,7 +49,7 @@ Neuen Effekt hinzufügen: `TemplateEffect.java` als Vorlage kopieren, in `setup(
 Bestehende Effekte:
 - `LedNetworkTransportEffect` — die wandernden Impulse (Kern der Installation)
 - `LedNetworkNodeEffects` — Darstellung der Nodes (Zustände: firing → inactive → waiting, mit Pulsmodulation)
-- `LedStripeFullActivationEffect` — **Kalibrier-Modus**, kein gestalterischer Effekt (siehe unten)
+- `NodeCalibration` — **Kalibrier-Modus**, kein gestalterischer Effekt (siehe unten). Implementiert zwar `runnableLedEffect`, ist aber **nicht** über `mixer.addEffect(...)` registriert; `draw()` in `imPulse.pde` ruft `nodeCalibration.drawMe()` stattdessen direkt auf, wenn `calibrationMode` an ist, und ersetzt damit komplett die Mixer-Ausgabe für diesen Frame.
 
 ### OSC-Parametersystem (AbstractParameter.java)
 
@@ -49,11 +62,9 @@ Threading: `oscEvent()` läuft im oscP5-Thread und ruft nur `queueMessage()` (sy
 Eingehende OSC-Adressen: `/tube/trigger` (int Stripe, 1-basiert; optional float Energie), `/net/activateNode` (int), `/net/activateStripe` (int) sowie alle in `remoteSettings.txt` gelisteten Parameteradressen.
 Ausgehend: `/net/hitNode` (int nodeId, float energy) an Port 8002.
 
-### Netz-Topologie (LedStripeNetworks.java)
+### Netz-Topologie (LedStripeNetworks.java, NodeCrossingStore.java)
 
-`data/nodeCrossings.txt`: eine Zeile pro Node, darin leerzeichengetrennte **globale LED-Indizes**, die sich physisch kreuzen. `LedInNetInfo.loadListOfNodes()` liest die Datei, baut `LedNetworkNode`-Objekte und setzt bei jeder beteiligten LED `LedInNetInfo.partOfNode`. Über dieses Feld erkennt der Transport-Effekt einen Node-Treffer in O(1).
-
-`buildClusterInfo()` in derselben Datei ist ein unfertiger Alt-Pfad für automatische Cluster-Bildung und wird nicht aufgerufen.
+`data/nodeCrossings.txt`: eine Zeile pro Node, darin leerzeichengetrennte **globale LED-Indizes**, die sich physisch kreuzen. `NodeCrossingStore.load()` liest und validiert die Datei (Validierung, Undo, Datei-I/O — bewusst ohne Processing- und Netzabhängigkeit, siehe `test/NodeCrossingStoreTest.java`). `LedInNetInfo.applyCrossings(...)` baut daraus die `LedNetworkNode`-Objekte und setzt bei jeder beteiligten LED `LedInNetInfo.partOfNode` — **in-place** auf derselben Liste/denselben `LedInNetInfo`-Objekten, weil `LedNetworkTransportEffect` und `LedNetworkNodeEffects` dieselbe Instanz halten. Über `partOfNode` erkennt der Transport-Effekt einen Node-Treffer in O(1). `applyCrossings` wird sowohl beim Start (`setup()`) als auch zur Laufzeit aus der Kalibrierung (Taste `R`, siehe unten) aufgerufen. Ältere Aufnahmen anderer Geometrien liegen als `data/nodeCrossings_16x720.txt` und `data/nodeCrossings_35C3.txt` daneben (siehe „Node-Kalibrierung"), werden aber nicht geladen.
 
 ### Impuls-Simulation (LedNetworkTransportEffect.java)
 
@@ -68,25 +79,40 @@ Bei einem Node-Treffer erhält jeder Zweig aktuell die **volle** Energie des Elt
 ### Ausgabepfade
 
 Beide Pfade sind in `setup()`/`draw()` per Kommentar umschaltbar:
-1. **ArtNet direkt** (aktiv): `ArtNetSender` unicastet an `ipPrefix + startIP++` (`2.0.0.10` aufwärts), 170 Pixel pro Universe.
+1. **ArtNet direkt** (aktiv): `ArtNetOutput` sendet unicast an `2.2.2.<octet>` für jeden Eintrag in `controllerOctets` (15 Controller, je zwei Outputs, Konvention `octet*100` als Start-Universum). Jede LED belegt 4 Byte (R, G, B, 0), macht 128 LEDs je Universum (512/4) und bei 600 LEDs je Output 5 Universen (das letzte nur zu 88 LEDs gefüllt, der Rest genullt). Nach den Universen eines Controllers folgt zwingend ein **ArtSync**-Paket (OpSync) — ohne das würde die Firmware jedes Universum sofort beim Empfang anzeigen und es käme zum Reissen/Flackern zwischen den Outputs. Der Versand läuft in einem eigenen 40-Hz-Sender-Thread mit Dreifachpufferung (`buildBuf`/`readyBuf`/`sendBuf`, siehe `ArtNetOutput.publish()`/`start()`), damit `draw()` nie auf das Netz wartet. `describeMapping()` gibt beim Start eine Zuordnungstabelle auf der Konsole aus.
 2. **Syphon/Spout** (auskommentiert): `canvas` ist ein `PGraphics` mit Breite = LEDs pro Stripe, Höhe = Anzahl Stripes; jedes Pixel ist eine LED. Wird als Textur an MadMapper geschickt (`congress19.mad` ist das zugehörige MadMapper-Projekt, Syphon-Server-Name `Lightstrument`). Windows nutzt Spout, macOS Syphon — die jeweils andere Zeile ist auskommentiert.
 
-`canvas` wird unabhängig davon immer befüllt und als Preview ins Sketch-Fenster gezeichnet.
+`canvas` wird unabhängig davon immer befüllt und als Preview ins Sketch-Fenster gezeichnet — die Vorschau zeigt allerdings volle Helligkeit, der Master-Pegel (siehe unten) wirkt nur auf die Hardware-Ausgabe.
+
+`dispose()` in `imPulse.pde` wird von Processing beim Beenden aufgerufen: veröffentlicht einen komplett schwarzen Frame, wartet kurz, damit der Sender-Thread ihn noch verschickt, und ruft danach `artNetOutput.stop()`. Ohne das blieben die Stripes im letzten gesendeten Bild stehen, weil die Empfänger-Firmware nicht von selbst blankt.
+
+### Master-Pegel als Sicherheitsanforderung
+
+`masterLevel` (`/master/level`, `RemoteControlledFloatParameter`) begrenzt in `ArtNetOutput.setMasterLevel()` jeden ausgehenden Farbwert, nach Show, Testbildern und Kalibrierung gleichermassen. Auslieferungswert **0.1**, Obergrenze **0.3** — das ist eine Hardwaregrenze, keine Geschmacksfrage: laut Handbuch der Stripes ist bei 10-m-Längen schon bei Weiss mit Spannungsabfall zu rechnen, voller Pegel (1.0) darf am Regler oder über eine verirrte OSC-Nachricht gar nicht erst erreichbar sein. `setMasterLevel()` klemmt zusätzlich jeden Wert auf 0..1 (siehe `test/ArtNetOutputTest.java`).
 
 ### Node-Kalibrierung
 
-`LedStripeFullActivationEffect` ist das Werkzeug, um `nodeCrossings.txt` von Hand aufzunehmen: Stripes/LEDs werden per Pfeiltasten durchgefahren, das Dropdown (ControlP5, Callback `dropdown()` in `imPulse.pde`) wählt den Modus aus `StripeChangeMode`. Genauer Ablauf steht im README.
+`NodeCalibration` ist das Werkzeug, um `data/nodeCrossings.txt` von Hand aufzunehmen — zwei Cursor (A/B) statt des früheren Dropdown-Menüs mit sieben Modi. Ein/Aus mit `c`/`C` (`calibrationMode` in `imPulse.pde`); solange aktiv, überschreibt `nodeCalibration.drawMe()` komplett die Mixer-Ausgabe. Die Vorschau zeigt beide Cursor-Stripes schwach eingefärbt (Cursor A grün, Cursor B rot), darüber je ein heller Punkt an der aktuellen LED-Position; ein HUD unterhalb der Vorschau (`hudText()`, Fensterhöhe extra dafür vorgesehen, siehe „Konventionen") zeigt Cursorstände, geladene/neue Node-Zahl, Schrittweite und die letzte Meldung.
 
-Zwei Punkte, die im README fehlen:
-- Der Effekt ist in `setup()` **nicht** im Mixer registriert (`mixer.addEffect(ledStripeFullActivationEffect)` ist auskommentiert) — zum Kalibrieren muss die Zeile aktiviert werden. `changeStripe()` wird in `draw()` trotzdem immer aufgerufen.
-- `s` schreibt mit `FileWriter(path, true)` — also **append**. Mehrfaches Speichern in einer Session hängt Nodes doppelt an `data/nodeCrossings.txt` an.
+Tastenbelegung (nur wirksam im Kalibriermodus, ausser `c`/`C` selbst):
+- **Pfeiltasten**: aktiven Cursor bewegen (links/rechts = LED-Index, hoch/runter = Stripe)
+- **TAB**: zwischen Cursor A und B umschalten
+- **ENTER**: aktuelles Cursorpaar als Kreuzung übernehmen. `NodeCrossingStore.add()` validiert (Bereich, identische LED, Mindestabstand bei gleichem Stripe, Duplikate) und lehnt sonst mit Begründung ab — die Ablehnung erscheint sowohl im HUD als auch **zusätzlich auf der Konsole**, falls das HUD gerade nicht lesbar ist
+- **BACKSPACE**: die zuletzt in dieser Sitzung hinzugefügte Kreuzung zurücknehmen. Schützt bewusst die beim Start **geladenen** Einträge — die sollen sich nicht versehentlich wegklicken lassen
+- **F**: Schrittweite der Pfeiltasten durchschalten (1/10/100)
+- **S**: komplette Liste nach `data/nodeCrossings.txt` schreiben (atomar über Temp-Datei + Rename, **kein** Anhängen — mehrfaches Speichern verdoppelt nichts)
+- **R**: `LedInNetInfo.applyCrossings(...)` zur Laufzeit neu anwenden, ohne Neustart des Sketches
+- **N**: geladene (magenta) und neue (cyan) Kreuzungen einblenden/ausblenden
+- **0–5**: Testbilder umschalten — `0` ist die Kalibrieransicht selbst, `1`–`5` die fünf Abnahme-Testbilder aus `TestPatterns.java` (dieselbe Logik wie `test/PatternProbe.java`, keine zweite Implementierung). Wird beim Verlassen des Kalibriermodus (`C`) automatisch auf `0` zurückgesetzt, sonst zeigt ein Wiedereintritt das zuletzt gewählte Testbild statt der Kalibrierung
+- **L**: **alle** Kreuzungen verwerfen, auch die geladenen — für den Fall, dass eine Kalibrierung aus einer anderen Geometrie stammt und `BACKSPACE` sie (bewusst) nicht anfasst. Erfordert eine ausdrückliche Bestätigung: erster Druck kündigt die Anzahl an, erst ein zweiter Druck innerhalb weniger Sekunden führt `NodeCrossingStore.clearAll()` aus
 
-`data/nodeCrossings_35C3.txt` ist die Topologie einer früheren Installation und wird nicht geladen.
+`data/nodeCrossings_16x720.txt` ist die Topologie der vorigen 16×720-Geometrie (aufgehoben als Beleg, nicht geladen), `data/nodeCrossings_35C3.txt` die der 35C3-Installation davor.
 
 ## Konventionen und Fallstricke
 
-- **Klassenname ≠ Dateiname**: Alle `.java`-Dateien liegen flach im Sketch-Ordner, Processing kompiliert sie ins Default-Package. Die meisten Klassen sind package-private, mehrere pro Datei (z. B. `StripeConfigurator` + `ArtNetSender` in `StripeHardwareHandler.java`). Beim Suchen nach einer Klasse also nicht auf den Dateinamen verlassen.
-- **Nicht initialisierte `PApplet`-Felder**: `Mixer.papplet`, `ArtNetSender.parent`, `TemplateEffect.papplet` usw. werden nie zugewiesen und sind `null`. Über sie werden ausschliesslich *statische* `PApplet`-Helfer aufgerufen (`ceil`, `constrain`, `map`, `str`) — in Java erlaubt. Ein Aufruf einer Instanzmethode über diese Felder wirft sofort eine NPE.
-- **Hardware-Konstanten** (`numStripes`, `numLedsPerStripe`, `numStripesPerController`, `ipPrefix`, `startIP`, OSC-Ports) stehen als Felder oben in `imPulse.pde` und sind installationsspezifisch — nicht ändern, ohne dass es um eine konkrete Installation geht.
+- **Klassenname ≠ Dateiname**: Alle `.java`-Dateien liegen flach im Sketch-Ordner, Processing kompiliert sie ins Default-Package. Die meisten Klassen sind package-private, mehrere pro Datei (z. B. `LedNetworkNode` + `LedInNetInfo` in `LedStripeNetworks.java`). Beim Suchen nach einer Klasse also nicht auf den Dateinamen verlassen.
+- **Nicht initialisierte `PApplet`-Felder**: `Mixer.papplet`, `TemplateEffect.papplet` usw. werden nie zugewiesen und sind `null`. Über sie werden ausschliesslich *statische* `PApplet`-Helfer aufgerufen (`ceil`, `constrain`, `map`, `str`) — in Java erlaubt. Ein Aufruf einer Instanzmethode über diese Felder wirft sofort eine NPE.
+- **Hardware-Konstanten** (`controllerOctets`, `numLedsPerStripe`, OSC-Ports, Master-Pegel-Obergrenze) stehen als Felder oben in `imPulse.pde` und sind installationsspezifisch — nicht ändern, ohne dass es um eine konkrete Installation geht.
+- **Fenstergrösse in `size()`**: Processing erlaubt dort nur Literale, keine Variablen. Die Höhe muss von Hand zur Stripe-Zahl passen — Vorschau braucht `numStripes*10` Pixel, darunter das mehrzeilige Kalibrier-HUD (siehe Kommentar direkt bei `size(...)` in `imPulse.pde`).
 - **Farbwerte 0..1** durchgängig; Werte > 1 sind erlaubt und werden erst am Output geclampt (`LedColor.clamp()` wird im Mixer bewusst nicht aufgerufen).
 - Bekannte offene Punkte stehen als To-Do-Block am Kopf von `imPulse.pde`.
