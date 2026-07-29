@@ -48,18 +48,18 @@ class NodeCrossingStore {
       message = "LED ausserhalb des Bereichs";
       return false;
     }
+    int a = globalIndex(stripeA, ledA);
+    int b = globalIndex(stripeB, ledB);
+    if (a == b) {
+      message = "Beide Cursor stehen auf derselben LED";
+      return false;
+    }
     if (stripeA == stripeB) {
       if (Math.abs(ledA - ledB) < MIN_SAME_STRIPE_DISTANCE) {
         message = "Auf demselben Stripe muessen mindestens "
             + MIN_SAME_STRIPE_DISTANCE + " LEDs dazwischen liegen";
         return false;
       }
-    }
-    int a = globalIndex(stripeA, ledA);
-    int b = globalIndex(stripeB, ledB);
-    if (a == b) {
-      message = "Beide Cursor stehen auf derselben LED";
-      return false;
     }
     TreeSet<Integer> pair = new TreeSet<Integer>();
     pair.add(a);
@@ -130,6 +130,10 @@ class NodeCrossingStore {
           if (ok && pair.size() >= 2) {
             crossings.add(pair);
           } else {
+            if (ok) {
+              System.out.println("Zeile " + lineNo + " uebersprungen: nur " + pair.size()
+                  + " Index/Indizes, mindestens 2 noetig");
+            }
             skipped++;
           }
         }
@@ -166,7 +170,6 @@ class NodeCrossingStore {
     }
     java.nio.file.Files.move(tmp.toPath(), target.toPath(),
         java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-    loadedCount = crossings.size();
     message = crossings.size() + " Nodes nach " + target.getName() + " geschrieben";
   }
 }
