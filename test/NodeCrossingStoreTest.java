@@ -1,0 +1,73 @@
+import java.io.File;
+import java.nio.file.Files;
+
+public class NodeCrossingStoreTest {
+  static final int STRIPES = 30;
+  static final int PER_STRIPE = 600;
+
+  public static void main(String[] args) throws Exception {
+    // ---- Validierung ----
+    NodeCrossingStore s = new NodeCrossingStore(STRIPES, PER_STRIPE);
+
+    Check.that("gueltiges Paar auf zwei Stripes", s.add(3, 412, 7, 158));
+    Check.eq("nach erstem Paar", 1, s.size());
+
+    Check.that("dieselbe LED wird abgewiesen", !s.add(3, 412, 3, 412));
+    Check.that("Meldung nennt den Grund", s.lastMessage().length() > 0);
+
+    Check.that("gleicher Stripe, zu nah, wird abgewiesen", !s.add(5, 100, 5, 102));
+    Check.that("gleicher Stripe, weit genug, wird angenommen", s.add(5, 100, 5, 103));
+    Check.eq("nach dem gueltigen Paar auf einem Stripe", 2, s.size());
+
+    Check.that("Duplikat wird abgewiesen", !s.add(3, 412, 7, 158));
+    Check.that("Duplikat auch in umgekehrter Reihenfolge", !s.add(7, 158, 3, 412));
+    Check.eq("Groesse nach Duplikaten unveraendert", 2, s.size());
+
+    // ---- Undo ----
+    Check.that("Undo nimmt das letzte Paar zurueck", s.undo());
+    Check.eq("nach Undo", 1, s.size());
+    Check.that("Undo bis zum Anfang", s.undo());
+    Check.eq("Liste leer", 0, s.size());
+    Check.that("Undo auf leerer Liste tut nichts", !s.undo());
+
+    // ---- Datei-Rundlauf ----
+    File dir = Files.createTempDirectory("crossings").toFile();
+    File file = new File(dir, "nodeCrossings.txt");
+
+    NodeCrossingStore w = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    w.add(0, 10, 1, 20);
+    w.add(2, 30, 3, 40);
+    w.save(file.getAbsolutePath());
+
+    NodeCrossingStore r = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    r.load(file.getAbsolutePath());
+    Check.eq("geladene Anzahl", 2, r.size());
+    Check.eq("als geladen gezaehlt", 2, r.loadedCount());
+    Check.eq("keine neuen in dieser Sitzung", 0, r.sessionCount());
+
+    // globale Indizes: Stripe 0 LED 10 -> 10, Stripe 1 LED 20 -> 620
+    Check.that("erstes Paar enthaelt 10", r.crossings().get(0).contains(10));
+    Check.that("erstes Paar enthaelt 620", r.crossings().get(0).contains(620));
+
+    // Undo darf geladene Eintraege nicht anfassen
+    Check.that("Undo greift nicht auf geladene Eintraege", !r.undo());
+    Check.eq("geladene Eintraege unveraendert", 2, r.size());
+
+    // Zweimal speichern verdoppelt nichts
+    r.add(4, 50, 5, 60);
+    r.save(file.getAbsolutePath());
+    r.save(file.getAbsolutePath());
+    NodeCrossingStore r2 = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    r2.load(file.getAbsolutePath());
+    Check.eq("nach zweimal Speichern", 3, r2.size());
+
+    // ---- fehlerhafte Datei ----
+    File bad = new File(dir, "kaputt.txt");
+    Files.write(bad.toPath(), "10 620\n-1 5\n99999999 3\nnichts\n30 640\n".getBytes("UTF-8"));
+    NodeCrossingStore r3 = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    r3.load(bad.getAbsolutePath());
+    Check.eq("nur die zwei gueltigen Zeilen", 2, r3.size());
+
+    System.exit(Check.report("NodeCrossingStoreTest"));
+  }
+}
