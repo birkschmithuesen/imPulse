@@ -125,6 +125,29 @@ public class NodeCrossingStoreTest {
     u2.load(sessionFile.getAbsolutePath());
     Check.eq("erneutes Speichern schreibt nur die zwei verbliebenen Eintraege", 2, u2.size());
 
+    // ---- clearAll() verwirft auch geladene Eintraege ----
+    File clearFile = new File(dir, "clearall.txt");
+    NodeCrossingStore baseClear = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    baseClear.add(0, 10, 1, 20);
+    baseClear.add(2, 30, 3, 40);
+    baseClear.save(clearFile.getAbsolutePath());
+
+    NodeCrossingStore clearStore = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    clearStore.load(clearFile.getAbsolutePath());
+    Check.eq("vor clearAll: geladene Eintraege", 2, clearStore.loadedCount());
+    clearStore.add(4, 50, 5, 60);
+    Check.eq("vor clearAll: geladen + neu", 3, clearStore.size());
+
+    clearStore.clearAll();
+    Check.eq("nach clearAll: Liste leer", 0, clearStore.size());
+    Check.eq("nach clearAll: loadedCount ist 0", 0, clearStore.loadedCount());
+    Check.that("clearAll meldet etwas", clearStore.lastMessage().length() > 0);
+
+    clearStore.save(clearFile.getAbsolutePath());
+    NodeCrossingStore afterClear = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    afterClear.load(clearFile.getAbsolutePath());
+    Check.eq("nach save() im Anschluss an clearAll: Datei ist leer", 0, afterClear.size());
+
     System.exit(Check.report("NodeCrossingStoreTest"));
   }
 }

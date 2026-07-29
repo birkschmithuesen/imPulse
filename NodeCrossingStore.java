@@ -87,6 +87,17 @@ class NodeCrossingStore {
     return true;
   }
 
+  // Verwirft die gesamte Liste einschliesslich der beim Start geladenen
+  // Kreuzungen - anders als undo(), das geladene Eintraege bewusst schuetzt.
+  // Fuer den Fall, dass eine Kalibrierung aus einer anderen Geometrie stammt
+  // und komplett neu aufgenommen werden muss.
+  void clearAll() {
+    int n = crossings.size();
+    crossings.clear();
+    loadedCount = 0;
+    message = n + " Kreuzungen verworfen (auch geladene)";
+  }
+
   // Liest die Datei. Fehlerhafte Zeilen werden gemeldet und uebersprungen,
   // nicht als Absturz beim naechsten Start weitergereicht.
   void load(String path) {

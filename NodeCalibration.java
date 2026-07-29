@@ -33,6 +33,14 @@ public class NodeCalibration implements runnableLedEffect {
   private long lastRepeat = 0;
   private String message = "";
 
+  // Taste zum vollstaendigen Verwerfen aller Kreuzungen, auch der geladenen -
+  // fuer den Fall, dass die Kalibrierung aus einer anderen Geometrie stammt.
+  // Erfordert eine ausdrueckliche Bestaetigung: erster Druck kuendigt an,
+  // erst ein zweiter innerhalb von CLEAR_ALL_CONFIRM_MILLIS fuehrt aus.
+  private static final long CLEAR_ALL_CONFIRM_MILLIS = 5000;
+  private boolean clearAllPending = false;
+  private long clearAllArmedAt = 0;
+
   // Testbilder fuer die Abnahme am Aufbau. 0 = Kalibrierung, 1..5 siehe
   // Abschnitt 6 der Spezifikation. Alle laufen mit dem Master-Pegel des
   // Senders, die Stripes vertragen keine volle Helligkeit. Die eigentliche
@@ -132,20 +140,46 @@ public class NodeCalibration implements runnableLedEffect {
 
   // Rueckgabe true, wenn die Taste verarbeitet wurde.
   boolean handleCommand(char key) {
+    // eine angekuendigte Verwerfen-Bestaetigung verfaellt stillschweigend,
+    // sobald irgendeine andere Taste dazwischenkommt
+    if (clearAllPending && key != 'l' && key != 'L') {
+      clearAllPending = false;
+    }
     if (key == '\t') {
       active = 1 - active;
       message = "Cursor " + (active == 0 ? "A" : "B") + " aktiv";
       return true;
     }
     if (key == '\n' || key == '\r') {
-      store.add(cursorStripe[0], cursorLed[0], cursorStripe[1], cursorLed[1]);
+      boolean accepted = store.add(cursorStripe[0], cursorLed[0], cursorStripe[1], cursorLed[1]);
       message = store.lastMessage();
+      if (!accepted) {
+        // die HUD-Zeile kann vor Ort unlesbar sein (siehe Fenstergroesse) -
+        // die Ablehnung deshalb zusaetzlich auf der Konsole ausgeben
+        System.out.println("ENTER abgelehnt: " + message);
+      }
       active = 0;
       return true;
     }
     if (key == 8 || key == 127) {   // Backspace bzw. Delete
       store.undo();
       message = store.lastMessage();
+      return true;
+    }
+    if (key == 'l' || key == 'L') {
+      long now = System.currentTimeMillis();
+      if (clearAllPending && now - clearAllArmedAt <= CLEAR_ALL_CONFIRM_MILLIS) {
+        store.clearAll();
+        message = store.lastMessage();
+        System.out.println(message);
+        clearAllPending = false;
+      } else {
+        clearAllPending = true;
+        clearAllArmedAt = now;
+        message = "Achtung: " + store.size() + " Kreuzungen werden verworfen (auch geladene) - "
+            + "L erneut druecken zum Bestaetigen";
+        System.out.println(message);
+      }
       return true;
     }
     if (key == 'f' || key == 'F') {
@@ -184,7 +218,7 @@ public class NodeCalibration implements runnableLedEffect {
         "Stripe A [%2d] LED %3d%s    Stripe B [%2d] LED %3d%s    "
         + "Nodes: %d geladen + %d neu    Schritt: %d%n%s%n"
         + "TAB Cursor  ENTER speichern  BACKSPACE zurueck  F Schritt  "
-        + "S schreiben  R uebernehmen  N Nodes  0-5 Testbild  C beenden",
+        + "S schreiben  R uebernehmen  N Nodes  0-5 Testbild  L alles verwerfen  C beenden",
         cursorStripe[0], cursorLed[0], active == 0 ? " <-" : "  ",
         cursorStripe[1], cursorLed[1], active == 1 ? " <-" : "  ",
         store.loadedCount(), store.sessionCount(), step(), message);

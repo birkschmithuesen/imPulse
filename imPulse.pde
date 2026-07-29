@@ -67,7 +67,16 @@ boolean calibrationMode = false;
 
 
 void setup() {
-  size(1400, 300, P3D);
+  // Fensterhoehe: die Vorschau braucht numStripes*10 Pixel (image() weiter
+  // unten skaliert genau darauf), bei 30 Stripes also 300px. Darunter zeigt
+  // das HUD im Kalibriermodus drei Textzeilen (Cursorstaende/Zaehler,
+  // Meldung, Tastenbelegung) beginnend bei y=numStripes*10+20 - dafuer
+  // braucht es nochmal gut 100px Reserve. 450 ist bei 30 Stripes sicher
+  // ausreichend (300 Vorschau + 20 Abstand + 3 Zeilen + Rand). size()
+  // erlaubt hier keine Variablen, deshalb ein Literal - bei einer anderen
+  // Stripe-Zahl muss dieser Wert von Hand neu aus derselben Rechnung
+  // (numStripes*10 + ca. 150) bestimmt werden.
+  size(1400, 450, P3D);
   frameRate(40);
   //opens the port to receive OSC
   oscP5 = new OscP5(this, 8001);
