@@ -17,8 +17,6 @@ import codeanticode.syphon.*; //use this on MacOS
 // To Do List
 //////////////////////////////////////////////////////////////////////////
 /*
-- define crossings between two led stripes (nodes) manually 
- => in LedStripeNetworks.java Line 60 function buildClusterInfo
  - solve problem when traveling speed of impulses is higher then framerate (when impulses jumps over an led from one frame to the next, the led is not light up)
  */
 
@@ -50,6 +48,7 @@ LedInStripeInfo[] stripeInfos;
 LedInNetInfo[] ledNetInfo;
 // create an array with all the nodes/crossings
 ArrayList <LedNetworkNode> listOfNodes;
+NodeCrossingStore crossingStore;
 
 // the stripe configuration
 int numLedsPerStripe = 600;                                   // 2 x 5 m je Output
@@ -108,7 +107,11 @@ void setup() {
   ledColors = LedColor.createColorArray(numLeds);        // build a color buffer with the length of the position file
   stripeInfos = stripeConfiguration.builtStripeInfo();
   ledNetInfo = LedInNetInfo.buildNetInfo(numStripes, numLedsPerStripe); //create an Array with data for each LED if they are part of a node
-  listOfNodes = LedInNetInfo.loadListOfNodes(dataPath("nodeCrossings.txt"), ledNetInfo);  // all sets of Leds that are on different stripes but close to each other
+  crossingStore = new NodeCrossingStore(numStripes, numLedsPerStripe);
+  crossingStore.load(dataPath("nodeCrossings.txt"));
+  System.out.println(crossingStore.lastMessage());
+  listOfNodes = new ArrayList<LedNetworkNode>();
+  LedInNetInfo.applyCrossings(crossingStore.crossings(), ledNetInfo, listOfNodes);  // all sets of Leds that are on different stripes but close to each other
 
   //initialize visual effects
   ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, oscP5, oscOutput);

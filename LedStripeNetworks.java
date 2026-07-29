@@ -1,8 +1,5 @@
 import processing.core.*;
 import java.util.*;
-import java.io.BufferedReader;
-import java.io.FileReader;
-import java.io.IOException;
 
 //represents a connection between multiple stripes
 class LedNetworkNode {
@@ -49,7 +46,7 @@ class LedInNetInfo {
 	public int indexInStripe;
 	public int stripeLength;
 	public LedNetworkNode partOfNode; // is this led part of a connecting Node? which one? (set by
-										// StripeCrossInfo.buildClusterInfosetClusterInfo)
+										// LedInNetInfo.applyCrossings)
 
 	public static LedInNetInfo[] buildNetInfo(int numStripes, int numLedsPerStripe) {
 		LedInNetInfo[] result = new LedInNetInfo[numStripes * numLedsPerStripe];
@@ -63,174 +60,33 @@ class LedInNetInfo {
 		return result;
 	}
 
-	public static ArrayList<LedNetworkNode> loadListOfNodes(String nodeCrossingsFilePath, LedInNetInfo[] ledNetInfos) {
-		System.out.println("Loading list of nodes from " + nodeCrossingsFilePath);
-		int nLeds = ledNetInfos.length;
-		// each led can be member of one connectedcluster that contains all leds that
-		// are (also indirectly) connected by distances<thresh
-		// clusters are represented by sets of the ledIndices
-		ArrayList<TreeSet<Integer>> clusters = new ArrayList<TreeSet<Integer>>(); // here remember all the clusters we
-																					// have built
-		ArrayList<TreeSet<Integer>> clusterOfLed = new ArrayList<TreeSet<Integer>>(nLeds); // here we remember which
-																							// cluster a led is part of
-
-		while (clusterOfLed.size() < nLeds) {
-			clusterOfLed.add(null);
+	// Baut die Node-Struktur aus einer Liste von Kreuzungen neu auf. Wird beim
+	// Start und beim Neuladen waehrend der Kalibrierung benutzt.
+	//
+	// Die Zielliste wird in-place geaendert, weil LedNetworkTransportEffect und
+	// LedNetworkNodeEffects dieselbe Instanz halten und die Aenderung sonst nicht
+	// mitbekaemen.
+	public static void applyCrossings(java.util.List<TreeSet<Integer>> crossings,
+			LedInNetInfo[] ledNetInfos, ArrayList<LedNetworkNode> target) {
+		// alte Zuordnung vollstaendig loeschen, sonst bleiben LEDs an
+		// zurueckgenommenen Nodes haengen
+		for (int i = 0; i < ledNetInfos.length; i++) {
+			ledNetInfos[i].partOfNode = null;
 		}
+		target.clear();
 
-		// read the node crossing from file
-		BufferedReader reader;
-		try {
-			reader = new BufferedReader(new FileReader(nodeCrossingsFilePath));
-			String line = reader.readLine();
-			while (line != null) {
-				System.out.println(line);
-				TreeSet<Integer> newCluster = new TreeSet<Integer>();
-				for (String curLedIndex : line.split(" ")) {
-					Integer ledIndex = Integer.parseInt(curLedIndex);
-					newCluster.add(ledIndex);
-					clusterOfLed.set(ledIndex, newCluster);
-				}
-				clusters.add(newCluster);
-				// read next line
-				line = reader.readLine();
-			}
-			reader.close();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-
-		///////////////
-		// now go through all clusters
-		ArrayList<LedNetworkNode> nodes = new ArrayList<LedNetworkNode>();
-		int curNodeId = 0;
-
-		for (TreeSet<Integer> curCluster : clusters) {
-			nodes.add(new LedNetworkNode(curNodeId, curCluster));
-		}
-
-		// set node info for all the leds:
-
-		for (LedNetworkNode curNode : nodes) {
-			curNode.id = curNodeId; // renumber after sorting
-			curNodeId++;
-			for (Integer thisLedIdx : curNode.ledIndices) {
-				ledNetInfos[thisLedIdx].partOfNode = curNode;
-			}
-		}
-
-		return nodes;
-
-	}
-
-	public static ArrayList<LedNetworkNode> buildClusterInfo(LedInNetInfo[] ledNetInfos) {
-		////////////////////////////////////////////////////////////////////////////
-		// ToDo: manual go through the leds to define the led-number of the crossing
-		////////////////////////////////////////////////////////////////////////////
-		int firstIndex = 1;
-		int secondIndex = 100;
-
-		int nLeds = ledNetInfos.length;
-		// each led can be member of one connectedcluster that contains all leds that
-		// are (also indirectly) connected by distances<thresh
-		// clusters are represented by sets of the ledIndices
-		ArrayList<TreeSet<Integer>> clusters = new ArrayList<TreeSet<Integer>>(); // here remember all the clusters we
-																					// have built
-		ArrayList<TreeSet<Integer>> clusterOfLed = new ArrayList<TreeSet<Integer>>(nLeds); // here we remember which
-																							// cluster a led is part of
-
-		while (clusterOfLed.size() < nLeds) {
-			clusterOfLed.add(null);
-		}
-
-		// create cluster for first led if it does not exist yet
-		if (clusterOfLed.get(firstIndex) == null) {
-			TreeSet<Integer> newCluster = new TreeSet<Integer>();
-			newCluster.add(firstIndex);
-			clusters.add(newCluster);
-			clusterOfLed.set(firstIndex, newCluster);
-		}
-		// add second led to cluster of firstLed
-		clusterOfLed.get(firstIndex).add(secondIndex);
-		// if the second led is not part of a cluster yet, make it part of the cluster
-		// of the first one
-		if (clusterOfLed.get(secondIndex) == null) {
-			clusterOfLed.set(secondIndex, clusterOfLed.get(firstIndex));
-		}
-
-		// merge clusters in the local neighborhood
-		int indexInStripeA = ledNetInfos[firstIndex].indexInStripe;
-		int indexInStripeB = ledNetInfos[secondIndex].indexInStripe;
-		int stripeLengthA = ledNetInfos[firstIndex].stripeLength;
-		int stripeLengthB = ledNetInfos[secondIndex].stripeLength;
-		// always check if the shifted pos is stilll inside the stripe
-		for (int offA = -1; offA <= 1; offA++) {
-			int relPosA = indexInStripeA + offA;
-			if (relPosA > 0 && relPosA < stripeLengthA) {
-				for (int offB = -1; offB <= 1; offB++) {
-					int relPosB = indexInStripeB + offB;
-					if (relPosB > 0 && relPosB < stripeLengthB) {
-						int absPosA = firstIndex + offA;
-						int absPosB = secondIndex + offB;
-						if (clusterOfLed.get(absPosA) != null && clusterOfLed.get(absPosB) != null
-								&& clusterOfLed.get(absPosA) != clusterOfLed.get(absPosB)) {
-							TreeSet<Integer> firstCluster = clusterOfLed.get(absPosA);
-							TreeSet<Integer> secondCluster = clusterOfLed.get(absPosB);
-							mergeClusters(firstCluster, secondCluster, clusters, clusterOfLed);
-						}
-					}
+		int nodeId = 0;
+		for (TreeSet<Integer> cluster : crossings) {
+			LedNetworkNode node = new LedNetworkNode(nodeId, new TreeSet<Integer>(cluster));
+			target.add(node);
+			for (Integer ledIdx : node.ledIndices) {
+				if (ledIdx >= 0 && ledIdx < ledNetInfos.length) {
+					ledNetInfos[ledIdx].partOfNode = node;
 				}
 			}
+			nodeId++;
 		}
-
-		// end merge
-
-		System.out.println("found" + clusters.size() + "clusters");
-
-		// add the center plus surrounding of the crossing
-		ArrayList<LedNetworkNode> nodes = new ArrayList<LedNetworkNode>();
-		int curNodeId = 0;
-
-		for (TreeSet<Integer> curCluster : clusters) {
-			TreeSet<Integer> curatedCluster = new TreeSet<Integer>();
-			/*
-			 * // calculate cluster center PVector center=new PVector(); for (Integer ledIdx
-			 * : curCluster) { center.add(ledPositions[ledIdx]); }
-			 * 
-			 * center.mult(1.0f/(float)curCluster.size());
-			 */
-			nodes.add(new LedNetworkNode(curNodeId, curatedCluster));
-
-			///////////////////////////// prepare output
-			// package clusters that were found into a nice wrapper class
-			// nodes.sort((n1, n2) -> (int)(10000*(n1.position.x-n2.position.x)));
-
-			// set node info for all the leds:
-
-			for (LedNetworkNode curNode : nodes) {
-				curNode.id = curNodeId; // renumber after sorting
-				curNodeId++;
-				for (Integer thisLedIdx : curNode.ledIndices) {
-					ledNetInfos[thisLedIdx].partOfNode = curNode;
-				}
-			}
-		}
-		System.out.println(nodes);
-		return nodes;
-	}
-
-	// merge two clusters
-	static void mergeClusters(TreeSet<Integer> firstCluster, TreeSet<Integer> secondCluster,
-			ArrayList<TreeSet<Integer>> clusters, ArrayList<TreeSet<Integer>> clusterOfLed) {
-		// put all leds of second cluster into the first
-		firstCluster.addAll(secondCluster);
-		// make all the leds from the second cluster point to the first
-
-		for (Integer indexToUpdate : secondCluster) {
-			clusterOfLed.set(indexToUpdate, firstCluster);
-		}
-		// remove obsolete second cluster from collection
-		clusters.remove(secondCluster);
+		System.out.println(target.size() + " Nodes uebernommen");
 	}
 
 	static void paintNodes(ArrayList<LedNetworkNode> nodes, LedColor[] ledColors) {
