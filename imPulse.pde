@@ -8,7 +8,6 @@ import java.util.List;
 import netP5.*;
 import oscP5.*;
 import controlP5.*;
-import ch.bildspur.artnet.*;
 
 //import spout.*; //use this on Windows
 import codeanticode.syphon.*; //use this on MacOS
@@ -33,11 +32,13 @@ PGraphics canvas;
 //Spout server; //use this on Windows
 SyphonServer server; //use this on MacOS
 
-// ip -configuration of Art-Net-Interface
-String ipPrefix = "2.0.0."; // first three numbers of IP adreess of
-// controlles
-int startIP = 10; // last number of first controller IP
-ArtNetSender artNetSender;
+// Pixel2LED-Controller: nur die letzten Oktette. IP ist 2.2.2.<oktett>,
+// das Start-Universum nach Konvention <oktett>*100. Die Reihenfolge im
+// Array bestimmt die Stripe-Nummerierung: Controller k bedient die
+// Stripes 2k (Output 1) und 2k+1 (Output 2).
+int[] controllerOctets = { 2, 4, 6, 7, 8, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21 };
+ArtNetOutput artNetOutput;
+RemoteControlledFloatParameter masterLevel;
 
 OscP5 oscP5;
 NetAddress oscOutput;
@@ -51,9 +52,8 @@ LedInNetInfo[] ledNetInfo;
 ArrayList <LedNetworkNode> listOfNodes;
 
 // the stripe configuration
-int numStripes = 16;
-int numLedsPerStripe = 720;
-int numStripesPerController = 16; //just important when we send the ArtNet data directly out
+int numLedsPerStripe = 600;                                   // 2 x 5 m je Output
+int numStripes = controllerOctets.length * ArtNetOutput.OUTPUTS_PER_CONTROLLER;
 int numLeds = numStripes * numLedsPerStripe;
 StripeConfigurator stripeConfiguration;
 
@@ -81,14 +81,14 @@ ControlP5 cp5;
 
 void setup() {
   size(1400, 300, P3D);
-  frameRate(44);
+  frameRate(40);
   //opens the port to receive OSC
   oscP5 = new OscP5(this, 8001);
   //when a node is activated an osc impuls is send to Ableton Live
   oscOutput = new NetAddress("127.0.0.1", 8002);//("192.168.88.253", 8002);
 
   // create stripe information
-  stripeConfiguration = new StripeConfigurator(numStripes, numLedsPerStripe, numStripesPerController); // used to generate per led info.
+  stripeConfiguration = new StripeConfigurator(numStripes, numLedsPerStripe); // used to generate per led info.
 
 
   // Create Syhpon/Spout server to send frames out directly shared on gpu.
@@ -96,7 +96,10 @@ void setup() {
   //server.createSender("Lightstrument"); //use this on Windows
   //server = new SyphonServer(this, "Lightstrument"); //use this on MacOs
 
-  artNetSender = new ArtNetSender(stripeConfiguration, ipPrefix, startIP); // used to send data to leds
+  artNetOutput = new ArtNetOutput(controllerOctets, numLedsPerStripe); // used to send data to leds
+  System.out.print(artNetOutput.describeMapping());
+  masterLevel = new RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 1f);
+  artNetOutput.start();
 
   // use the canvas to create the visuals to send over syphon
   // the size depends on the stripe configuration
@@ -154,7 +157,8 @@ void draw() {
   //server.sendTexture(canvas); //use this on Windows
   //server.sendImage(canvas); //use this on MacOS
   //send data directly to ArtNet Interface withoput MadMapper in between
-  artNetSender.sendToLeds(ledColors);
+  artNetOutput.setMasterLevel(masterLevel.getValue());
+  artNetOutput.publish(ledColors);
   ledStripeFullActivationEffect.changeStripe(); //this effect is need for node calibration
 
 }

@@ -238,7 +238,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       if (useRemoteCol == 1) {
         bufferLedColors[curLedIndex].set(spotR*fade*curActivation.energy, spotG*fade*curActivation.energy, spotB*fade*curActivation.energy);
       } else {
-        LedColor col = stripeColorMapping[ledNetInfo[curLedIndex].stripeIndex]; //color lookup made for 8 outputs
+        // Tabelle hat acht Eintraege, es gibt aber 30 Stripes
+        LedColor col = stripeColorMapping[ledNetInfo[curLedIndex].stripeIndex % stripeColorMapping.length];
 
       bufferLedColors[curLedIndex].set(col.x*fade, col.y*fade, col.z*fade);
       }
