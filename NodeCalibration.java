@@ -33,6 +33,77 @@ public class NodeCalibration implements runnableLedEffect {
   private long lastRepeat = 0;
   private String message = "";
 
+  // Testbilder fuer die Abnahme am Aufbau. 0 = Kalibrierung, 1..5 siehe
+  // Abschnitt 6 der Spezifikation. Alle laufen mit dem Master-Pegel des
+  // Senders, die Stripes vertragen keine volle Helligkeit.
+  private int pattern = 0;
+  private int patternStripe = 0;
+  private int patternLed = 0;
+  private long patternLastStep = 0;
+
+  void setPattern(int p) {
+    pattern = p;
+    patternStripe = 0;
+    patternLed = 0;
+    message = pattern == 0 ? "Kalibrierung" : "Testbild " + pattern;
+  }
+
+  int pattern() { return pattern; }
+
+  private boolean drawPattern() {
+    if (pattern == 0) return false;
+    LedColor.set(buffer, new LedColor(0, 0, 0));
+    long now = System.currentTimeMillis();
+
+    if (pattern == 1) {
+      // ein Stripe nach dem anderen, eine Sekunde je Stripe
+      if (now - patternLastStep > 1000) {
+        patternLastStep = now;
+        patternStripe = (patternStripe + 1) % numStripes;
+      }
+      dimStripe(patternStripe, 1f, 1f, 1f);
+      message = "Testbild 1 - Stripe " + patternStripe;
+
+    } else if (pattern == 2) {
+      // Lauflicht ueber einen Stripe, deckt die Universumsgrenzen ab
+      if (now - patternLastStep > 20) {
+        patternLastStep = now;
+        patternLed = (patternLed + 1) % numLedsPerStripe;
+      }
+      int base = cursorStripe[0] * numLedsPerStripe;
+      for (int i = 0; i < 4 && patternLed + i < numLedsPerStripe; i++) {
+        buffer[base + patternLed + i].set(new LedColor(1, 1, 1));
+      }
+      message = "Testbild 2 - Stripe " + cursorStripe[0] + " LED " + patternLed
+          + "  (Grenzen bei 128 256 384 512)";
+
+    } else if (pattern == 3) {
+      // nur die letzten vier LEDs jedes Stripes - leuchtet dabei der Anfang
+      // des naechsten Outputs, schlagen die Reserve-Slots durch
+      for (int s = 0; s < numStripes; s++) {
+        int base = s * numLedsPerStripe;
+        for (int i = numLedsPerStripe - 4; i < numLedsPerStripe; i++) {
+          buffer[base + i].set(new LedColor(1, 1, 1));
+        }
+      }
+      message = "Testbild 3 - nur LED " + (numLedsPerStripe - 4) + ".."
+          + (numLedsPerStripe - 1) + ". Leuchtet sonst etwas, ist es Reserve-Durchschlag";
+
+    } else if (pattern == 4) {
+      // Rot, Gruen, Blau im Wechsel, je zwei Sekunden
+      int phase = (int) ((now / 2000) % 3);
+      LedColor c = phase == 0 ? new LedColor(1, 0, 0)
+                 : phase == 1 ? new LedColor(0, 1, 0) : new LedColor(0, 0, 1);
+      LedColor.set(buffer, c);
+      message = "Testbild 4 - " + (phase == 0 ? "Rot" : phase == 1 ? "Gruen" : "Blau");
+
+    } else if (pattern == 5) {
+      LedColor.set(buffer, new LedColor(1, 1, 1));
+      message = "Testbild 5 - flaechig weiss";
+    }
+    return true;
+  }
+
   NodeCalibration(NodeCrossingStore store, LedInNetInfo[] ledNetInfo,
                   ArrayList<LedNetworkNode> nodes, int numStripes,
                   int numLedsPerStripe, String filePath) {
@@ -136,19 +207,28 @@ public class NodeCalibration implements runnableLedEffect {
       message = showNodes ? "Nodes eingeblendet" : "Nodes ausgeblendet";
       return true;
     }
+    if (key >= '0' && key <= '5') {
+      setPattern(key - '0');
+      return true;
+    }
     return false;
   }
 
   String hudText() {
     return String.format(
         "Stripe A [%2d] LED %3d%s    Stripe B [%2d] LED %3d%s    "
-        + "Nodes: %d geladen + %d neu    Schritt: %d%n%s",
+        + "Nodes: %d geladen + %d neu    Schritt: %d%n%s%n"
+        + "TAB Cursor  ENTER speichern  BACKSPACE zurueck  F Schritt  "
+        + "S schreiben  R uebernehmen  N Nodes  0-5 Testbild  C beenden",
         cursorStripe[0], cursorLed[0], active == 0 ? " <-" : "  ",
         cursorStripe[1], cursorLed[1], active == 1 ? " <-" : "  ",
         store.loadedCount(), store.sessionCount(), step(), message);
   }
 
   public LedColor[] drawMe() {
+    if (drawPattern()) {
+      return buffer;
+    }
     LedColor.set(buffer, new LedColor(0, 0, 0));
 
     // beide Cursor-Stripes schwach beleuchten, damit sie im Netz auffindbar sind
