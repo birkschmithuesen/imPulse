@@ -28,6 +28,9 @@ class ArtNetOutput {
   final int numLedsPerStripe;
   final int universesPerOutput;
 
+  private float masterLevel = 0.1f;   // Sicherheitsventil, siehe setMasterLevel
+  private int sequence = 1;
+
   ArtNetOutput(int[] octets, int numLedsPerStripe) {
     this.octets = octets;
     this.numLedsPerStripe = numLedsPerStripe;
@@ -76,5 +79,121 @@ class ArtNetOutput {
       }
     }
     return sb.toString();
+  }
+
+  // Ein fertig gebauter Frame. Ziel, Bytes und Nutzlaenge je Paket.
+  static class Frame {
+    final String[] targets;
+    final byte[][] data;
+    final int[] lengths;
+
+    Frame(String[] targets, byte[][] data, int[] lengths) {
+      this.targets = targets;
+      this.data = data;
+      this.lengths = lengths;
+    }
+  }
+
+  // Legt die Puffer an und traegt Ziele und Laengen ein. Die aendern sich
+  // waehrend des Betriebs nicht, nur die Nutzdaten.
+  Frame newFrame() {
+    int n = packetsPerFrame();
+    String[] targets = new String[n];
+    byte[][] data = new byte[n][];
+    int[] lengths = new int[n];
+    int p = 0;
+    for (int k = 0; k < octets.length; k++) {
+      for (int j = 0; j < OUTPUTS_PER_CONTROLLER; j++) {
+        for (int u = 0; u < universesPerOutput; u++) {
+          targets[p] = targetIp(k);
+          data[p] = new byte[DMX_PACKET_LEN];
+          lengths[p] = DMX_PACKET_LEN;
+          p++;
+        }
+      }
+      targets[p] = targetIp(k);
+      data[p] = new byte[SYNC_PACKET_LEN];
+      lengths[p] = SYNC_PACKET_LEN;
+      writeSyncHeader(data[p]);
+      p++;
+    }
+    return new Frame(targets, data, lengths);
+  }
+
+  // Der Pegel begrenzt die Ausgabe hinter allem - Show, Testbilder,
+  // Kalibrierung. Die Stripes ziehen bei voller Helligkeit mehr Strom, als
+  // die Einspeisung hergibt.
+  void setMasterLevel(float level) {
+    if (level < 0f) level = 0f;
+    if (level > 1f) level = 1f;
+    masterLevel = level;
+  }
+
+  float getMasterLevel() {
+    return masterLevel;
+  }
+
+  void buildFrame(LedColor[] ledColors, Frame frame) {
+    int p = 0;
+    for (int k = 0; k < octets.length; k++) {
+      for (int j = 0; j < OUTPUTS_PER_CONTROLLER; j++) {
+        int stripeBase = (k * OUTPUTS_PER_CONTROLLER + j) * numLedsPerStripe;
+        for (int u = 0; u < universesPerOutput; u++) {
+          byte[] buf = frame.data[p];
+          writeDmxHeader(buf, sequence, portAddress(k, j, u));
+          int firstInStripe = u * LEDS_PER_UNIVERSE;
+          for (int i = 0; i < LEDS_PER_UNIVERSE; i++) {
+            int inStripe = firstInStripe + i;
+            int o = DMX_HEADER_LEN + i * CHANNELS_PER_LED;
+            if (inStripe < numLedsPerStripe) {
+              LedColor c = ledColors[stripeBase + inStripe];
+              buf[o + R_OFFSET] = level(c.x);
+              buf[o + G_OFFSET] = level(c.y);
+              buf[o + B_OFFSET] = level(c.z);
+            } else {
+              buf[o + 0] = 0;
+              buf[o + 1] = 0;
+              buf[o + 2] = 0;
+            }
+            buf[o + 3] = 0;
+          }
+          p++;
+        }
+      }
+      p++;   // Sync-Paket, der Kopf steht schon aus newFrame()
+    }
+    sequence = (sequence % 255) + 1;
+  }
+
+  private byte level(float value) {
+    int b = Math.round(value * masterLevel * 255f);
+    if (b < 0) b = 0;
+    if (b > 255) b = 255;
+    return (byte) b;
+  }
+
+  private static void writeArtNetId(byte[] p) {
+    p[0] = 'A'; p[1] = 'r'; p[2] = 't'; p[3] = '-';
+    p[4] = 'N'; p[5] = 'e'; p[6] = 't'; p[7] = 0;
+  }
+
+  // Alle Pakete eines Frames tragen dieselbe Sequenznummer. Die Firmware
+  // wertet sie nicht aus.
+  private static void writeDmxHeader(byte[] p, int sequence, int portAddress) {
+    writeArtNetId(p);
+    p[8] = 0x00; p[9] = 0x50;            // OpDmx 0x5000, little-endian
+    p[10] = 0; p[11] = 14;               // ProtVer
+    p[12] = (byte) sequence;
+    p[13] = 0;                           // Physical
+    p[14] = (byte) (portAddress & 0xFF);          // SubUni
+    p[15] = (byte) ((portAddress >> 8) & 0x7F);   // Net
+    p[16] = 0x02; p[17] = 0x00;          // Laenge 512, big-endian
+  }
+
+  private static void writeSyncHeader(byte[] p) {
+    writeArtNetId(p);
+    p[8] = 0x00; p[9] = 0x52;            // OpSync 0x5200, little-endian
+    p[10] = 0; p[11] = 14;
+    p[12] = 0; p[13] = 0;                // Aux1, Aux2
   }
 }

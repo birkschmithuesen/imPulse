@@ -29,6 +29,88 @@ public class ArtNetOutputTest {
       Check.that("Tabelle nennt Stripe " + s, table.contains("Stripe " + s + " "));
     }
 
+    // ---- Test 1a: Paketbau byte-genau ----
+    // Master-Pegel auf 1, sonst wird alles mit 0.1 skaliert und die
+    // erwarteten Bytes stimmen nicht.
+    out.setMasterLevel(1f);
+
+    int numLeds = out.numStripes() * LEDS_PER_STRIPE;
+    LedColor[] colors = LedColor.createColorArray(numLeds);
+    // Muster: jede LED traegt ihren globalen Index, aufgeteilt auf drei Kanaele.
+    for (int i = 0; i < numLeds; i++) {
+      colors[i].x = ((i) % 251) / 255f;
+      colors[i].y = ((i / 251) % 241) / 255f;
+      colors[i].z = ((i / 60541) % 239) / 255f;
+    }
+
+    ArtNetOutput.Frame frame = out.newFrame();
+    out.buildFrame(colors, frame);
+
+    Check.eq("Paketanzahl im Frame", 165, frame.data.length);
+
+    int p = 0;
+    for (int k = 0; k < OCTETS.length; k++) {
+      for (int j = 0; j < 2; j++) {
+        int stripe = k * 2 + j;
+        for (int u = 0; u < 5; u++) {
+          byte[] buf = frame.data[p];
+          String where = "Controller " + k + " Output " + j + " Universum " + u;
+
+          Check.eq(where + " Laenge", 530, frame.lengths[p]);
+          Check.eq(where + " Ziel", out.targetIp(k), frame.targets[p]);
+
+          Check.that(where + " Kennung", buf[0] == 'A' && buf[1] == 'r' && buf[2] == 't'
+              && buf[3] == '-' && buf[4] == 'N' && buf[5] == 'e' && buf[6] == 't' && buf[7] == 0);
+          Check.eq(where + " OpCode lo", 0x00, buf[8] & 0xFF);
+          Check.eq(where + " OpCode hi", 0x50, buf[9] & 0xFF);
+          Check.eq(where + " ProtVer hi", 0, buf[10] & 0xFF);
+          Check.eq(where + " ProtVer lo", 14, buf[11] & 0xFF);
+          Check.eq(where + " Physical", 0, buf[13] & 0xFF);
+
+          int addr = out.portAddress(k, j, u);
+          Check.eq(where + " SubUni", addr & 0xFF, buf[14] & 0xFF);
+          Check.eq(where + " Net", (addr >> 8) & 0x7F, buf[15] & 0xFF);
+          Check.eq(where + " Laenge hi", 0x02, buf[16] & 0xFF);
+          Check.eq(where + " Laenge lo", 0x00, buf[17] & 0xFF);
+
+          for (int i = 0; i < 128; i++) {
+            int inStripe = u * 128 + i;
+            int o = 18 + i * 4;
+            Check.eq(where + " Byte 4 bei LED " + i, 0, buf[o + 3] & 0xFF);
+            if (inStripe < LEDS_PER_STRIPE) {
+              LedColor c = colors[stripe * LEDS_PER_STRIPE + inStripe];
+              Check.eq(where + " R bei LED " + i, Math.round(c.x * 255f), buf[o + 0] & 0xFF);
+              Check.eq(where + " G bei LED " + i, Math.round(c.y * 255f), buf[o + 1] & 0xFF);
+              Check.eq(where + " B bei LED " + i, Math.round(c.z * 255f), buf[o + 2] & 0xFF);
+            } else {
+              // die 40 Reserve-Slots des letzten Universums je Output
+              Check.eq(where + " Reserve R bei LED " + i, 0, buf[o + 0] & 0xFF);
+              Check.eq(where + " Reserve G bei LED " + i, 0, buf[o + 1] & 0xFF);
+              Check.eq(where + " Reserve B bei LED " + i, 0, buf[o + 2] & 0xFF);
+            }
+          }
+          p++;
+        }
+      }
+      // nach den zehn Universen genau ein Sync-Paket an denselben Controller
+      byte[] sync = frame.data[p];
+      Check.eq("Sync Laenge Controller " + k, 14, frame.lengths[p]);
+      Check.eq("Sync Ziel Controller " + k, out.targetIp(k), frame.targets[p]);
+      Check.eq("Sync OpCode lo", 0x00, sync[8] & 0xFF);
+      Check.eq("Sync OpCode hi", 0x52, sync[9] & 0xFF);
+      Check.eq("Sync ProtVer lo", 14, sync[11] & 0xFF);
+      p++;
+    }
+    Check.eq("alle Pakete geprueft", 165, p);
+
+    // Master-Pegel wirkt
+    out.setMasterLevel(0.5f);
+    LedColor[] white = LedColor.createColorArray(numLeds);
+    for (int i = 0; i < numLeds; i++) { white[i].x = 1f; white[i].y = 1f; white[i].z = 1f; }
+    out.buildFrame(white, frame);
+    Check.eq("Master-Pegel 0.5 auf Weiss", 128, frame.data[0][18] & 0xFF);
+    out.setMasterLevel(1f);
+
     System.exit(Check.report("ArtNetOutputTest"));
   }
 }
