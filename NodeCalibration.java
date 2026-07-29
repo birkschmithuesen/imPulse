@@ -76,7 +76,7 @@ public class NodeCalibration implements runnableLedEffect {
     } else if (pattern == 3) {
       message = TestPatterns.pattern3(buffer, numStripes, numLedsPerStripe);
     } else if (pattern == 4) {
-      message = TestPatterns.pattern4(buffer);
+      message = testPatterns.pattern4(buffer);
     } else if (pattern == 5) {
       message = TestPatterns.pattern5(buffer);
     }

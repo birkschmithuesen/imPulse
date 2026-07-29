@@ -74,15 +74,33 @@ class TestPatterns {
         + (numLedsPerStripe - 1) + ". Leuchtet sonst etwas, ist es Reserve-Durchschlag";
   }
 
-  // Muster 4: Rot, Gruen, Blau im Wechsel, je zwei Sekunden. Die Phase
-  // haengt nur an der Wanduhr, kein fortlaufender Zustand noetig.
-  static String pattern4(LedColor[] buffer) {
+  // Farbphase von Muster 4 - eigenes Feld statt Wiederverwendung von
+  // patternStripe/patternLed, damit currentColorName() unabhaengig von den
+  // anderen Mustern lesbar bleibt.
+  private int patternColorPhase = 0;
+
+  // Muster 4: Rot, Gruen, Blau im Wechsel, je zwei Sekunden. Die Phase haengt
+  // an der Zeit seit dem letzten reset() (patternLastStep), nicht an der
+  // Wanduhr - sonst waere die Startfarbe bei jedem Lauf zufaellig, und genau
+  // das soll dieses Testbild ja klaeren. patternLastStep wird hier nur
+  // gelesen, nicht veraendert - unschaedlich, da nie gleichzeitig mit
+  // Muster 1/2 aktiv (reset() setzt den Stempel bei jedem Musterwechsel neu).
+  String pattern4(LedColor[] buffer) {
     long now = System.currentTimeMillis();
-    int phase = (int) ((now / 2000) % 3);
+    int phase = (int) (((now - patternLastStep) / 2000) % 3);
+    patternColorPhase = phase;
     LedColor c = phase == 0 ? new LedColor(1, 0, 0)
                : phase == 1 ? new LedColor(0, 1, 0) : new LedColor(0, 0, 1);
     LedColor.set(buffer, c);
-    return "Testbild 4 - " + (phase == 0 ? "Rot" : phase == 1 ? "Gruen" : "Blau");
+    return "Testbild 4 - " + colorName(phase);
+  }
+
+  // Fuer Aufrufer, die die gerade gesendete Farbe separat brauchen
+  // (PatternProbe gibt sie bei jedem Wechsel auf der Konsole aus).
+  String currentColorName() { return colorName(patternColorPhase); }
+
+  private static String colorName(int phase) {
+    return phase == 0 ? "Rot" : phase == 1 ? "Gruen" : "Blau";
   }
 
   // Muster 5: flaechig weiss.

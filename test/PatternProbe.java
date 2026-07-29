@@ -56,6 +56,8 @@ public class PatternProbe {
     out.start();
 
     int lastPrintedStripe = -1;
+    String lastPrintedColor = null;
+    long startTime = System.currentTimeMillis();
 
     long end = System.currentTimeMillis() + seconds * 1000L;
     while (System.currentTimeMillis() < end) {
@@ -73,7 +75,13 @@ public class PatternProbe {
       } else if (pattern == 3) {
         TestPatterns.pattern3(buffer, numStripes, LEDS_PER_STRIPE);
       } else if (pattern == 4) {
-        TestPatterns.pattern4(buffer);
+        patterns.pattern4(buffer);
+        String color = patterns.currentColorName();
+        if (!color.equals(lastPrintedColor)) {
+          lastPrintedColor = color;
+          long secs = (System.currentTimeMillis() - startTime) / 1000;
+          System.out.println(String.format("[%2d s] senden: %s", secs, color));
+        }
       } else if (pattern == 5) {
         TestPatterns.pattern5(buffer);
       }
