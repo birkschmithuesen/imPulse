@@ -207,10 +207,13 @@ class ArtNetOutput {
   private Frame buildBuf, readyBuf, sendBuf;
   private boolean hasNew = false;
 
-  private java.net.DatagramSocket socket;
+  private volatile java.net.DatagramSocket socket;
   private Thread sender;
   private volatile boolean running = false;
-  private boolean syncBroadcast = false;
+  private volatile boolean syncBroadcast = false;
+  // Verhindert, dass der Sender vor dem ersten publish() genullte
+  // DMX-Puffer ohne Art-Net-Kennung auf die Leitung schickt.
+  private volatile boolean hasPublishedOnce = false;
 
   private static final long PERIOD_NANOS = 25_000_000L;   // 40 fps
 
@@ -228,9 +231,12 @@ class ArtNetOutput {
     sendBuf = newFrame();
     try {
       socket = new java.net.DatagramSocket();
+      // Einmalig erlauben, nicht bei jedem Sync-Paket erneut als Systemaufruf.
+      socket.setBroadcast(true);
     } catch (java.net.SocketException e) {
       throw new RuntimeException("Art-Net-Socket liess sich nicht oeffnen", e);
     }
+    hasPublishedOnce = false;
     running = true;
     sender = new Thread(new Runnable() {
       public void run() { runSendLoop(); }
@@ -245,7 +251,7 @@ class ArtNetOutput {
       try { sender.join(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
       sender = null;
     }
-    if (socket != null) { socket.close(); socket = null; }
+    if (socket != null) { socket.close(); }
   }
 
   // Sync einzeln an jeden Controller oder als Broadcast. Welches sauberer
@@ -263,6 +269,7 @@ class ArtNetOutput {
       Frame t = buildBuf; buildBuf = readyBuf; readyBuf = t;
       hasNew = true;
     }
+    hasPublishedOnce = true;
   }
 
   private Frame takeFrame() {
@@ -280,10 +287,12 @@ class ArtNetOutput {
     long deadline = System.nanoTime();
     while (running) {
       deadline += PERIOD_NANOS;
-      try {
-        sendFrame(takeFrame());
-      } catch (Exception e) {
-        System.err.println("Art-Net-Versand fehlgeschlagen: " + e);
+      if (hasPublishedOnce) {
+        try {
+          sendFrame(takeFrame());
+        } catch (Exception e) {
+          System.err.println("Art-Net-Versand fehlgeschlagen: " + e);
+        }
       }
       long wait = deadline - System.nanoTime();
       if (wait > 0) {
@@ -318,9 +327,6 @@ class ArtNetOutput {
       boolean isSync = frame.lengths[p] == SYNC_PACKET_LEN;
       String host = (isSync && syncBroadcast) ? "2.255.255.255" : frame.targets[p];
       java.net.InetAddress addr = java.net.InetAddress.getByName(host);
-      if (isSync && syncBroadcast) {
-        socket.setBroadcast(true);
-      }
       socket.send(new java.net.DatagramPacket(frame.data[p], frame.lengths[p], addr, ARTNET_PORT));
     }
   }
