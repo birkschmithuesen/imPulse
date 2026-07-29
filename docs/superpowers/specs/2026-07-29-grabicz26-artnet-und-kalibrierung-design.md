@@ -233,7 +233,10 @@ Alle Muster laufen mit `masterLevel = 0.1`. Reihenfolge ist bindend: geht Muster
 
 ## 7. Offene Risiken
 
-- **Kanalreihenfolge.** Betrieb und Firmware-Lesart widersprechen sich. Klärt Test 2, Muster 4; die Korrektur ist eine Zeile.
-- **Durchsatz.** 6.600 Pakete/s sind gemessen unbestätigt. Klären Test 1c und 1d gemeinsam: 1c zeigt, ob der Sender den Takt hält, 1d, ob alles ankommt.
-- **Sync je Controller.** Ob 15 einzeln adressierte Sync-Pakete sauberer laufen als ein Broadcast auf `2.255.255.255`, ist offen. Beide Wege sind vorgesehen, die Entscheidung fällt über `uUniPF` aus Test 1d.
-- **Stromaufnahme.** `masterLevel` begrenzt zwar den Ausgang, ersetzt aber keine Messung an der Einspeisung. Muster 5 ist auch dafür da.
+Stand nach der Abnahme am 2026-07-30 an der aufgebauten Installation:
+
+- **Kanalreihenfolge — geschlossen.** Gemessen: Byte 0 steuert Rot, Byte 1 Grün, Byte 2 Blau, also `R=0, G=1, B=2`. Die Betriebserfahrung war richtig, beide Firmware-Ableitungen lagen falsch. Die Bestimmung misslang zunächst zweimal, weil das Testbild seine Phase aus der absoluten Uhrzeit bildete und Sender und Konsole zwei Zeitbasen hatten; erst mit Startmarke in Weiss und einmaliger Folge war sie belastbar. Einzelheiten im Umsetzungsplan.
+- **Durchsatz — geschlossen.** `uUniPF` = 10,0 bei allen auswertbaren Controllern, auch unter einer Minute Vollflächen-Weiss. Es geht kein Universum verloren. Einschränkung: 11 der 15 Controller liefern leere Gleitkommafelder im Statusbericht, die Messung stützt sich auf die vier auswertbaren.
+- **Sync je Controller — entschieden.** Einzeln adressierte Sync-Pakete genügen, `uUniPF` erreicht damit den Sollwert. Der Broadcast-Weg bleibt über `setSyncBroadcast` vorhanden, wird aber nicht gebraucht.
+- **Stromaufnahme — Muster 5 bestanden.** Eine Minute Vollflächen-Weiss bei Pegel 0.1 lief durchgehend stabil, kein Flackern, kein Farbstich ins Rote. Eine Messung an der Einspeisung ersetzt das nicht.
+- **Taktstabilität — offen.** Mittelwert 25,1 ms und Streuung 2,7 ms tragen, einzelne Ausreisser auf 82 ms nicht. Gemessen auf dem Entwicklungsrechner bei Systemlast 5,19 und mitlaufender Fremdlast; auf dem Show-Rechner nachzumessen. Empfehlung dazu: Sender-Thread höher priorisieren, die 15 Zieladressen einmalig auflösen.

@@ -2160,15 +2160,17 @@ Sketch starten, `c` für den Kalibriermodus, dann die Muster der Reihe nach mit 
 
 Jedes Ergebnis festhalten:
 
+Abnahme durchgeführt am 2026-07-30 an der aufgebauten Installation, alle Muster über `test/PatternProbe` bei Master-Pegel 0.1:
+
 | Muster | Erwartung | Ergebnis |
 |---|---|---|
-| 1 | Stripes leuchten in der Reihenfolge der Controller-Liste, je einer pro Sekunde | |
-| 2 | Lauflicht ohne Lücke, besonders bei LED 128, 256, 384, 512 | |
-| 3 | Nur je vier LEDs am Stripe-Ende. Leuchtet der Anfang eines anderen Stripes mit, schlagen die Reserve-Slots durch | |
-| 4 | Rot ist rot, Grün ist grün, Blau ist blau | |
-| 5 | Eine Minute stabil, kein Flackern, kein Blackout | |
+| 1 | Stripes leuchten in der Reihenfolge der Controller-Liste, je einer pro Sekunde | **bestanden** — genau ein Stripe zur Zeit, Paare am selben Controller physisch benachbart, Reihenfolge lückenlos über alle 30 |
+| 2 | Lauflicht ohne Lücke, besonders bei LED 128, 256, 384, 512 | **bestanden** auf Stripe 0 und Stripe 1. Damit ist auch die Firmware-Korrektur um die 40 Reserve-Slots am zweiten Ausgang bestätigt |
+| 3 | Nur je vier LEDs am Stripe-Ende. Leuchtet der Anfang eines anderen Stripes mit, schlagen die Reserve-Slots durch | **bestanden** — Segmente sassen am äussersten Ende, sonst blieb alles dunkel |
+| 4 | Rot ist rot, Grün ist grün, Blau ist blau | **bestanden mit `R=0, G=1, B=2`** — siehe Hinweis unten |
+| 5 | Eine Minute stabil, kein Flackern, kein Blackout | **bestanden** — durchgehend stabil. Parallel gemessen: `uUniPF` = 10,0 bei allen vier auswertbaren Controllern, also kein Universumsverlust unter Dauerlast |
 
-Bei Muster 4: kommen die Farben vertauscht, in `ArtNetOutput.java` `R_OFFSET = 2` und `B_OFFSET = 0` setzen und erneut prüfen.
+**Zur Kanalreihenfolge, weil sie zweimal falsch bestimmt wurde:** Byte 0 steuert Rot, Byte 1 Grün, Byte 2 Blau — die Betriebserfahrung war von Anfang an richtig, beide Firmware-Ableitungen lagen falsch. Der Weg dorthin ist eine Lehre über das Messinstrument: die ersten drei Läufe waren ungültig, weil das Testbild seine Phase aus der absoluten Uhrzeit bildete und Sender und Konsole zwei auseinanderlaufende Zeitbasen hatten. Die gemeldeten Phasenwechsel lagen bei 0, 1, 3, 5, 7 Sekunden statt bei 0, 2, 4, 6 — dieses Signal war sichtbar und wurde übergangen, woraufhin auf eine ungültige Beobachtung hin einmal in die falsche Richtung geändert wurde. Erst mit Startmarke in Weiss, einmaliger Folge und einer gemeinsamen Zeitbasis war die Messung belastbar. Wer hier etwas ändern will: erst dem Instrument trauen können, dann messen.
 
 - [ ] **Step 5: Commit**
 
