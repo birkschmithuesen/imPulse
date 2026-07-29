@@ -181,6 +181,7 @@ void keyReleased() {
   if (key == 'c' || key == 'C') {
     calibrationMode = !calibrationMode;
     println(calibrationMode ? "Kalibriermodus an" : "Kalibriermodus aus");
+    nodeCalibration.handleKeyReleased();
     return;
   }
   if (!calibrationMode) {
