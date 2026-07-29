@@ -35,9 +35,7 @@ class Mixer {
 		for (int i = 0; i < effectList.size(); i++) {
 			// copies the effects output with the remote opacity and blendmode on the
 			// mixerbuffer
-			LedColor[] effectOutput = LedColor.createColorArray(nLeds); // creates a new ledColorBuffer to add filter
-																		// without breaking the original colorbuffer
-			effectOutput = effectList.get(i).drawMe(); // gets the output Buffer of the effect in the effectArray
+			LedColor[] effectOutput = effectList.get(i).drawMe(); // gets the output Buffer of the effect in the effectArray
 			/*
 			 * MISSING:: TURN HUE AND SATURATION OF LedColor[] effectOutput
 			 */

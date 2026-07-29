@@ -94,7 +94,11 @@ void setup() {
 
   artNetOutput = new ArtNetOutput(controllerOctets, numLedsPerStripe); // used to send data to leds
   System.out.print(artNetOutput.describeMapping());
-  masterLevel = new RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 1f);
+  // Obergrenze 0.3 ist eine Hardwaregrenze, keine Geschmacksfrage: laut
+  // Handbuch der Stripes ist bei 10-m-Laengen schon bei Weiss mit
+  // Spannungsabfall zu rechnen - voller Pegel (1.0) darf am Regler gar nicht
+  // erst erreichbar sein.
+  masterLevel = new RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 0.3f);
   artNetOutput.start();
 
   // use the canvas to create the visuals to send over syphon
@@ -201,4 +205,22 @@ void keyReleased() {
   } else {
     nodeCalibration.handleCommand(key);
   }
+}
+
+// Von Processing beim Beenden des Sketches aufgerufen. Ohne dieses dispose()
+// wuerde artNetOutput.stop() nie gerufen und die Stripes blieben im letzten
+// gesendeten Bild stehen - die Firmware blankt nicht von selbst
+// (blackOnOpSyncTimeOut/blackOnOpPollTimeOut sind dort auskommentiert).
+void dispose() {
+  println("Sketch wird beendet, sende Schwarzbild und stoppe Art-Net-Sender");
+  LedColor[] black = LedColor.createColorArray(numLeds);
+  artNetOutput.publish(black);
+  // kurze Pause, damit der 40-Hz-Sender-Thread den Schwarzbild-Frame noch
+  // abholt und verschickt, bevor der Socket in stop() geschlossen wird
+  try {
+    Thread.sleep(100);
+  } catch (InterruptedException e) {
+    Thread.currentThread().interrupt();
+  }
+  artNetOutput.stop();
 }
