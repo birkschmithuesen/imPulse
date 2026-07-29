@@ -24,7 +24,7 @@ Der Rechner hängt über `en14` mit `2.0.0.1 / 255.0.0.0` am Netz. Es antworten 
 | Outputs | 2 |
 | LEDs pro Output | 600 |
 
-Daraus abgeleitet: 30 Stripes à 600 LEDs, 18.000 LEDs, 300 Universen pro Frame.
+Daraus abgeleitet: 30 Stripes à 600 LEDs, 18.000 LEDs, 150 Universen pro Frame.
 
 ### Eigenschaften der Firmware, die das Design bestimmen
 
@@ -92,7 +92,7 @@ ArtDmx, 18 Byte Kopf, Ziel-Port 6454:
 
 ArtSync, 14 Byte: `Art-Net\0`, OpCode 0x5200 little-endian, ProtVer 0/14, Aux1 0, Aux2 0. Wird nach den 10 DMX-Paketen an dieselbe Controller-IP geschickt.
 
-Pro Frame: 15 × 10 = 300 DMX-Pakete plus 15 Sync-Pakete. Bei 40 fps rund 12.600 Pakete/s und 50 Mbit/s.
+Pro Frame: 15 × 10 = 150 DMX-Pakete plus 15 Sync-Pakete, zusammen 165. Bei 40 fps rund 6.600 Pakete/s und etwa 28 Mbit/s.
 
 ### 3.4 Kanalreihenfolge
 
@@ -108,9 +108,9 @@ Der Betrieb sagt R, G, B. Das Lesen der Firmware ergibt B, G, R: die vier DMX-By
 
 ### 3.6 Takt und Nebenläufigkeit
 
-Der Versand bekommt einen eigenen Thread mit fester 40-Hz-Taktung, weil 300 `send()`-Aufrufe je Frame bei 25 ms Budget zu viel sind, um sie neben Simulation und Preview in `draw()` zu erledigen.
+Der Versand bekommt einen eigenen Thread mit fester 40-Hz-Taktung, weil 165 `send()`-Aufrufe je Frame bei 25 ms Budget rund ein Fünftel davon aufbrauchen und, um sie neben Simulation und Preview in `draw()` zu erledigen.
 
-- `draw()` rendert und ruft `output.publish(ledColors)`. Dabei werden die 315 Pakete in den hinteren Puffer geschrieben und die beiden Puffer unter Sperre getauscht.
+- `draw()` rendert und ruft `output.publish(ledColors)`. Dabei werden die 165 Pakete in den hinteren Puffer geschrieben und die beiden Puffer unter Sperre getauscht.
 - Der Sender-Thread verschickt im 25-ms-Takt den jeweils vorderen Puffer. Der Takt läuft über absolute Zeitpunkte (`deadline += 25ms`), nicht über `sleep(25)`, damit sich kein Versatz aufsummiert.
 - Der Sender berührt nur den vorderen, `draw()` nur den hinteren Puffer. Ein Frame wird gegebenenfalls doppelt gesendet oder übersprungen — für die Anzeige belanglos, der Takt bleibt konstant.
 - `frameRate(40)` bleibt gesetzt, betrifft aber nur noch Simulation und Preview. Der Ausgabetakt hängt nicht mehr daran.
@@ -211,9 +211,9 @@ Das Prüfprogramm liegt bewusst nicht im Sketch-Ordner, weil Processing dort jed
 
 ### Test 1 — ohne fremde Hilfe prüfbar
 
-**1a Byte-genauer Vergleich.** Jede LED bekommt ein aus ihrem globalen Index abgeleitetes Muster. `buildFrame` läuft, und für jedes der 315 Pakete wird geprüft: Kopf korrekt, `SubUni`/`Net` ergeben die erwartete Port-Adresse, Ziel-IP passt zum Controller, jedes LED-Tripel steht am richtigen Offset, das vierte Byte ist 0, die 40 Reserve-Slots je Output sind genullt, und je Controller folgt genau ein Sync-Paket.
+**1a Byte-genauer Vergleich.** Jede LED bekommt ein aus ihrem globalen Index abgeleitetes Muster. `buildFrame` läuft, und für jedes der 165 Pakete wird geprüft: Kopf korrekt, `SubUni`/`Net` ergeben die erwartete Port-Adresse, Ziel-IP passt zum Controller, jedes LED-Tripel steht am richtigen Offset, das vierte Byte ist 0, die 40 Reserve-Slots je Output sind genullt, und je Controller folgt genau ein Sync-Paket.
 
-**1b Rückwärtsprüfung.** Ein Decoder setzt aus den 315 Paketen den LED-Puffer wieder zusammen und vergleicht ihn mit dem Original. Er benutzt nicht dieselbe Formel wie der Sender und findet damit Lücken und Überlappungen, die 1a durchgehen lassen könnte.
+**1b Rückwärtsprüfung.** Ein Decoder setzt aus den 165 Paketen den LED-Puffer wieder zusammen und vergleicht ihn mit dem Original. Er benutzt nicht dieselbe Formel wie der Sender und findet damit Lücken und Überlappungen, die 1a durchgehen lassen könnte.
 
 **1c Taktmessung.** Der Sender-Thread stempelt seine Sendezeitpunkte. Über 60 Sekunden werden Mittelwert, Minimum, Maximum und Standardabweichung des Intervalls ausgegeben. Damit ist die geforderte konstante Rate gemessen.
 
@@ -234,6 +234,6 @@ Alle Muster laufen mit `masterLevel = 0.1`. Reihenfolge ist bindend: geht Muster
 ## 7. Offene Risiken
 
 - **Kanalreihenfolge.** Betrieb und Firmware-Lesart widersprechen sich. Klärt Test 2, Muster 4; die Korrektur ist eine Zeile.
-- **Durchsatz.** 12.600 Pakete/s sind gemessen unbestätigt. Klären Test 1c und 1d gemeinsam: 1c zeigt, ob der Sender den Takt hält, 1d, ob alles ankommt.
+- **Durchsatz.** 6.600 Pakete/s sind gemessen unbestätigt. Klären Test 1c und 1d gemeinsam: 1c zeigt, ob der Sender den Takt hält, 1d, ob alles ankommt.
 - **Sync je Controller.** Ob 15 einzeln adressierte Sync-Pakete sauberer laufen als ein Broadcast auf `2.255.255.255`, ist offen. Beide Wege sind vorgesehen, die Entscheidung fällt über `uUniPF` aus Test 1d.
 - **Stromaufnahme.** `masterLevel` begrenzt zwar den Ausgang, ersetzt aber keine Messung an der Einspeisung. Muster 5 ist auch dafür da.
