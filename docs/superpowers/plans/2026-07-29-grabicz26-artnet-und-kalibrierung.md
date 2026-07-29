@@ -2188,6 +2188,14 @@ Ergebnisse: <eintragen>."
 
 ## Nach Abschluss
 
-- `CLAUDE.md` gehört aktualisiert: Geometrie (30 × 600 statt 16 × 720), `ArtNetOutput` statt `ArtNetSender`, ArtSync-Pflicht, `NodeCalibration` statt `LedStripeFullActivationEffect`, `test/run.sh`, kein artnet4j mehr.
-- `data/nodeCrossings.txt` wird vor Ort neu aufgenommen. Die alte Datei aus der 720er-Geometrie ist wertlos.
-- Offen und nur an der Hardware entscheidbar: Kanalreihenfolge (Muster 4) und ob Sync einzeln oder als Broadcast sauberer läuft (`setSyncBroadcast`, gemessen über `uUniPF` in `PollProbe`).
+Erledigt: `CLAUDE.md` und `README.md` sind auf den Stand nach dem Umbau gebracht. Die alte `data/nodeCrossings.txt` der 720er-Geometrie liegt als `data/nodeCrossings_16x720.txt` daneben, die geladene Datei ist leer. Kanalreihenfolge und Sync-Verfahren sind an der Hardware entschieden, siehe Abschnitt 7 der Spezifikation.
+
+### Offene Punkte
+
+Keiner davon blockiert den Betrieb; sie sind hier festgehalten, damit sie nicht verlorengehen.
+
+- **Taktstabilität auf dem Show-Rechner nachmessen.** Mittelwert 25,1 ms und Streuung 2,7 ms tragen, aber einzelne Ausreisser bis 82 ms nicht. Gemessen wurde auf dem Entwicklungsrechner bei Systemlast 5,19 mit mitlaufender Fremdlast. Zwei Hebel, falls es nötig wird: den Sender-Thread höher priorisieren, und die 15 Zieladressen einmalig in `start()` auflösen statt 165 Objekte je Frame anzulegen. `java -cp "build:<core.jar>" TimingProbe 60` liefert die Zahlen.
+- **Installationskonstanten stehen an sechs Stellen.** Oktettliste und Stripe-Länge liegen in `imPulse.pde` und in fünf Programmen unter `test/`, der Master-Pegel an vier Stellen, die Sendeperiode an drei. Ändert sich vor Ort die Verkabelung, prüfen die Suiten weiter die alte Welt und `PatternProbe` leuchtet die falschen Geräte an. Eine gemeinsame Konfigurationsklasse in der Wurzel, die `test/run.sh` mitübersetzt, würde das auflösen — so wie es für die Musterlogik mit `TestPatterns` schon geschehen ist.
+- **Reserve-Slots idempotent füllen.** Die 40 überzähligen Slots im letzten Universum jedes Ausgangs werden genullt und überschreiben damit kurzzeitig die ersten 40 LEDs des nächsten Ausgangs, bis das Folgepaket sie korrigiert. Trüge man dort stattdessen die echten Farben dieser LEDs ein, wäre die Reihenfolge der Pakete gleichgültig und eine UDP-Umsortierung könnte kein Schwarzblitzen verursachen. Billige Härtung ohne Nachteil.
+- **11 der 15 Controller liefern leere Gleitkommafelder** im ArtPoll-Statusbericht (`temp;;fps;;uUniPF;;`), nur `.8`, `.13`, `.16` und `.18` geben Zahlen heraus. Liegt an deren Firmware-Build, nicht am Sender. `PollProbe` behandelt sie als nicht auswertbar. Für eine flächige Überwachung aller Controller müssten diese Geräte neu geflasht werden.
+- **Kleineres aus den Einzelprüfungen:** `super.dispose()` wird nicht gerufen; bei leerer Kreuzungsliste schreibt `LedNetworkTransportEffect` die Adresse `/net/activateNode` mit Maximum −1 in `remoteSettings.txt`; in `LedStripeNetworks.java` ist der Import von `processing.core` unbenutzt.
