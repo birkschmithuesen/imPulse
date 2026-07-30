@@ -7,3 +7,6 @@ application.windows64
 application.macosx
 /bin/
 /build/
+__pycache__/
+*.pyc
+webui/.venv/
