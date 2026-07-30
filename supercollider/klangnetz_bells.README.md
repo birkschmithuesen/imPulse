@@ -27,9 +27,9 @@ identisch.
   2026-07-30) → A2 (eine Quinte höher, +7 Halbtöne, 2026-07-31 vor Ort)
 - **4-Kanal-Ausgang** über Zoom AMS-24 (ASIO), `outCh = nodeId % 4`
 - **Lautstärke:** `~minAmp`/`~maxAmp`, historisch: -10dB (2026-07-30, gegen zu
-  leise Treffer) → +6dB (2026-07-31 vor Ort, Faktor ×2) → **-6dB gegenüber
-  dem -10dB-Stand** (2026-07-31 vor Ort, zweite Korrektur — leiser als der
-  ursprüngliche -10dB-Stand vom 07-30, nicht nur zurückgenommen)
+  leise Treffer) → +6dB (2026-07-31 vor Ort, Faktor ×2) → kurzzeitig -6dB
+  gegenüber dem -10dB-Stand → **wieder +6dB** (2026-07-31 vor Ort, finaler
+  Stand — "lass die Lautstärke wie sie ist, mit den +6dB")
 - **Limiter am Summenbus** (2026-07-31 vor Ort): alle Glocken schreiben auf
   einen privaten 4-Kanal-Bus (`~mixBus`), ein dauerhaft laufender
   `\klangLimiter`-Synth liest davon, klemmt hart auf `~limiterCeiling` (0.95)
