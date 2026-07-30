@@ -243,6 +243,189 @@ public class LedPositionCalibrationTest {
     Check.near("worldToPane rechte untere Ecke px", PANE_X + PANE_W, p[0], 0.5);
     Check.near("worldToPane rechte untere Ecke py", PANE_Y + PANE_H, p[1], 0.5);
 
+    // ---- Setzen, Vorschlag, Loeschen ----
+    NodeCrossingStore cs2 = crossings(new int[][] { { 10, 30 } });
+    LedAnchorStore stC = store();
+    LedPositionCalibration cc = build(cs2, stC);
+    float[] d = new float[2];
+
+    // Eintraege: 0, 10(Kreuzung), 19, 20, 39, 40, 59, 60, 79 -> 9
+    Check.eq("neun Eintraege", 2 * STRIPES + 1, cc.entryCount());
+    Check.eq("Start bei Eintrag 0 (LED 0)", 0, cc.ledsOfEntry(cc.entryIndex())[0]);
+
+    // Ohne jeden Anker auf dem Stripe gibt es keinen Vorschlag
+    Check.that("ohne Anker keine Anzeigeposition", !cc.displayPosition(d));
+    Check.that("ENTER lehnt ohne Vorschlag ab", !cc.acceptProposal());
+    Check.that("und begruendet es", cc.lastMessage().length() > 0);
+
+    // Erster Klick setzt LED 0
+    Check.that("Klick setzt den ersten Punkt", cc.setCurrent(-6f, -3f));
+    Check.that("jetzt gibt es eine Anzeigeposition", cc.displayPosition(d));
+    Check.near("Anzeige ist der gesetzte Anker, x", -6.0, d[0], 1e-4);
+    Check.near("Anzeige ist der gesetzte Anker, y", -3.0, d[1], 1e-4);
+    Check.that("Eintrag 0 ist gesetzt", cc.entryIsSet(0));
+
+    // Zweiter Punkt auf demselben Stripe: die Kreuzung bei LED 10
+    cc.next();
+    Check.eq("jetzt bei der Kreuzung", 10, cc.ledsOfEntry(cc.entryIndex())[0]);
+    // Vorschlag ist der einzige Anker des Stripes, weil noch keine Richtung
+    // bekannt ist
+    Check.that("Vorschlag vorhanden", cc.displayPosition(d));
+    Check.near("Vorschlag ist der einzige Anker, x", -6.0, d[0], 1e-4);
+    Check.that("Klick setzt die Kreuzung", cc.setCurrent(-1f, -1f));
+    Check.that("die Partner-LED auf Stripe 1 wurde mitgesetzt", stC.has(30));
+
+    // Dritter Eintrag: LED 19. Jetzt gibt es eine Richtung, der Vorschlag
+    // setzt den Vektor von LED 0 -> LED 10 fort.
+    // d = ((-1 - -6)/10, (-1 - -3)/10) = (0.5, 0.2) je Index
+    // LED 19 -> (-1 + 9*0.5, -1 + 9*0.2) = (3.5, 0.8)
+    cc.next();
+    Check.eq("jetzt bei LED 19", 19, cc.ledsOfEntry(cc.entryIndex())[0]);
+    Check.that("Vorschlag vorhanden", cc.displayPosition(d));
+    Check.near("Vorschlag setzt den Vektor fort, x", 3.5, d[0], 1e-3);
+    Check.near("Vorschlag setzt den Vektor fort, y", 0.8, d[1], 1e-3);
+
+    // ENTER uebernimmt genau diesen Vorschlag
+    Check.that("ENTER uebernimmt den Vorschlag", cc.acceptProposal());
+    Check.that("LED 19 ist jetzt ein Anker", stC.has(19));
+    Check.near("und zwar auf dem Vorschlagswert", 3.5, stC.x(19), 1e-3);
+
+    // BACKSPACE nimmt den Anker weg, die Anzeige faellt auf den Vorschlag
+    Check.that("BACKSPACE loescht den Anker", cc.clearCurrent());
+    Check.that("LED 19 ist kein Anker mehr", !stC.has(19));
+    Check.that("Anzeige faellt auf den Vorschlag zurueck", cc.displayPosition(d));
+    Check.near("Vorschlag ist unveraendert", 3.5, d[0], 1e-3);
+
+    // BACKSPACE auf einer Kreuzung raeumt beide LEDs
+    LedAnchorStore stX = store();
+    LedPositionCalibration cx = build(cs2, stX);
+    cx.next();
+    Check.eq("bei der Kreuzung", 10, cx.ledsOfEntry(cx.entryIndex())[0]);
+    Check.that("Kreuzung gesetzt", cx.setCurrent(0f, 0f));
+    Check.that("beide LEDs gesetzt", stX.has(10) && stX.has(30));
+    Check.that("BACKSPACE auf der Kreuzung", cx.clearCurrent());
+    Check.that("beide LEDs geloescht", !stX.has(10) && !stX.has(30));
+
+    // ---- Feinjustierung und Schrittweite ----
+    Check.near("Startschrittweite", 0.05, cc.step(), 1e-6);
+    cc.cycleStep();
+    Check.near("F schaltet auf die naechste Schrittweite", 0.25, cc.step(), 1e-6);
+    cc.cycleStep();
+    Check.near("F laeuft um auf die kleinste", 0.01, cc.step(), 1e-6);
+    cc.cycleStep();
+    Check.near("und wieder zurueck", 0.05, cc.step(), 1e-6);
+
+    LedAnchorStore stN = store();
+    LedPositionCalibration cn = build(cs2, stN);
+    Check.that("Punkt setzen", cn.setCurrent(0f, 0f));
+    Check.that("nach rechts schieben", cn.nudge(1, 0));
+    Check.near("x um eine Schrittweite groesser", 0.05, stN.x(0), 1e-5);
+    Check.that("nach oben schieben", cn.nudge(0, 1));
+    Check.near("y um eine Schrittweite groesser", 0.05, stN.y(0), 1e-5);
+    Check.that("nach links und unten", cn.nudge(-1, -1));
+    Check.near("x wieder null", 0.0, stN.x(0), 1e-5);
+    Check.near("y wieder null", 0.0, stN.y(0), 1e-5);
+
+    // Pfeiltaste auf einem offenen Eintrag mit Vorschlag setzt ihn dabei
+    cn.next();
+    cn.next();
+    Check.that("dritter Eintrag ist offen", !cn.entryIsSet(cn.entryIndex()));
+    boolean nudgedOpen = cn.nudge(1, 0);
+    if (nudgedOpen) {
+      Check.that("Pfeiltaste auf einem offenen Eintrag setzt ihn",
+          cn.entryIsSet(cn.entryIndex()));
+    } else {
+      Check.that("ohne Vorschlag lehnt die Pfeiltaste ab und begruendet",
+          cn.lastMessage().length() > 0);
+    }
+
+    // ---- L: zweimal druecken, mit Fenster ----
+    LedAnchorStore stL = store();
+    LedPositionCalibration cl = build(cs2, stL);
+    Check.that("Punkt setzen", cl.setCurrent(1f, 1f));
+    Check.eq("ein Anker", 1, stL.size());
+
+    Check.that("erster Druck verwirft nichts", !cl.requestClearAll(10000L));
+    Check.eq("Anker steht noch", 1, stL.size());
+    Check.that("die Ankuendigung nennt die Anzahl",
+        cl.lastMessage().indexOf("1") >= 0);
+
+    Check.that("zweiter Druck nach 100 ms ist Tastenwiederholung",
+        !cl.requestClearAll(10100L));
+    Check.eq("Anker steht immer noch", 1, stL.size());
+
+    Check.that("zweiter Druck nach 400 ms verwirft", cl.requestClearAll(10400L));
+    Check.eq("Liste ist leer", 0, stL.size());
+
+    // Abbruch durch eine andere Taste
+    LedAnchorStore stL2 = store();
+    LedPositionCalibration cl2 = build(cs2, stL2);
+    Check.that("Punkt setzen", cl2.setCurrent(1f, 1f));
+    Check.that("erster Druck", !cl2.requestClearAll(20000L));
+    cl2.abortClearAll();
+    Check.that("nach dem Abbruch ist der naechste Druck wieder der erste",
+        !cl2.requestClearAll(20400L));
+    Check.eq("nichts verworfen", 1, stL2.size());
+
+    // Zu spaet ist wieder ein erster Druck
+    LedAnchorStore stL3 = store();
+    LedPositionCalibration cl3 = build(cs2, stL3);
+    Check.that("Punkt setzen", cl3.setCurrent(1f, 1f));
+    Check.that("erster Druck", !cl3.requestClearAll(30000L));
+    Check.that("nach 6 s ist es wieder ein erster Druck",
+        !cl3.requestClearAll(36000L));
+    Check.eq("nichts verworfen", 1, stL3.size());
+
+    // ---- Abdeckungsbericht und HUD ----
+    LedAnchorStore stH = store();
+    LedPositionCalibration ch = build(cs2, stH);
+    String rep2 = ch.coverageReport();
+    Check.that("Bericht nennt undefinierte LEDs", rep2.indexOf("ohne Position") >= 0);
+
+    String hud = ch.hudText();
+    Check.that("HUD nennt die Eintragszahl",
+        hud.indexOf(String.valueOf(ch.entryCount())) >= 0);
+    Check.that("HUD nennt die Schrittweite", hud.indexOf("Schritt") >= 0);
+    Check.that("HUD nennt die Tastenbelegung", hud.indexOf("ENTER") >= 0);
+
+    // ---- Speichern und wieder laden ----
+    java.io.File posDir = java.nio.file.Files.createTempDirectory("ledpos").toFile();
+    java.io.File posFile = new java.io.File(posDir, "ledPositions.txt");
+    LedAnchorStore stS = store();
+    LedPositionMap mS2 = new LedPositionMap(STRIPES, PER_STRIPE, FOOT_X, FOOT_Y);
+    ArrayList<LedNetworkNode> nS = new ArrayList<LedNetworkNode>();
+    LedInNetInfo[] iS = LedInNetInfo.buildNetInfo(STRIPES, PER_STRIPE);
+    LedInNetInfo.applyCrossings(cs2.crossings(), iS, nS);
+    LedPositionCalibration csave = new LedPositionCalibration(stS, mS2, cs2, nS,
+        STRIPES, PER_STRIPE, posFile.getAbsolutePath(),
+        PANE_X, PANE_Y, PANE_W, PANE_H, FOOT_X, FOOT_Y);
+    Check.that("Punkt setzen", csave.setCurrent(-2.5f, 1.25f));
+    Check.that("S schreibt die Datei", csave.save());
+    Check.that("die Datei existiert", posFile.exists());
+
+    LedAnchorStore reread = store();
+    reread.load(posFile.getAbsolutePath());
+    Check.eq("ein Anker wieder geladen", 1, reread.size());
+    Check.near("x kam unveraendert zurueck", -2.5, reread.x(0), 1e-3);
+    Check.near("y kam unveraendert zurueck", 1.25, reread.y(0), 1e-3);
+
+    // ---- R rechnet die Map neu ----
+    LedAnchorStore stR = store();
+    LedPositionMap mR = new LedPositionMap(STRIPES, PER_STRIPE, FOOT_X, FOOT_Y);
+    ArrayList<LedNetworkNode> nR = new ArrayList<LedNetworkNode>();
+    LedInNetInfo[] iR = LedInNetInfo.buildNetInfo(STRIPES, PER_STRIPE);
+    LedInNetInfo.applyCrossings(cs2.crossings(), iR, nR);
+    LedPositionCalibration cr = new LedPositionCalibration(stR, mR, cs2, nR,
+        STRIPES, PER_STRIPE, NO_FILE,
+        PANE_X, PANE_Y, PANE_W, PANE_H, FOOT_X, FOOT_Y);
+    Check.that("Punkt setzen", cr.setCurrent(2f, 2f));
+    cr.reapply();
+    Check.that("die Map kennt die Position jetzt", mR.isDefined(0));
+    Check.near("und der Knoten seine", 2.0, nR.get(0).posX, 1.0);
+    Check.that("nach reapply ist nichts mehr offen anzuwenden", !cr.mapNeedsApply());
+    Check.that("ein neuer Klick macht die Map wieder schmutzig",
+        cr.setCurrent(2.5f, 2.5f) && cr.mapNeedsApply());
+
     System.exit(Check.report("LedPositionCalibrationTest"));
   }
 }

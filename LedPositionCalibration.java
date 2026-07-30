@@ -46,6 +46,15 @@ class LedPositionCalibration {
   private int current = 0;
   private String message = "";
 
+  private int stepIndex = 1;               // Start bei 0.05 m
+  private boolean clearAllPending = false;
+  private long clearAllArmedAt = 0;
+  // Die Map wird nicht bei jedem Frame neu gerechnet, sondern nur wenn sich
+  // ein Anker geaendert hat. 18 000 LEDs mal mehrere Baumsuchen bei 40 Hz
+  // waere Verschwendung, und die Rueckmeldung im Netz soll trotzdem sofort
+  // nach jedem Klick stimmen.
+  private boolean mapDirty = true;
+
   LedPositionCalibration(LedAnchorStore store,
                          LedPositionMap map,
                          NodeCrossingStore crossingStore,
@@ -256,5 +265,175 @@ class LedPositionCalibration {
   void worldToPane(float x, float y, float[] out2) {
     out2[0] = paneX + (x + footprintX / 2f) / footprintX * paneW;
     out2[1] = paneY + (footprintY / 2f - y) / footprintY * paneH;
+  }
+
+  float step() { return STEP_SIZES_M[stepIndex]; }
+
+  void cycleStep() {
+    stepIndex = (stepIndex + 1) % STEP_SIZES_M.length;
+    message = "Schrittweite " + step() + " m";
+  }
+
+  boolean mapNeedsApply() { return mapDirty; }
+
+  // Der Anker, wenn dieser Eintrag gesetzt ist, sonst der Vorschlag aus der
+  // Map. Beides kommt aus LedPositionMap.positionOf - es gibt keinen zweiten
+  // Rechenweg fuer "geschaetzte" Positionen.
+  boolean displayPosition(float[] out2) {
+    if (entries.isEmpty()) {
+      return false;
+    }
+    return map.positionOf(store, entries.get(current)[0], out2);
+  }
+
+  // Setzt die Position des aktuellen Eintrags. set() verteilt sie innerhalb
+  // eines Knotens auf alle beteiligten LEDs, ein Klick genuegt also fuer
+  // beide Seiten einer Kreuzung.
+  boolean setCurrent(float x, float y) {
+    if (entries.isEmpty()) {
+      message = "Keine Eintraege";
+      return false;
+    }
+    boolean ok = store.set(entries.get(current)[0], x, y, crossingStore.crossings());
+    message = store.lastMessage();
+    // Die HUD-Zeile kann vor Ort unlesbar sein - Ablehnung und Warnung
+    // deshalb zusaetzlich auf die Konsole, wie es NodeCalibration bei ENTER
+    // auch tut.
+    if (!ok || store.lastWasWarning()) {
+      System.out.println("Position: " + message);
+    }
+    if (ok) {
+      mapDirty = true;
+    }
+    return ok;
+  }
+
+  boolean acceptProposal() {
+    float[] out = new float[2];
+    if (!displayPosition(out)) {
+      message = "Kein Vorschlag moeglich - dieser Stripe hat noch keinen Anker";
+      System.out.println("Position: " + message);
+      return false;
+    }
+    return setCurrent(out[0], out[1]);
+  }
+
+  // Nimmt die Anker ALLER LEDs des Eintrags weg, nicht nur die der ersten -
+  // sonst blieb bei einer Kreuzung die halbe Position stehen.
+  boolean clearCurrent() {
+    if (entries.isEmpty()) {
+      message = "Keine Eintraege";
+      return false;
+    }
+    boolean any = false;
+    for (int led : entries.get(current)) {
+      if (store.remove(led)) {
+        any = true;
+      }
+    }
+    message = any ? store.lastMessage() : "Dieser Eintrag hat keinen Anker";
+    if (any) {
+      mapDirty = true;
+    }
+    return any;
+  }
+
+  // Verschiebt die Anzeigeposition um Schrittweiten. Steht der Eintrag noch
+  // auf einem Vorschlag, wird er dadurch zum Anker - genau das will man,
+  // wenn man einen Vorschlag nur ein Stueck nachbessern muss.
+  boolean nudge(int dxSteps, int dySteps) {
+    float[] out = new float[2];
+    if (!displayPosition(out)) {
+      message = "Kein Vorschlag moeglich - dieser Stripe hat noch keinen Anker";
+      return false;
+    }
+    return setCurrent(out[0] + dxSteps * step(), out[1] + dySteps * step());
+  }
+
+  boolean save() {
+    try {
+      store.save(filePath);
+      message = store.lastMessage();
+      return true;
+    } catch (java.io.IOException e) {
+      message = "Speichern fehlgeschlagen: " + e;
+      System.out.println("Position: " + message);
+      return false;
+    }
+  }
+
+  // Rechnet Map und Knotenpositionen neu und uebernimmt sie in die laufende
+  // Simulation, ohne Neustart. Baut ausserdem die Arbeitsliste neu auf, damit
+  // im Kalibriermodus aufgenommene Kreuzungen auftauchen.
+  void reapply() {
+    rebuildWorklist();
+    map.apply(store);
+    LedNetworkNode.applyPositions(map, nodes);
+    mapDirty = false;
+    message = entries.size() + " Eintraege, " + openCount() + " offen; "
+        + map.coverageReport(store);
+  }
+
+  String coverageReport() {
+    if (mapDirty) {
+      map.apply(store);
+      LedNetworkNode.applyPositions(map, nodes);
+      mapDirty = false;
+    }
+    String rep = map.coverageReport(store);
+    message = rep;
+    System.out.println("Abdeckung: " + rep);
+    return rep;
+  }
+
+  // Verwerfen ALLER Anker, auch der geladenen. Erster Druck kuendigt an, ein
+  // zweiter zwischen 300 ms und 5 s danach fuehrt aus. Die Untergrenze wehrt
+  // Tastenwiederholung bei gehaltenem L ab; die angekuendigte Bestaetigung
+  // wird dabei NICHT erneuert, sonst haelt ein gedruecktes L das Fenster
+  // endlos offen.
+  boolean requestClearAll(long nowMillis) {
+    long sinceArmed = nowMillis - clearAllArmedAt;
+    if (clearAllPending && sinceArmed < CLEAR_ALL_CONFIRM_MIN_MILLIS) {
+      return false;
+    }
+    if (clearAllPending && sinceArmed <= CLEAR_ALL_CONFIRM_MAX_MILLIS) {
+      store.clearAll();
+      message = store.lastMessage();
+      System.out.println("Position: " + message);
+      clearAllPending = false;
+      mapDirty = true;
+      return true;
+    }
+    clearAllPending = true;
+    clearAllArmedAt = nowMillis;
+    message = "Achtung: " + store.size() + " Positionen werden verworfen (auch geladene) - "
+        + "L erneut druecken zum Bestaetigen";
+    System.out.println("Position: " + message);
+    return false;
+  }
+
+  void abortClearAll() { clearAllPending = false; }
+
+  String hudText() {
+    float[] out = new float[2];
+    boolean known = displayPosition(out);
+    String pos = known
+        ? String.format(java.util.Locale.US, "x %+6.2f  y %+6.2f m", Float.valueOf(out[0]),
+            Float.valueOf(out[1]))
+        : "keine Position";
+    return String.format(java.util.Locale.US,
+        "Eintrag %d/%d  %s  %s  %s%n"
+        + "Positionen: %d geladen + %d neu    offen: %d    Schritt: %.2f m%n"
+        + "%s%n"
+        + "Maus setzen  ENTER Vorschlag  BACKSPACE loeschen  Pfeile feinjustieren  F Schritt%n"
+        + ", . blaettern  o naechster offener  S schreiben  R uebernehmen  T Abdeckung  "
+        + "L alles verwerfen  P beenden",
+        Integer.valueOf(current + 1), Integer.valueOf(entries.size()),
+        entryIsCrossing(current) ? "Kreuzung" : "Stripe-Ende",
+        entryIsSet(current) ? "gesetzt" : "offen",
+        pos,
+        Integer.valueOf(store.loadedCount()), Integer.valueOf(store.sessionCount()),
+        Integer.valueOf(openCount()), Float.valueOf(step()),
+        message);
   }
 }
