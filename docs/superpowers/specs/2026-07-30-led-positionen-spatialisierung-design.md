@@ -50,29 +50,29 @@ Eine Kreuzung ist ein einzelner physischer Punkt mit zwei LEDs auf zwei verschie
 
 Wären die zwei 5-m-Stücke getrennt im Netz verlegt, lägen zwischen LED 299 und 300 ein physischer Sprung und es bräuchte Segmentgrenzen sowie vier Anker je Stripe. Nach 2 ist das nicht der Fall; Segmentgrenzen werden **nicht** gebaut.
 
-### 2.3 Alle abgeleiteten Zahlen werden gerechnet, nicht verdrahtet
-
-`data/nodeCrossings.txt` **wächst während der Kalibrierung**. Am 2026-07-30 um 02:18 standen 23 Kreuzungen darin, um 03:40 waren es 77. Keine Zahl, die von der Kreuzungszahl abhängt, darf im Code oder in einem Test als Konstante stehen — weder die Länge der Arbeitsliste noch die Zahl der Anker.
-
-Es gilt, mit `C` als Zahl der Kreuzungen und `S = 30` Stripes:
-
-```
-LED-Anker gesamt          = 2*S + 2*C          (jede Kreuzung hat genau zwei LEDs)
-davon von Hand zu klicken =   2*S + C          (die Partner-LED schliesst sich mit)
-Arbeitslisten-Eintraege   = 2*S + 2*C          (einer je LED-Anker, siehe 4.1)
-```
-
-Bei C = 77 sind das 214 Anker, 137 Klicks. Bei C = 23 waren es 106 Anker und 83 Klicks. Beide Zahlen stehen hier nur als Beispiel; verlässlich ist die Formel.
-
-Für die Tests heisst das: **kleine synthetische Vorgaben**, keine Prüfung gegen `data/nodeCrossings.txt`. Ein Test, der 214 erwartet, ist beim nächsten `S` im Kalibriermodus rot.
-
-Geprüft: alle Zeilen der Datei haben genau **zwei** Indizes, und keine Kreuzungs-LED liegt auf einem Stripe-Ende (LED 0 oder 599). Der Kern muss mit beidem trotzdem umgehen — mehr als zwei Indizes je Zeile erlaubt `NodeCrossingStore.load()` ausdrücklich, und fällt eine Kreuzung auf ein Stripe-Ende, darf der Eintrag in der Arbeitsliste nur **einmal** vorkommen.
-
 ### 2.2 Was verworfen wird
 
 - **Höhe / Z.** Bei einem Netz über Kopf trägt die Höhe zum Vierkanal-Klang nichts bei; vier Lautsprecher in einer Ebene können sie nicht darstellen. Alle Positionen sind 2D. Das ist der Grund, weshalb 2D erster Ordnung in Teil 3 die passende Ambisonic-Ordnung ist.
 - **Kamera-gestützte Erfassung.** Ausdrücklich als nächster Schritt festgehalten, siehe 7.
 - **Globale Ausgleichsrechnung über alle Anker.** Siehe 7.
+
+### 2.3 Alle abgeleiteten Zahlen werden gerechnet, nicht verdrahtet
+
+`data/nodeCrossings.txt` **wächst während der Kalibrierung**. Am 2026-07-30 um 02:18 standen 23 Kreuzungen darin, um 03:40 waren es 77 (Commit `cb91024`, „calibration complete"). Keine Zahl, die von der Kreuzungszahl abhängt, darf im Code oder in einem Test als Konstante stehen.
+
+Es gilt, mit `C` als Zahl der Kreuzungen und `S = 30` Stripes:
+
+```
+LED-Anker gesamt        = 2*S + 2*C     (jede Kreuzung hat genau zwei LEDs)
+Arbeitslisten-Eintraege = 2*S +   C     (eine Kreuzung ist EIN Eintrag, siehe 4.1)
+Klicks                  = 2*S +   C     (identisch - ein Eintrag, ein Klick)
+```
+
+Bei C = 77 sind das 214 LED-Anker und 137 Einträge. Bei C = 23 waren es 106 und 83. Beide Zahlen stehen hier nur als Beispiel; verlässlich ist die Formel.
+
+Für die Tests heisst das: **kleine synthetische Vorgaben**, keine Prüfung gegen `data/nodeCrossings.txt`. Ein Test, der 137 erwartet, ist beim nächsten `S` im Kalibriermodus rot — ohne dass jemand einen Fehler gemacht hätte.
+
+Geprüft am Stand von `cb91024`: alle Zeilen der Datei haben genau **zwei** Indizes, und keine Kreuzungs-LED liegt auf einem Stripe-Ende (LED 0 oder 599). Der Kern muss mit beidem trotzdem umgehen — mehr als zwei Indizes je Zeile erlaubt `NodeCrossingStore.load()` ausdrücklich, und fällt eine Kreuzung auf ein Stripe-Ende, verschmilzt sie mit dessen Eintrag statt einen zweiten zu erzeugen.
 
 ## 3. Teil 1 — Positionskern
 
@@ -222,19 +222,19 @@ Aufgerufen aus `setup()` und aus beiden Kalibrierwerkzeugen bei `R`, jeweils dir
 
 Ein eigener Modus, mit `p`/`P` an und aus, **gegenseitig ausschliessend** mit dem Kalibriermodus: `p` schaltet `calibrationMode` aus, `c` schaltet `positionMode` aus. Ohne das kollidieren die Tastenbelegungen, die sich beide auf `,` `.` `S` `R` `F` `L` stützen.
 
-Neue Klasse `LedPositionCalibration.java`, `implements runnableLedEffect`, **nicht** über `mixer.addEffect(...)` registriert — `draw()` ruft `drawMe()` direkt auf und ersetzt damit die Mixer-Ausgabe für diesen Frame, genau wie `NodeCalibration` es tut.
+Neue Klasse `LedPositionCalibration.java`. Sie hat `LedColor[] drawMe()` und `String getName()`, deklariert aber **kein** `implements runnableLedEffect` — und ist selbstverständlich nicht über `mixer.addEffect(...)` registriert. `draw()` ruft `drawMe()` direkt auf und ersetzt damit die Mixer-Ausgabe für diesen Frame, genau wie bei `NodeCalibration`.
+
+Das Weglassen des Interfaces ist keine Nachlässigkeit, sondern die Bedingung dafür, dass die Klasse prüfbar ist. `runnableLedEffect` ist in `mixer.java` deklariert; `mixer.java` braucht `RemoteControlledFloatParameter` aus `AbstractParameter.java`, und das importiert `oscP5` und `netP5`. Eine Klasse, die das Interface nennt, zieht damit die ganze Kette in die Übersetzung und lässt sich von `test/run.sh` nicht mehr bauen — nachgeprüft, `javac` gegen `core.jar` allein bricht bei `mixer.java:10` mit `cannot find symbol: class RemoteControlledFloatParameter` ab. Da `imPulse.pde` `drawMe()` ohnehin direkt aufruft und nie über den Mixer geht, kostet das Weglassen nichts. `NodeCalibration` nennt das Interface, ist aber aus genau diesem Grund auch nicht getestet.
 
 Arbeitsteilung wie beim bestehenden HUD: die Klasse hält Zustand und Logik processing-frei (Arbeitsliste, aktueller Eintrag, Schrittweite, Umrechnung Fläche ↔ Meter, `hudText()`) und liefert über `drawMe()` den LED-Puffer. Das Zeichnen der Draufsicht-Fläche macht `imPulse.pde`, so wie es heute den HUD-Text zeichnet.
 
 ### 4.1 Arbeitsliste
 
-**Ein Eintrag je LED-Anker**, sortiert nach Stripe und darin nach Index in Stripe: pro Stripe LED 0, dann die Kreuzungs-LEDs dieses Stripes aufsteigend, dann LED 599. Fällt eine Kreuzung genau auf LED 0 oder 599, steht sie nur **einmal** in der Liste.
+**Ein Eintrag ist ein physischer Punkt, nicht eine LED.** Eine Kreuzung ist damit **ein** Eintrag, der zwei (oder mehr) LEDs trägt; ein Stripe-Ende ein Eintrag mit einer LED. Fällt eine Kreuzung genau auf LED 0 oder 599, verschmilzt sie mit dem Eintrag dieses Stripe-Endes. Die Länge ist `2*numStripes + Anzahl Kreuzungen`, siehe 2.3 — gerechnet, nie verdrahtet, und bei `R` neu gebaut, damit während der Sitzung aufgenommene Kreuzungen auftauchen.
 
-Eine Kreuzung erscheint damit **zweimal** in der Liste — einmal auf jedem beteiligten Stripe. Das ist Absicht: arbeitest du Stripe 7 ab, willst du alle seine Anker in Reihenfolge sehen, auch die schon bekannten, weil sich daran die Form des Strangs prüfen lässt. Nur einer der beiden Einträge braucht einen Klick; beim zweiten meldet das HUD „bereits bekannt" und man blättert weiter.
+Das ist die Auflösung einer Zweideutigkeit, die es sonst gäbe: zählte ein Eintrag je LED, stünde jede Kreuzung zweimal in der Liste und man müsste denselben physischen Punkt zweimal ansteuern, wobei der zweite Besuch nur „bereits bekannt" melden könnte. Mit dem physischen Punkt als Eintrag entfällt dieser Zustand ganz, jeder Eintrag braucht genau einen Klick, und `drawMe()` kann **alle** LEDs des Eintrags blinken lassen — an einer Kreuzung markieren damit zwei LEDs auf zwei Stripes denselben Punkt, was ihn im Netz deutlich besser auffindbar macht als eine.
 
-Die Länge ist `2*numStripes + Summe der LEDs aller Kreuzungen`, siehe 2.3 — sie wird gerechnet, nie verdrahtet, und die Liste wird bei `R` neu gebaut, damit während der Sitzung aufgenommene Kreuzungen auftauchen.
-
-Die Sortierung nach Stripe ist ebenfalls Absicht: sobald zwei Punkte eines Stripes stehen, sind alle weiteren vorgeschlagen.
+**Sortierung:** nach dem kleinsten LED-Index des Eintrags, also nach Stripe und darin aufsteigend. Eine Kreuzung erscheint dadurch unter dem Stripe ihrer kleineren LED. Die Sortierung ist Absicht — man arbeitet einen Stripe ab, und sobald zwei Punkte eines Stripes stehen, sind alle weiteren vorgeschlagen. Dass eine Kreuzung nicht auch unter ihrem zweiten Stripe auftaucht, kostet nichts: die Polylinie aus 4.4 zeichnet den Verlauf des aktuellen Stripes über **alle** seine Anker, gleich unter welchem Eintrag sie gesetzt wurden.
 
 ```java
 class LedPositionCalibration implements runnableLedEffect {
@@ -277,9 +277,9 @@ Mausklicks **ausserhalb** der Fläche werden verworfen, damit ein Klick ins HUD 
 
 In dieser Reihenfolge, spätere Regeln überschreiben frühere:
 
-1. **Alle Stripes ausser dem aktuellen** zeigen den Zustand der Map: schwach **blau**, wo `isInterpolated` gilt, schwach **rot**, wo die Position nur durch Fortsetzung des Vektors geraten ist, **dunkel**, wo sie undefiniert ist.
-2. **Der Stripe des aktuellen Eintrags** glimmt über die ganze Länge schwach **grün**, damit er im Netz auffindbar ist — die Map-Farben treten hier zurück, sonst wäre er nicht von den anderen zu unterscheiden.
-3. **Die LED des aktuellen Eintrags blinkt weiss**, 400 ms an, 400 ms aus, wie die Auswahl in `NodeCalibration`.
+1. **Alle Stripes** zeigen den Zustand der Map: schwach **blau**, wo `isInterpolated` gilt, schwach **rot**, wo die Position nur durch Fortsetzung des Vektors geraten ist, **dunkel**, wo sie undefiniert ist.
+2. **Jeder Stripe, der eine LED des aktuellen Eintrags trägt**, glimmt über die ganze Länge schwach **grün** — die Map-Farben treten dort zurück, sonst wäre er von den anderen nicht zu unterscheiden. Bei einem Kreuzungs-Eintrag sind das **zwei** Stripes, bei einem Stripe-Ende einer.
+3. **Alle LEDs des aktuellen Eintrags blinken weiss**, 400 ms an, 400 ms aus, wie die Auswahl in `NodeCalibration`. An einer Kreuzung markieren damit zwei LEDs denselben physischen Punkt — genau der Grund für den Zuschnitt der Arbeitsliste in 4.1.
 
 Damit ist am Netz selbst zu sehen, wo noch Arbeit liegt: rot verschwindet, sobald beide Enden eines Stripes gesetzt sind. Wo die Abdeckung des aktuellen Stripes stehen bleibt, sagt der Bericht auf `T`.
 
@@ -319,6 +319,8 @@ Der gedrosselte Positionsstrom der reisenden Impulse.
 `TravellingActivation` bekommt ein `final int id` aus einem Zähler der Effekt-Instanz. `TravellingActivationFiller` erbt die ID des Elternimpulses — Filler sind Zeichenhilfen und werden im selben Frame wieder entfernt, tauchen also im Strom nicht auf.
 
 Kinder an einem Knoten bekommen **neue** IDs. Der Elternimpuls stirbt dort tatsächlich (`activationEncounteredNode` gibt `true` zurück und der Aufrufer trägt ihn nicht wieder ein), also hört die Klangseite einen Klang enden und mehrere neue beginnen. Das entspricht dem Vorgang.
+
+Die seit Commit `1e49346` vorhandenen **Ambient-Spawns** (`spawnRandomImpulses()`, `/net/randomSpawn/*`) brauchen dafür keine Sonderbehandlung: sie erzeugen gewöhnliche `TravellingActivation`-Objekte über denselben Konstruktor und bekommen ihre ID damit automatisch. Sie erscheinen im Strom wie jeder andere Impuls — das ist erwünscht, denn genau diese Impulse laufen im Ruhezustand der Installation und sollen klanglich wandern.
 
 Zwei neue Parameter, die von selbst in `remoteSettings.txt` auftauchen:
 
@@ -470,9 +472,10 @@ Drei neue Suiten in `test/run.sh`, dessen Übersetzungsliste um `LedAnchorStore.
 
 **`LedPositionCalibrationTest`**
 
-- Länge und Reihenfolge der Arbeitsliste an einer **kleinen synthetischen Vorgabe** (etwa 4 Stripes, 2 Kreuzungen → 2·4 + 2·2 = 12 Einträge), sortiert nach Stripe und Index. Nicht gegen `data/nodeCrossings.txt` prüfen, siehe 2.3
-- eine Kreuzung genau auf LED 0 eines Stripes erzeugt nur einen Eintrag, keinen doppelten
+- Länge und Reihenfolge der Arbeitsliste an einer **kleinen synthetischen Vorgabe** (4 Stripes, 2 Kreuzungen → 2·4 + 2 = 10 Einträge), sortiert nach dem kleinsten LED-Index. Nicht gegen `data/nodeCrossings.txt` prüfen, siehe 2.3
+- eine Kreuzung genau auf LED 0 eines Stripes verschmilzt mit dem Eintrag des Stripe-Endes und erzeugt keinen doppelten
 - eine neu hinzugefügte Kreuzung erscheint nach dem Neuaufbau der Liste als offener Eintrag an der richtigen Stelle
+- ein Eintrag einer Kreuzung trägt beide LEDs, ein Eintrag eines Stripe-Endes genau eine
 - `o` springt zum nächsten offenen Eintrag und bleibt stehen, wenn keiner mehr folgt
 - `,` am Listenanfang und `.` am Listenende bleiben stehen, kein Umlauf
 - Rundlauf `worldToPane` → `paneToWorld` auf Pixelgenauigkeit, an allen vier Ecken und in der Mitte
