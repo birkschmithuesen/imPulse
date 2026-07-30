@@ -33,15 +33,15 @@
 
 // Grundnote + Oktavbereich: angenehm hörbarer Bereich, nicht zu tief/schrill.
 // C4 (MIDI 60) als Basis, 3 Oktaven Spielraum nach oben -> ~262 Hz bis ~1976 Hz.
-~rootMidiNote = 60;
+~rootMidiNote = 72; // eine Oktave hoeher (+12 Halbtoene), Birk vor Ort 2026-07-31
 ~numOctaves = 3;
 ~notesPerOctaveSet = ~pentatonicSteps.size * ~numOctaves;
 
 // Lautstärke-Mapping: eingehende "energy" (aus imPulse, kann > 1 sein,
 // siehe CLAUDE.md "Farbwerte 0..1, Werte >1 erlaubt") auf einen sinnvollen
 // Amp-Bereich clampen.
-~minAmp = 0.08;
-~maxAmp = 0.5;
+~minAmp = 0.16; // +6dB (Faktor x2), Birk vor Ort 2026-07-31
+~maxAmp = 1.0; // +6dB (Faktor x2), Birk vor Ort 2026-07-31
 
 // Zwei globale Klangregler, seit dem Preset-System (2026-07-30) per OSC
 // steuerbar. Sie decken die Achse ab, die "hang drum slow" von "bells"
