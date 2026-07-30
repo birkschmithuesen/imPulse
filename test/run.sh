@@ -31,6 +31,7 @@ SOURCES="LedColor.java ArtNetOutput.java"
 [ -f LedPositionMap.java ] && SOURCES="$SOURCES LedPositionMap.java"
 [ -f LedPositionCalibration.java ] && SOURCES="$SOURCES LedPositionCalibration.java"
 [ -f ImpulseOscThrottle.java ] && SOURCES="$SOURCES ImpulseOscThrottle.java"
+[ -f PresetStore.java ] && SOURCES="$SOURCES PresetStore.java"
 
 javac -nowarn -cp "$CORE" -d build $SOURCES test/*.java
 
@@ -44,7 +45,8 @@ if [ "$#" -eq 0 ]; then
   # als unversionierte Arbeitskopie vor und fehlt auf einem frischen Klon.
   set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest
   for optional in NodeSelectionTest LedAnchorStoreTest LedPositionMapTest \
-                  LedPositionCalibrationTest ImpulseOscThrottleTest; do
+                  LedPositionCalibrationTest ImpulseOscThrottleTest \
+                  PresetStoreTest; do
     if [ -f "test/$optional.java" ]; then
       set -- "$@" "$optional"
     else
