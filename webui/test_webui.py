@@ -131,6 +131,13 @@ class GroupingTest(unittest.TestCase):
         # docs/webui-parameter-review-2026-07-30.md Abschnitt 2)
         self.assertEqual(group_key("/net/impulse/color/gamma"), "net/impulse/color")
         self.assertEqual(group_key("/net/impulse/fadeOut/r"), "net/impulse/color")
+        # dasselbe fuer die Sinus-Randomizer: ohne den Sonderfall schneidet
+        # group_key() nach zwei Segmenten ab und sie landeten unter
+        # "net/impulse", zwischen den Reglern, die sie steuern
+        self.assertEqual(group_key("/net/impulse/speed/randomize/enabled"),
+                         "net/impulse/randomize")
+        self.assertEqual(group_key("/net/impulse/lifetime/randomize/period"),
+                         "net/impulse/randomize")
         self.assertEqual(group_key("/net/randomSpawn/interval"), "net/randomSpawn")
         self.assertEqual(group_key("/net/activateNode"), "net")
         self.assertEqual(group_key("/nodes/colors/outer/fired/Hue"), "nodes/colors")
@@ -153,6 +160,43 @@ class GroupingTest(unittest.TestCase):
         self.assertEqual(color_addrs, {"/net/impulse/color/r", "/net/impulse/fadeOut/r"})
         # speed bleibt in der Bewegungs-Gruppe, nicht in Impuls-Farbe
         self.assertNotIn("/net/impulse/speed", color_addrs)
+
+    def test_randomizer_group_is_separate_and_keeps_its_toggles(self):
+        text = "\n".join([
+            "int\t/net/impulse/speed\td\t16\t1\t1500",
+            "float\t/net/impulse/lifetime\td\t0.02\t0.0001\t1",
+            "int\t/net/impulse/speed/randomize/enabled\td\t0\t0\t1",
+            "int\t/net/impulse/speed/randomize/min\td\t16\t1\t1500",
+            "int\t/net/impulse/speed/randomize/max\td\t160\t1\t1500",
+            "float\t/net/impulse/speed/randomize/period\td\t30\t1\t300",
+            "int\t/net/impulse/lifetime/randomize/enabled\td\t0\t0\t1",
+            "float\t/net/impulse/lifetime/randomize/min\td\t0.005\t0.0001\t1",
+            "float\t/net/impulse/lifetime/randomize/max\td\t0.05\t0.0001\t1",
+            "float\t/net/impulse/lifetime/randomize/period\td\t20\t1\t300",
+        ])
+        groups = {g["key"]: g for g in build_groups(parse_settings(text))}
+        self.assertIn("net/impulse/randomize", groups)
+        self.assertEqual(groups["net/impulse/randomize"]["title"],
+                         "Impuls-Randomizer (Sinus)")
+        widgets = {c["address"]: c["widget"]
+                   for c in groups["net/impulse/randomize"]["controls"]}
+        self.assertEqual(len(widgets), 8)
+        self.assertEqual(widgets["/net/impulse/speed/randomize/enabled"], "toggle")
+        self.assertEqual(widgets["/net/impulse/lifetime/randomize/enabled"], "toggle")
+        self.assertEqual(widgets["/net/impulse/speed/randomize/max"], "slider")
+        # die gesteuerten Parameter selbst bleiben in der Bewegungs-Gruppe
+        moved = {c["address"] for c in groups["net/impulse"]["controls"]}
+        self.assertEqual(moved, {"/net/impulse/speed", "/net/impulse/lifetime"})
+
+    def test_randomizer_group_sorts_between_impuls_and_impuls_farbe(self):
+        text = "\n".join([
+            "int\t/net/impulse/speed\td\t16\t1\t1500",
+            "float\t/net/impulse/color/r\td\t1.0\t0\t1",
+            "int\t/net/impulse/speed/randomize/enabled\td\t0\t0\t1",
+        ])
+        keys = [g["key"] for g in build_groups(parse_settings(text))]
+        self.assertEqual(keys, ["net/impulse", "net/impulse/randomize",
+                                "net/impulse/color"])
 
     def test_color_triple_becomes_one_control(self):
         groups = {g["key"]: g for g in build_groups(parse_settings(SAMPLE))}

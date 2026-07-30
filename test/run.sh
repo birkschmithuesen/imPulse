@@ -31,6 +31,7 @@ SOURCES="LedColor.java ArtNetOutput.java"
 [ -f LedPositionMap.java ] && SOURCES="$SOURCES LedPositionMap.java"
 [ -f LedPositionCalibration.java ] && SOURCES="$SOURCES LedPositionCalibration.java"
 [ -f ImpulseOscThrottle.java ] && SOURCES="$SOURCES ImpulseOscThrottle.java"
+[ -f ParameterOscillator.java ] && SOURCES="$SOURCES ParameterOscillator.java"
 [ -f PresetStore.java ] && SOURCES="$SOURCES PresetStore.java"
 [ -f PresetScheduler.java ] && SOURCES="$SOURCES PresetScheduler.java"
 
@@ -47,7 +48,7 @@ if [ "$#" -eq 0 ]; then
   set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest
   for optional in NodeSelectionTest LedAnchorStoreTest LedPositionMapTest \
                   LedPositionCalibrationTest ImpulseOscThrottleTest \
-                  PresetStoreTest PresetSchedulerTest; do
+                  PresetStoreTest PresetSchedulerTest ParameterOscillatorTest; do
     if [ -f "test/$optional.java" ]; then
       set -- "$@" "$optional"
     else

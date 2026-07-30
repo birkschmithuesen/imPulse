@@ -73,13 +73,14 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle fünf Suiten:
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript, darunter:
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
 - `NodeCrossingStoreTest` — Validierung, Undo, Laden/Speichern der Kreuzungsdatei, inklusive `clearAll()` und `removeAt()` (auch die Verschiebung von `loadedCount`, wenn ein geladener Eintrag gelöscht wird)
 - `ApplyCrossingsTest` — `LedInNetInfo.applyCrossings` baut die Node-Zuordnung korrekt neu auf, auch beim wiederholten Aufruf mit weniger Kreuzungen
 - `NodeSelectionTest` — der Auswahlzeiger der Kalibrierung: Blättern, Aufheben am Anfang, Klemmen bei schrumpfender Liste
+- `ParameterOscillatorTest` — die Sinus-Formel der Speed-/Lifetime-Randomizer: Phasenlage, Periodizität, Einhalten von min/max, entartete Perioden, Zurücksetzen der Phase beim Wiedereinschalten
 
 Daneben liegen im selben Ordner drei Sonden, die **echte Hardware ansprechen** und deshalb nicht Teil der Default-Suite sind: `TimingProbe` (misst den 40-Hz-Sendetakt am echten Netz), `PollProbe` (fragt die Controller per ArtPoll nach ihrem Befinden ab) und `PatternProbe` (speist die fünf Testbilder direkt über `ArtNetOutput` ein, ohne Processing-Laufzeit). Diese drei gezielt einzeln aufrufen, z. B. `test/run.sh TimingProbe`, niemals ungefragt gegen die Installation.
 
@@ -169,6 +170,50 @@ damit random gespawnte und tube-getriggerte Impulse gleich schnell wirken.
 Gespawnte Impulse sind normale `TravellingActivation`-Objekte und laufen
 durch dieselbe Node-Kollisions-/Energie-Decay-/Render-Pipeline wie alle
 anderen Impulse.
+
+**Sinus-Randomizer für Speed und Lifetime** (`ParameterOscillator.java`,
+angewandt in `applyRandomizers()` am Anfang von `drawMe()`): `/net/impulse/speed`
+und `/net/impulse/lifetime` können ihren Wert automatisch zwischen einem Min und
+Max hin- und herschwingen lassen, statt fest zu stehen — damit sich die Optik bei
+vielen gleichzeitig aktiven Impulsen von selbst leicht verändert, ohne zu
+springen (Birk, 2026-07-31). Beide Randomizer sind **unabhängig**, es gibt keinen
+gemeinsamen Takt; je vier Parameter, Auslieferungszustand **aus**:
+
+- `/net/impulse/speed/randomize/enabled` (int 0/1, default 0), `.../min` (int,
+  1..1500, default 16), `.../max` (int, 1..1500, default 160), `.../period`
+  (float Sekunden, 1..300, default 30)
+- `/net/impulse/lifetime/randomize/enabled` (int 0/1, default 0), `.../min`
+  (float, 0.0001..1, default 0.005), `.../max` (float, 0.0001..1, default 0.05),
+  `.../period` (float Sekunden, 1..300, default 20)
+
+Formel (`ParameterOscillator.sineOscillate`, reine Mathe, deshalb in
+`test/run.sh` geprüft — `ParameterOscillatorTest`):
+`wert = min + (max-min) * (0.5 + 0.5*sin(2*PI*t/period))`. `period` ist die Dauer
+eines vollen Auf-Ab-Zyklus in **Sekunden**, nicht Hz. `t` läuft **ab dem
+Einschalten**, nicht ab Sketch-Start: jeder Randomizer beginnt damit
+reproduzierbar in der Mitte seines Bereichs und steigt: Ausschalten setzt die
+Phase zurück (`reset()`).
+
+Drei Dinge, die man beim Ändern kennen muss:
+- Bei `enabled=1` wird der **zugrundeliegende Parameter selbst** per
+  `setValue()` überschrieben, nicht ein Schattenwert nur für den Frame. Nur so
+  steht der gerade gefahrene Wert auch in `remoteSettings.txt` und in einem
+  gespeicherten Preset. Ein manuelles Nachjustieren während `enabled=1` wird im
+  nächsten Frame wieder überschrieben — gewollt. Der **Web-UI-Regler folgt
+  trotzdem nicht live**: es gibt keinen OSC-Rückkanal zum UI, die Anzeige zeigt
+  weiter den zuletzt gesendeten Wert. Sichtbar wird der oszillierende Wert erst
+  im nächsten Dump/Preset.
+- Die Ranges von `min`/`max` sind bewusst identisch mit denen des jeweiligen
+  Zielparameters, deshalb kann der Oszillator dort nichts Ungültiges setzen.
+  `sineOscillate` liefert bei unbrauchbarer Periode (0, negativ, NaN) die Mitte
+  zwischen min und max statt NaN.
+- Bei `enabled=0` ändert sich am bisherigen Verhalten nichts.
+
+Im Web-UI bilden die acht Adressen eine eigene Sektion „Impuls-Randomizer
+(Sinus)" zwischen `/net/impulse` und Impuls-Farbe. Das ist ein Eintrag in
+`SPLIT_GROUP_PREFIXES` (`server.py`) und **kein** Selbstläufer: die generische
+Präfix-Regel schneidet nach zwei Segmenten ab, ohne den Sonderfall stünden alle
+acht Regler zwischen den vier Reglern, die sie steuern.
 
 ### Preset-System (PresetStore.java, PresetScheduler.java, PresetManager.java)
 

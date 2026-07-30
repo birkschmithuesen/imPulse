@@ -56,6 +56,28 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledIntParameter impulseEnergyExponent; // Exponent applied to input volume provided by /tube/trigger
   RemoteControlledIntParameter impulseSpeed; // speed (leds/second)
 
+  // Optionaler Sinus-Randomizer je Parameter (Speed und Lifetime unabhaengig,
+  // kein gemeinsamer Takt). Bei enabled=1 UEBERSCHREIBT der Oszillator den
+  // manuell gesetzten Wert in jedem Frame:
+  //   wert = min + (max-min) * (0.5 + 0.5*sin(2*PI*t/period))
+  // t laeuft ab dem Einschalten, period ist die Dauer eines vollen Auf-Ab-
+  // Zyklus in Sekunden (nicht Hz). Bei enabled=0 passiert gar nichts, der
+  // Parameter bleibt wie bisher rein manuell steuerbar.
+  //
+  // Die min/max-Ranges sind bewusst dieselben wie die des jeweiligen
+  // Zielparameters - deshalb kann der Oszillatorwert nicht ausserhalb von
+  // dessen Bereich landen und braucht beim setValue() keine zweite Klemmung.
+  RemoteControlledIntParameter speedRandomizeEnabled;
+  RemoteControlledIntParameter speedRandomizeMin;
+  RemoteControlledIntParameter speedRandomizeMax;
+  RemoteControlledFloatParameter speedRandomizePeriod;
+  RemoteControlledIntParameter lifetimeRandomizeEnabled;
+  RemoteControlledFloatParameter lifetimeRandomizeMin;
+  RemoteControlledFloatParameter lifetimeRandomizeMax;
+  RemoteControlledFloatParameter lifetimeRandomizePeriod;
+  final ParameterOscillator speedOscillator = new ParameterOscillator();
+  final ParameterOscillator lifetimeOscillator = new ParameterOscillator();
+
   RemoteControlledFloatParameter impulseGamma= new RemoteControlledFloatParameter("/net/impulse/color/gamma", 0f, 0.1f, 5f);
 
   RemoteControlledIntParameter impulseUseRemoteCol; 
@@ -103,6 +125,18 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     impulseLifetime= new RemoteControlledFloatParameter("/net/impulse/lifetime", 0.02f, 0.0001f, 1f);
     impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 16, 1, 1500);
     impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
+
+    // Randomizer: Auslieferungszustand aus (0), ein Operator schaltet ihn live
+    // per OSC/Web-UI ein. Die Defaults spannen einen Bereich um den jeweiligen
+    // Arbeitspunkt (speed 16, lifetime 0.02) auf.
+    speedRandomizeEnabled= new RemoteControlledIntParameter("/net/impulse/speed/randomize/enabled", 0, 0, 1);
+    speedRandomizeMin= new RemoteControlledIntParameter("/net/impulse/speed/randomize/min", 16, 1, 1500);
+    speedRandomizeMax= new RemoteControlledIntParameter("/net/impulse/speed/randomize/max", 160, 1, 1500);
+    speedRandomizePeriod= new RemoteControlledFloatParameter("/net/impulse/speed/randomize/period", 30f, 1f, 300f);
+    lifetimeRandomizeEnabled= new RemoteControlledIntParameter("/net/impulse/lifetime/randomize/enabled", 0, 0, 1);
+    lifetimeRandomizeMin= new RemoteControlledFloatParameter("/net/impulse/lifetime/randomize/min", 0.005f, 0.0001f, 1f);
+    lifetimeRandomizeMax= new RemoteControlledFloatParameter("/net/impulse/lifetime/randomize/max", 0.05f, 0.0001f, 1f);
+    lifetimeRandomizePeriod= new RemoteControlledFloatParameter("/net/impulse/lifetime/randomize/period", 20f, 1f, 300f);
 
     impulseUseRemoteCol = new RemoteControlledIntParameter("/net/impulse/color/useRemoteCol", 1, 0, 1);
     impulseR= new RemoteControlledFloatParameter("/net/impulse/color/r", 1, 0, 1); // color of travelling impulse
@@ -253,6 +287,9 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     double currentTime=(double)System.currentTimeMillis()/1000;
     float timeStep=(float) (currentTime-lastCyclePos);
     lastCyclePos=currentTime;
+    // vor jeder Nutzung von impulseSpeed/impulseLifetime in diesem Frame -
+    // auch spawnRandomImpulses() liest impulseSpeed
+    applyRandomizers(currentTime);
     float speed=impulseSpeed.getValue();
 
     spawnRandomImpulses(currentTime);
@@ -427,6 +464,31 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       myMessage.add(positionMap.y(ledIndex));
       myMessage.add(a.energy);
       oscP5.send(myMessage, remoteLocation);
+    }
+  }
+
+  // Sinus-Randomizer fuer Speed und Lifetime, siehe /net/impulse/*/randomize/*
+  // in CLAUDE.md und ParameterOscillator.
+  //
+  // Gesetzt wird bewusst der zugrundeliegende Parameter selbst, nicht ein
+  // Schattenwert nur fuer diesen Frame: nur so steht der gerade gefahrene Wert
+  // auch in remoteSettings.txt und in einem gespeicherten Preset. Ein manuelles
+  // Nachjustieren waehrend enabled=1 wird dadurch im naechsten Frame wieder
+  // ueberschrieben - gewollt.
+  private void applyRandomizers(double currentTime) {
+    if (speedRandomizeEnabled.getValue() == 1) {
+      float value=speedOscillator.value(currentTime, speedRandomizePeriod.getValue(),
+          speedRandomizeMin.getValue(), speedRandomizeMax.getValue());
+      impulseSpeed.setValue(Math.round(value)); // runden, nicht abschneiden
+    } else {
+      speedOscillator.reset(); // Wiedereinschalten faengt einen frischen Zyklus an
+    }
+    if (lifetimeRandomizeEnabled.getValue() == 1) {
+      impulseLifetime.setValue(lifetimeOscillator.value(currentTime,
+          lifetimeRandomizePeriod.getValue(), lifetimeRandomizeMin.getValue(),
+          lifetimeRandomizeMax.getValue()));
+    } else {
+      lifetimeOscillator.reset();
     }
   }
 

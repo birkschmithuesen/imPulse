@@ -97,6 +97,7 @@ GROUP_ORDER = [
     "Master",
     "Master/opacity",
     "net/impulse",
+    "net/impulse/randomize",
     "net/impulse/color",
     "net/randomSpawn",
     "net",
@@ -108,14 +109,18 @@ GROUP_ORDER = [
 
 # Adress-Praefixe, die aus ihrer regulaeren group_key()-Gruppe herausgezogen
 # und in eine eigene Gruppe verschoben werden -- unabhaengig von der
-# generischen Praefix-Regel. Bisher nur fuer die Trennung Impuls/Impuls-Farbe
-# gebraucht: /net/impulse/color/* und /net/impulse/fadeOut/* landen sonst in
-# derselben Gruppe wie speed/nodeDeadTime/lifetime (reine Adress-Praefix-
-# Gruppierung wuerde alles unter /net/impulse zusammenwerfen). Reihenfolge
-# wichtig: laengster/spezifischster Praefix zuerst, damit z.B.
-# "/net/impulse/color/gamma" nicht faelschlich unter einem kuerzeren
+# generischen Praefix-Regel. Gebraucht fuer die Trennung Impuls/Impuls-Farbe
+# (/net/impulse/color/* und /net/impulse/fadeOut/* landen sonst in derselben
+# Gruppe wie speed/nodeDeadTime/lifetime) und fuer die Sinus-Randomizer: die
+# generische Regel schneidet nach zwei Segmenten ab, /net/impulse/speed/
+# randomize/enabled bekaeme also ebenfalls den Schluessel "net/impulse" und
+# die acht Randomizer-Regler stuenden zwischen den vier Reglern, die sie
+# steuern. Reihenfolge wichtig: laengster/spezifischster Praefix zuerst, damit
+# z.B. "/net/impulse/color/gamma" nicht faelschlich unter einem kuerzeren
 # "/net/impulse"-Eintrag landet, falls der je hinzukaeme.
 SPLIT_GROUP_PREFIXES: List[Tuple[str, str]] = [
+    ("/net/impulse/speed/randomize/", "net/impulse/randomize"),
+    ("/net/impulse/lifetime/randomize/", "net/impulse/randomize"),
     ("/net/impulse/color/", "net/impulse/color"),
     ("/net/impulse/fadeOut/", "net/impulse/color"),
 ]
@@ -520,6 +525,7 @@ def group_sort_key(key: str) -> Tuple[int, str]:
 # als Titel hergeben (z.B. "net/impulse/color" statt "/net/impulse/color").
 GROUP_TITLE_OVERRIDES = {
     "net/impulse/color": "Impuls-Farbe",
+    "net/impulse/randomize": "Impuls-Randomizer (Sinus)",
 }
 
 
