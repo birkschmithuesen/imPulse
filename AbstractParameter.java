@@ -44,6 +44,26 @@ class OscMessageDistributor {
 																					/// easy handling of message
 																					/// distribution
 
+	// Reihenfolge-erhaltende Liste ausschliesslich fuer Presets. Fuer die
+	// Verteilung der Nachrichten ist die Reihenfolge gleichgueltig, deshalb ist
+	// allInstances ein HashSet. Fuer Preset-Dateien ist sie nicht gleichgueltig
+	// - PresetStore.write() sortiert am Ende nach Adresse, aber eine
+	// wiederholbare Aufzaehlung macht die Fehlersuche erheblich einfacher.
+	//
+	// Nur die drei RemoteControlled*Parameter-Klassen tragen sich hier ein.
+	// LedNetworkTransportEffect ist ein OscMessageSink, aber kein
+	// PresetTarget: seine Adressen /net/activateNode und /net/activateStripe
+	// sind Kommandos und koennen so nicht in ein Preset geraten.
+	static ArrayList<PresetTarget> presetTargets = new ArrayList<PresetTarget>();
+
+	public static void registerPresetTarget(PresetTarget _target) {
+		presetTargets.add(_target);
+	}
+
+	public static ArrayList<PresetTarget> presetTargets() {
+		return presetTargets;
+	}
+
 	// register any MessageSink in the distributer
 	public static void registerAdress(String _adress, OscMessageSink _oscMessageSink) {
 		allInstances.add(_oscMessageSink);
@@ -86,12 +106,13 @@ class OscMessageDistributor {
 //////////////////////////////////////////////////////////////////////////
 // If the Incoming Value should be an Float, this class handels the value
 //////////////////////////////////////////////////////////////////////////
-class RemoteControlledFloatParameter extends FloatParameter implements OscMessageSink { //
+class RemoteControlledFloatParameter extends FloatParameter implements OscMessageSink, PresetTarget { //
 	String oscAdress;
 
 	RemoteControlledFloatParameter(String _oscAdress, float _startValue, float _minValue, float _maxValue) {
 		super(_startValue, _minValue, _maxValue); // super calls the constructor from the class, that it extends from
 		OscMessageDistributor.registerAdress(_oscAdress, this);
+		OscMessageDistributor.registerPresetTarget(this);
 		oscAdress = _oscAdress;
 	}
 
@@ -123,6 +144,25 @@ class RemoteControlledFloatParameter extends FloatParameter implements OscMessag
 		} catch (IOException e) {
 			System.err.println("Could not write to file" + e);
 		}
+	}
+
+	// ---- Preset-Schnittstelle ----
+	// Bewusst nicht ueber digestMessage: dort wird ein eingehender Float von
+	// 0..1 auf min..max gestreckt (siehe oben). Ein gespeicherter Absolutwert
+	// wuerde dabei verfaelscht - /net/impulse/nodeDeadTime (0..10) landete bei
+	// gespeichertem 1.0 als 10.0.
+	public void presetEntries(List<String[]> out) {
+		out.add(new String[] { "float", oscAdress, "space for descripiton",
+				String.valueOf(getValue()), String.valueOf(minValue), String.valueOf(maxValue) });
+	}
+
+	public int applyPreset(String address, float value) {
+		if (!oscAdress.equals(address)) {
+			return PresetStore.PRESET_NOT_MINE;
+		}
+		float clamped = PresetStore.clampToRange(value, minValue, maxValue);
+		setValue(clamped);
+		return (clamped == value) ? PresetStore.PRESET_APPLIED : PresetStore.PRESET_ADJUSTED;
 	}
 }
 
@@ -161,12 +201,13 @@ class FloatParameter extends AbstractParameter { // can save, get and set an Flo
 //////////////////////////////////////////////////////////////////////////
 // If the Incoming Value should be an Int, this class handels the value
 //////////////////////////////////////////////////////////////////////////
-class RemoteControlledIntParameter extends IntParameter implements OscMessageSink { //
+class RemoteControlledIntParameter extends IntParameter implements OscMessageSink, PresetTarget { //
 	String oscAdress;
 
 	RemoteControlledIntParameter(String _oscAdress, int _startValue, int _minValue, int _maxValue) {
 		super(_startValue, _minValue, _maxValue); // super calls the constructor from the class, that it extends from
 		OscMessageDistributor.registerAdress(_oscAdress, this);
+		OscMessageDistributor.registerPresetTarget(this);
 		oscAdress = _oscAdress;
 	}
 
@@ -198,6 +239,27 @@ class RemoteControlledIntParameter extends IntParameter implements OscMessageSin
 		} catch (IOException e) {
 			System.err.println("Could not write to file" + e);
 		}
+	}
+
+	// ---- Preset-Schnittstelle ----
+	public void presetEntries(List<String[]> out) {
+		out.add(new String[] { "int", oscAdress, "space for descripiton",
+				String.valueOf(getValue()), String.valueOf(minValue), String.valueOf(maxValue) });
+	}
+
+	public int applyPreset(String address, float value) {
+		if (!oscAdress.equals(address)) {
+			return PresetStore.PRESET_NOT_MINE;
+		}
+		// Runden statt abschneiden. Der OSC-Weg oben schneidet ab, was bei
+		// exakt geschriebenen Preset-Werten gleichgueltig ist - bei einem von
+		// Hand editierten 4.999 aber nicht.
+		float rounded = Math.round(value);
+		float clamped = PresetStore.clampToRange(rounded, minValue, maxValue);
+		setValue((int) clamped);
+		// Verglichen wird mit dem urspruenglichen Wert, nicht mit dem
+		// gerundeten: auch eine Rundung ist eine Anpassung und soll auffallen.
+		return (clamped == value) ? PresetStore.PRESET_APPLIED : PresetStore.PRESET_ADJUSTED;
 	}
 }
 
@@ -233,7 +295,7 @@ class IntParameter extends AbstractParameter { // can save, get and set an Integ
 //*************************************************************************
 //*************************************************************************
 
-class RemoteControlledColorParameter extends ColorParameter implements OscMessageSink { //
+class RemoteControlledColorParameter extends ColorParameter implements OscMessageSink, PresetTarget { //
 	String oscAdress;
 
 	RemoteControlledColorParameter(String _oscAdress, float _startHue, float _startSaturation, float _startBrightness) {
@@ -242,6 +304,7 @@ class RemoteControlledColorParameter extends ColorParameter implements OscMessag
 		OscMessageDistributor.registerAdress(_oscAdress + "/Hue", this);
 		OscMessageDistributor.registerAdress(_oscAdress + "/Satn", this);
 		OscMessageDistributor.registerAdress(_oscAdress + "/Bright", this);
+		OscMessageDistributor.registerPresetTarget(this);
 		oscAdress = _oscAdress;
 	}
 
@@ -303,6 +366,37 @@ class RemoteControlledColorParameter extends ColorParameter implements OscMessag
 		} catch (IOException e) {
 			System.err.println("Could not write to file" + e);
 		}
+	}
+
+	// ---- Preset-Schnittstelle ----
+	// Ein Farbparameter belegt drei Adressen und liefert deshalb drei Zeilen.
+	// min/max stehen als "0" und "1" da, genau wie in writeToStream() - so
+	// bleibt eine Preset-Datei zeilenweise mit remoteSettings.txt vergleichbar.
+	public void presetEntries(List<String[]> out) {
+		out.add(new String[] { "float", oscAdress + "/Hue", "space for descripiton",
+				String.valueOf(currentHue), "0", "1" });
+		out.add(new String[] { "float", oscAdress + "/Sat", "space for descripiton",
+				String.valueOf(currentSaturation), "0", "1" });
+		out.add(new String[] { "float", oscAdress + "/Bright", "space for descripiton",
+				String.valueOf(currentBrightness), "0", "1" });
+	}
+
+	public int applyPreset(String address, float value) {
+		float clamped = PresetStore.clampToRange(value, 0f, 1f);
+		int status = (clamped == value) ? PresetStore.PRESET_APPLIED : PresetStore.PRESET_ADJUSTED;
+		if (address.equals(oscAdress + "/Hue")) {
+			setHue(clamped);
+			return status;
+		}
+		if (address.equals(oscAdress + "/Sat")) {
+			setSaturation(clamped);
+			return status;
+		}
+		if (address.equals(oscAdress + "/Bright")) {
+			setBrightness(clamped);
+			return status;
+		}
+		return PresetStore.PRESET_NOT_MINE;
 	}
 }
 
