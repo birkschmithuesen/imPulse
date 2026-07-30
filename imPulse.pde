@@ -151,12 +151,27 @@ void setup() {
   ledPositionMap = new LedPositionMap(numStripes, numLedsPerStripe, footprintX, footprintY);
   ledPositionMap.apply(ledAnchorStore);
   LedNetworkNode.applyPositions(ledPositionMap, listOfNodes);
-  // Eine Warnzeile, wenn Positionen fehlen. Die Show laeuft dann wie bisher,
-  // nur ohne Raumbezug - jede Koordinate ist (0,0), also die Netzmitte.
-  if (ledPositionMap.undefinedCount() > 0) {
+  // Zwei verschiedene Arten von unfertiger Kalibrierung, beide still - die
+  // Show laeuft in jedem Fall weiter, nur der Raumbezug stimmt nicht.
+  // docs/positionen-anleitung.md verlangt aus der Taste T ausdruecklich
+  // "0 LEDs ohne Position, 0 nur extrapoliert"; hier wird beides geprueft.
+  if (ledPositionMap.undefinedCount() > 0 || ledPositionMap.extrapolatedCount() > 0) {
     System.out.println("WARNUNG: " + ledPositionMap.coverageReport(ledAnchorStore));
-    System.out.println("WARNUNG: diese LEDs senden (0,0) als Klangposition. "
-        + "Positionen mit P aufnehmen, siehe docs/positionen-anleitung.md");
+    if (ledPositionMap.undefinedCount() > 0) {
+      System.out.println("WARNUNG: LEDs ohne Position senden (0,0) als Klangposition, "
+          + "also die Netzmitte.");
+    }
+    if (ledPositionMap.extrapolatedCount() > 0) {
+      // Genau ein Anker je Stripe macht undefinedCount() = 0 und sieht damit
+      // fertig aus, obwohl LedPositionMap.positionOf() dann ALLE LEDs des
+      // Stripes auf diesen einen Punkt legt - 30 Anker statt 18000 Positionen.
+      // Ohne diese Zeile faellt das nirgends auf.
+      System.out.println("WARNUNG: extrapolierte LEDs sind geraten, nicht gestuetzt. "
+          + "Bei nur einem Anker je Stripe faellt der ganze Stripe auf diesen Punkt "
+          + "zusammen. Zwei Anker je Stripe machen daraus eine Interpolation.");
+    }
+    System.out.println("WARNUNG: Positionen mit P aufnehmen, "
+        + "siehe docs/positionen-anleitung.md");
   }
   ledPositionCalibration = new LedPositionCalibration(ledAnchorStore, ledPositionMap,
       crossingStore, listOfNodes, numStripes, numLedsPerStripe,
