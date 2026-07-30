@@ -40,6 +40,22 @@ Signalkette: `Max/MSP --OSC:8001--> Processing --Syphon--> MadMapper --ArtNet-->
   Branch, keine lineare Feature-Historie nötig), aber nur nach expliziter
   Bestätigung durch Birk — nie automatisch/eigenmächtig.
 
+## SuperCollider-Sound-Datei (verbindlich, seit 2026-07-31)
+
+**Es gibt genau EINE SC-Sound-Datei:** `supercollider/klangnetz_bells.scd`.
+Der Windows-Task `KlangnetzBells` startet sie direkt aus diesem Repo-Pfad
+(`C:\Users\birk\Documents\imPulse\supercollider\klangnetz_bells.scd`) — **keine
+lose Kopie im Home-Verzeichnis mehr** (`C:\Users\birk\klangnetz_bells_zoom.scd`
+existierte bis 2026-07-31 parallel und führte zu einer echten Verwechslung:
+eine Analyse der Repo-Datei ergab falsche Tonwerte, weil der Live-Task eine
+andere, abweichende Kopie lud). Details/Änderungshistorie:
+`supercollider/klangnetz_bells.README.md`.
+
+Bei jeder Änderung an der Sound-Logik: **immer nur diese eine Datei anfassen**,
+committen, pushen, auf dem Laptop `git pull` + Task-Neustart (`schtasks /End`
++ `/Run /TN KlangnetzBells`) — kein manuelles Kopieren in ein anderes
+Verzeichnis, das schafft sofort wieder zwei Wahrheiten.
+
 ## Ausführen
 
 Kein Build-System für den Sketch selbst — reines Processing-Projekt. Für die netz- und processingunabhängigen Teile (`ArtNetOutput`, `NodeCrossingStore`, `LedStripeNetworks`, `TestPatterns`) gibt es aber eine eigene Testsuite, siehe „Tests" unten.
