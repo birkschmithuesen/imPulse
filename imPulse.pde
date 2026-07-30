@@ -400,6 +400,23 @@ void keyReleased() {
     nodeCalibration.handleKeyReleased();
   } else {
     nodeCalibration.handleCommand(key);
+    if (key == 'r' || key == 'R') {
+      // Muss NACH handleCommand() laufen: erst dort landen die neuen
+      // Kreuzungen ueber LedInNetInfo.applyCrossings() in listOfNodes.
+      // applyCrossings() baut die LedNetworkNode-Objekte dabei komplett neu
+      // auf, die frischen Knoten haben also posX/posY = 0. Ohne dieses
+      // Nachziehen meldete /net/hitNode ab diesem Moment fuer JEDEN Knoten
+      // (0,0), die Netzmitte - die Klangmaschine legte alle Stimmen auf
+      // denselben Punkt. Auf der Processing-Seite sieht man davon nichts:
+      // kein Fehler, kein sichtbares Symptom, und es bleibt bis zum naechsten
+      // Neustart so. Diese Zeile also nicht wegkuerzen.
+      // reapply() ist hier auch unabhaengig davon richtig: es baut zusaetzlich
+      // die Arbeitsliste des Positionswerkzeugs neu, und die aendert sich
+      // durch eine neue Kreuzung ebenfalls (zwei bisher getrennte Eintraege
+      // verschmelzen zu einem).
+      ledPositionCalibration.reapply();
+      println(ledPositionCalibration.lastMessage());
+    }
   }
 }
 
