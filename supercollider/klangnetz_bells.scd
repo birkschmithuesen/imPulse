@@ -21,6 +21,11 @@
 //  2026-07-31 (Birk, vor Ort): +6dB Gesamtlautstärke (Faktor x2), Limiter
 //    am Summenbus gegen Übersteuerung bei vielen gleichzeitigen Treffern,
 //    Skala eine Quinte höher (+7 Halbtöne, D2->A2 als Grundton).
+//  2026-07-31 (Birk, vor Ort): Lautstärke kurzzeitig -6dB, dann wieder auf
+//    +6dB zurückgesetzt (dritte Korrektur).
+//  2026-07-31 (Birk, vor Ort): Skala von natürlicher Moll (D Kurd) auf
+//    Phrygisch geändert (kleine statt große Sekund als zweite Stufe),
+//    Grundton A2 unverändert.
 // =====================================================================
 (
 s.options.device = "ASIO : ZOOM AMS-24 ASIO Driver";
@@ -29,15 +34,16 @@ s.options.numInputBusChannels = 2;
 
 ~oscListenPort = 8002;
 
-// D Kurd Skala (Handpan/Hang-Drum-Standardskala): D E F G A Bb C
-// = natürliche Moll-Tonleiter ab D. Halbtonabstände von der Grundnote:
-~hangDrumSteps = [0, 2, 3, 5, 7, 8, 10];
+// Phrygisch (Halbtonabstaende von der Grundnote): kleine Sekund statt
+// grosser Sekund als zweite Stufe -- der markanteste Unterschied zur
+// vorherigen natuerlichen Moll (D Kurd). Birk vor Ort 2026-07-31.
+~scaleSteps = [0, 1, 3, 5, 7, 8, 10];
 
-// Grundton A2 (MIDI 45): D2 (MIDI 38) eine Quinte hoeher (+7 Halbtoene,
-// Birk vor Ort 2026-07-31). Skala bleibt D Kurd, nur transponiert.
+// Grundton A2 (MIDI 45), unveraendert -- nur die Skala (Intervallstruktur)
+// hat sich geaendert, nicht die Transposition.
 ~rootMidiNote = 45;
 ~numOctaves = 3;
-~notesPerOctaveSet = ~hangDrumSteps.size * ~numOctaves;
+~notesPerOctaveSet = ~scaleSteps.size * ~numOctaves;
 
 // Mindestlautstärke deutlich angehoben (Birk 2026-07-30): manche Node-Treffer
 // kommen mit so niedriger "energy" rein, dass sie unterhalb der Hörschwelle
@@ -148,9 +154,9 @@ s.waitForBoot({
         energy = msg[2].asFloat;
 
         noteIndex = nodeId % ~notesPerOctaveSet;
-        octave = noteIndex div: ~hangDrumSteps.size;
-        degree = noteIndex mod: ~hangDrumSteps.size;
-        semitoneOffset = ~hangDrumSteps[degree] + (octave * 12);
+        octave = noteIndex div: ~scaleSteps.size;
+        degree = noteIndex mod: ~scaleSteps.size;
+        semitoneOffset = ~scaleSteps[degree] + (octave * 12);
         midiNote = ~rootMidiNote + semitoneOffset;
         freq = midiNote.midicps;
 
@@ -171,6 +177,6 @@ s.waitForBoot({
         ("node % -> % Hz (amp %) on output ch %".format(nodeId, freq.round(0.1), amp.round(0.01), outCh)).postln;
     }, '/net/hitNode', recvPort: ~oscListenPort);
 
-    "KlangNetz Hang-Drum-Bells (D Kurd, Zoom AMS-24 4ch, Limiter): Server gebootet, hoere auf /net/hitNode Port % - bereit.".format(~oscListenPort).postln;
+    "KlangNetz Hang-Drum-Bells (Phrygisch, Zoom AMS-24 4ch, Limiter): Server gebootet, hoere auf /net/hitNode Port % - bereit.".format(~oscListenPort).postln;
 });
 )
