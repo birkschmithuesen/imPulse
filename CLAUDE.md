@@ -8,6 +8,38 @@ Processing-Sketch (Java-Modus) für die audiovisuelle Installation *imPulse*: LE
 
 Signalkette: `Max/MSP --OSC:8001--> Processing --Syphon--> MadMapper --ArtNet--> APA102` und zurück `Processing --OSC:8002--> Max/MSP`. Alternativ sendet Processing direkt per ArtNet (aktuell aktiv, siehe „Ausgabepfade").
 
+## Branch-Konvention (verbindlich, seit 2026-07-30)
+
+- **`master`** = **Working State**. Muss jederzeit exakt das abbilden, was
+  gerade live auf der Installation läuft (Windows-Laptop, Java/Processing-
+  Code UND SuperCollider-Sound-Patch inkl. aller Live-Tuning-Werte wie
+  `masterLevel`, Amplituden-Ranges). Ziel: ein Neustart der Installation mit
+  dem `master`-Stand reproduziert exakt den aktuellen Show-Zustand, ohne
+  manuelles Nachsenden von OSC-Werten. Kein Feature-Entwicklungscode hier,
+  keine Werkstatt-Experimente — nur das, was gerade tatsächlich läuft.
+  Divergiert `master` vom Live-Stand (z. B. weil ein Live-Tuning-Wert nur per
+  OSC gesetzt wurde), gehört der Wert in den Code-Default nachgezogen, nicht
+  nur im laufenden Prozess belassen.
+- **`grabicz26`** = **Entwicklung**. Alle neuen Features (Ambisonics/
+  Spatialisierung, ArtNet-Kalibrierung, ArtNet-Ausgang, Preset-System-
+  Vorarbeiten, WebUI usw.) laufen hier bzw. auf davon abgeleiteten
+  Feature-Branches/Worktrees (z. B. `feature/preset-system`,
+  `feature/webui-sound-master`). Wird NICHT automatisch nach `master`
+  gemergt — ein Merge/Cherry-Pick nach `master` ist eine bewusste,
+  einzelne Entscheidung (typischerweise: „dieses Feature ist jetzt Teil
+  des Live-Betriebs").
+- **Bei Unklarheit, was gerade auf `grabicz26` vs. wo sonst passiert:**
+  zuerst `git status --short` + `git log -1 --oneline` im jeweiligen
+  Checkout/Worktree prüfen, dann `git worktree list` für einen Überblick
+  über alle aktiven Arbeitsverzeichnisse. Mehrere parallele Sessions
+  können gleichzeitig an `grabicz26` oder eigenen Feature-Branches
+  arbeiten — vor jedem Merge/Force-Push den tatsächlichen IST-Zustand
+  auf dem Laptop per SSH verifizieren (`git log -1 --oneline` im
+  `imPulse`-Checkout dort), nicht raten.
+- **Force-Push auf `master`** ist grundsätzlich möglich (Working-State-
+  Branch, keine lineare Feature-Historie nötig), aber nur nach expliziter
+  Bestätigung durch Birk — nie automatisch/eigenmächtig.
+
 ## Ausführen
 
 Kein Build-System für den Sketch selbst — reines Processing-Projekt. Für die netz- und processingunabhängigen Teile (`ArtNetOutput`, `NodeCrossingStore`, `LedStripeNetworks`, `TestPatterns`) gibt es aber eine eigene Testsuite, siehe „Tests" unten.
