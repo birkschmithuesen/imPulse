@@ -7,10 +7,47 @@ class LedNetworkNode {
 	public TreeSet<Integer> ledIndices; // all indices of leds that are connected here
 	public double lastActivationTime = 0;
 
+	// Draufsicht-Position in Metern, Ursprung Netzmitte. Gesetzt von
+	// applyPositions, mitgeschickt an /net/hitNode.
+	public float posX = 0;
+	public float posY = 0;
+
 	LedNetworkNode(int id_, TreeSet<Integer> ledIndices_) {
 		id = id_;
 		ledIndices = ledIndices_;
 		lastActivationTime = 0;
+	}
+
+	// Setzt fuer jeden Knoten den Mittelwert der Positionen seiner LEDs.
+	//
+	// Ein Knoten ist EIN physischer Punkt mit zwei LEDs auf zwei Stripes. Ist
+	// sein Anker gesetzt, liefert die Map fuer beide denselben Wert und der
+	// Mittelwert ist genau dieser Anker. Ist der Anker noch offen, weichen die
+	// interpolierten Werte der beteiligten Stripes leicht voneinander ab -
+	// dann ist der Mittelwert ehrlicher als der erste Eintrag.
+	//
+	// Setzt (0,0), wenn keine einzige LED des Knotens eine Position hat.
+	public static void applyPositions(LedPositionMap map, ArrayList<LedNetworkNode> nodes) {
+		for (LedNetworkNode node : nodes) {
+			float sumX = 0;
+			float sumY = 0;
+			int n = 0;
+			for (Integer ledIdx : node.ledIndices) {
+				int idx = ledIdx.intValue();
+				if (map.isDefined(idx)) {
+					sumX += map.x(idx);
+					sumY += map.y(idx);
+					n++;
+				}
+			}
+			if (n > 0) {
+				node.posX = sumX / n;
+				node.posY = sumY / n;
+			} else {
+				node.posX = 0;
+				node.posY = 0;
+			}
+		}
 	}
 }
 
