@@ -15,6 +15,16 @@ class LedPositionMap {
   private final float halfX;
   private final float halfY;
 
+  // Vorgerechnete Positionen. null, solange apply() nicht lief - der heisse
+  // Pfad im Transport-Effekt liest ausschliesslich hier, nicht ueber
+  // positionOf(), damit pro Impuls und Frame keine Suche im Store anfaellt.
+  private float[] xs;
+  private float[] ys;
+  private boolean[] defined;
+  private boolean[] interpolated;
+  private int undefined;
+  private int extrapolated;
+
   LedPositionMap(int numStripes, int numLedsPerStripe, float footprintX, float footprintY) {
     this.numStripes = numStripes;
     this.numLedsPerStripe = numLedsPerStripe;
@@ -102,6 +112,75 @@ class LedPositionMap {
     boolean atOrBelow = !anchors.headSet(Integer.valueOf(ledIndex + 1)).isEmpty();
     boolean atOrAbove = !anchors.tailSet(Integer.valueOf(ledIndex)).isEmpty();
     return atOrBelow && atOrAbove;
+  }
+
+  // Rechnet alle Positionen einmal durch. Beim Start aus setup() und bei
+  // jedem R in den beiden Kalibrierwerkzeugen. Legt die Arrays jedes Mal neu
+  // an, damit ein entfernter Anker keine alte Position stehen laesst.
+  void apply(LedAnchorStore store) {
+    int n = numStripes * numLedsPerStripe;
+    xs = new float[n];
+    ys = new float[n];
+    defined = new boolean[n];
+    interpolated = new boolean[n];
+    undefined = 0;
+    extrapolated = 0;
+    float[] out = new float[2];
+    for (int i = 0; i < n; i++) {
+      if (positionOf(store, i, out)) {
+        xs[i] = out[0];
+        ys[i] = out[1];
+        defined[i] = true;
+        interpolated[i] = isInterpolatedAt(store, i);
+        if (!interpolated[i]) {
+          extrapolated++;
+        }
+      } else {
+        undefined++;
+      }
+    }
+  }
+
+  float x(int ledIndex) {
+    return xs == null || !inRange(ledIndex) ? 0f : xs[ledIndex];
+  }
+
+  float y(int ledIndex) {
+    return ys == null || !inRange(ledIndex) ? 0f : ys[ledIndex];
+  }
+
+  boolean isDefined(int ledIndex) {
+    return defined != null && inRange(ledIndex) && defined[ledIndex];
+  }
+
+  boolean isInterpolated(int ledIndex) {
+    return interpolated != null && inRange(ledIndex) && interpolated[ledIndex];
+  }
+
+  int undefinedCount() { return undefined; }
+
+  int extrapolatedCount() { return extrapolated; }
+
+  // Fuer die Taste T im Erfassungswerkzeug und die Startmeldung in
+  // imPulse.pde. Nennt die Stripes ohne jeden Anker beim Namen - das sind
+  // die, an denen noch gar nicht gearbeitet wurde.
+  String coverageReport(LedAnchorStore store) {
+    StringBuilder sb = new StringBuilder();
+    sb.append(undefined).append(" LEDs ohne Position, ")
+      .append(extrapolated).append(" nur extrapoliert");
+    StringBuilder without = new StringBuilder();
+    for (int st = 0; st < numStripes; st++) {
+      if (store.anchorsOnStripe(st).isEmpty()) {
+        if (without.length() > 0) {
+          without.append(' ');
+        }
+        without.append(st);
+      }
+    }
+    if (without.length() > 0) {
+      sb.append("; Stripes ohne Anker: ").append(without);
+    }
+    return sb.toString();
   }
 
   // Die Extrapolation kann weit aus der Halle hinaus zeigen, wenn zwei Anker

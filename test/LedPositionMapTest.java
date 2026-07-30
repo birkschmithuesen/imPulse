@@ -134,6 +134,83 @@ public class LedPositionMapTest {
     Check.that("Index hinter dem Ende ist nicht definiert",
         !m.positionOf(s, STRIPES * PER_STRIPE, out));
 
+    // ---- apply() stimmt mit positionOf() ueberein ----
+    LedAnchorStore ap = store();
+    LedPositionMap mAp = map();
+    Check.that("Anker LED 4", ap.set(4, -3f, -1f, NO_CROSSINGS));
+    Check.that("Anker LED 14", ap.set(14, 2f, 1f, NO_CROSSINGS));
+    Check.that("Anker auf Stripe 2", ap.set(2 * PER_STRIPE + 3, 0f, 0f, NO_CROSSINGS));
+
+    Check.eq("vor apply() ist x null", 0, (long) mAp.x(9));
+    Check.that("vor apply() ist nichts definiert", !mAp.isDefined(9));
+
+    mAp.apply(ap);
+
+    float[] ref = new float[2];
+    int mismatches = 0;
+    int definedCount = 0;
+    for (int i = 0; i < STRIPES * PER_STRIPE; i++) {
+      boolean def = mAp.positionOf(ap, i, ref);
+      if (def != mAp.isDefined(i)) {
+        mismatches++;
+      } else if (def) {
+        definedCount++;
+        if (Math.abs(ref[0] - mAp.x(i)) > TOL || Math.abs(ref[1] - mAp.y(i)) > TOL) {
+          mismatches++;
+        }
+        if (mAp.isInterpolatedAt(ap, i) != mAp.isInterpolated(i)) {
+          mismatches++;
+        }
+      }
+    }
+    Check.eq("apply() weicht nie von positionOf() ab", 0, mismatches);
+    // Stripe 0 und Stripe 2 haben Anker, Stripe 1 und 3 nicht.
+    Check.eq("definierte LEDs sind die zwei Stripes mit Ankern",
+        2 * PER_STRIPE, definedCount);
+    Check.eq("undefiniert sind die zwei Stripes ohne Anker",
+        2 * PER_STRIPE, mAp.undefinedCount());
+
+    // Stripe 0: extrapoliert sind LED 0..3 und 15..19, das sind 9.
+    // Stripe 2: ein einzelner Anker, alles ausser der Ankerled selbst
+    // gilt als extrapoliert, das sind 19.
+    Check.eq("Zahl der nur extrapolierten LEDs", 9 + 19, mAp.extrapolatedCount());
+
+    // ---- Abdeckungsbericht ----
+    String rep = mAp.coverageReport(ap);
+    Check.that("Bericht nennt die Zahl der undefinierten LEDs",
+        rep.indexOf(String.valueOf(2 * PER_STRIPE)) >= 0);
+    Check.that("Bericht nennt die Stripes ohne Anker",
+        rep.indexOf("Stripes ohne Anker") >= 0);
+    Check.that("Bericht nennt Stripe 1", rep.indexOf("1") >= 0);
+    Check.that("Bericht nennt Stripe 3", rep.indexOf("3") >= 0);
+
+    LedAnchorStore full = store();
+    LedPositionMap mFull = map();
+    for (int st = 0; st < STRIPES; st++) {
+      Check.that("Anker am Anfang von Stripe " + st,
+          full.set(st * PER_STRIPE, -1f, -1f, NO_CROSSINGS));
+      Check.that("Anker am Ende von Stripe " + st,
+          full.set(st * PER_STRIPE + PER_STRIPE - 1, 1f, 1f, NO_CROSSINGS));
+    }
+    mFull.apply(full);
+    Check.eq("mit Ankern an allen Enden ist nichts undefiniert",
+        0, mFull.undefinedCount());
+    Check.eq("und nichts nur extrapoliert", 0, mFull.extrapolatedCount());
+    Check.that("Bericht nennt dann keine Stripes ohne Anker",
+        mFull.coverageReport(full).indexOf("Stripes ohne Anker") < 0);
+
+    // ---- apply() ist wiederholbar, ohne Reste ----
+    LedAnchorStore again = store();
+    LedPositionMap mAgain = map();
+    Check.that("Anker vor dem ersten apply", again.set(0, -2f, -2f, NO_CROSSINGS));
+    mAgain.apply(again);
+    Check.eq("ein Stripe mit Anker", 3 * PER_STRIPE, mAgain.undefinedCount());
+    Check.that("Anker wieder entfernt", again.remove(0));
+    mAgain.apply(again);
+    Check.eq("nach dem Entfernen ist alles undefiniert",
+        STRIPES * PER_STRIPE, mAgain.undefinedCount());
+    Check.that("und keine Position bleibt haengen", !mAgain.isDefined(0));
+
     System.exit(Check.report("LedPositionMapTest"));
   }
 }
