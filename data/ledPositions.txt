@@ -1,0 +1,5 @@
+# LED-Positionen in der Draufsicht. Eine Zeile je Anker:
+#   ledIndex  x[m]  y[m]
+# Grundflaeche 14 x 8 m, Ursprung senkrecht unter der Netzmitte,
+# X nach rechts, Y nach vorn. Aufgenommen mit dem Positionsmodus (Taste P),
+# siehe docs/positionen-anleitung.md

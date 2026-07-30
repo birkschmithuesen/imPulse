@@ -50,6 +50,24 @@ int numLedsPerStripe = 600;                                   // 2 x 5 m je Outp
 int numStripes = controllerOctets.length * ArtNetOutput.OUTPUTS_PER_CONTROLLER;
 int numLeds = numStripes * numLedsPerStripe;
 
+// Draufsicht der Installation, am 2026-07-30 mit dem Betreiber festgelegt.
+// Ursprung senkrecht unter der Netzmitte, X nach rechts, Y nach vorn.
+// Installationsspezifisch - nicht aendern, ohne dass es um einen konkreten
+// Aufbau geht.
+float footprintX = 14f;                      // Meter
+float footprintY = 8f;                       // Meter
+float stripeLengthM = 10f;                   // 2 x 5 m, durchgehend verbunden
+float ledPitchM = stripeLengthM / numLedsPerStripe;   // 0.0166667 m
+
+// Draufsicht-Flaeche im Positionsmodus. 525:300 entspricht 14:8 genau, es
+// gibt also keine Verzerrung; ein Pixel sind 2,67 cm.
+int paneX = 0, paneY = 0, paneW = 525, paneH = 300;
+
+LedAnchorStore ledAnchorStore;
+LedPositionMap ledPositionMap;
+LedPositionCalibration ledPositionCalibration;
+boolean positionMode = false;
+
 // a mixer object where all visuals come together and are merged
 Mixer mixer;
 
@@ -118,6 +136,23 @@ void setup() {
   System.out.println(crossingStore.lastMessage());
   listOfNodes = new ArrayList<LedNetworkNode>();
   LedInNetInfo.applyCrossings(crossingStore.crossings(), ledNetInfo, listOfNodes);  // all sets of Leds that are on different stripes but close to each other
+  ledAnchorStore = new LedAnchorStore(numStripes, numLedsPerStripe,
+      footprintX, footprintY, ledPitchM);
+  ledAnchorStore.load(dataPath("ledPositions.txt"));
+  System.out.println(ledAnchorStore.lastMessage());
+  ledPositionMap = new LedPositionMap(numStripes, numLedsPerStripe, footprintX, footprintY);
+  ledPositionMap.apply(ledAnchorStore);
+  LedNetworkNode.applyPositions(ledPositionMap, listOfNodes);
+  // Eine Warnzeile, wenn Positionen fehlen. Die Show laeuft dann wie bisher,
+  // nur ohne Raumbezug - jede Koordinate ist (0,0), also die Netzmitte.
+  if (ledPositionMap.undefinedCount() > 0) {
+    System.out.println("WARNUNG: " + ledPositionMap.coverageReport(ledAnchorStore));
+    System.out.println("WARNUNG: diese LEDs senden (0,0) als Klangposition. "
+        + "Positionen mit P aufnehmen, siehe docs/positionen-anleitung.md");
+  }
+  ledPositionCalibration = new LedPositionCalibration(ledAnchorStore, ledPositionMap,
+      crossingStore, listOfNodes, numStripes, numLedsPerStripe,
+      dataPath("ledPositions.txt"), paneX, paneY, paneW, paneH, footprintX, footprintY);
   nodeCalibration = new NodeCalibration(crossingStore, ledNetInfo, listOfNodes,
       numStripes, numLedsPerStripe, dataPath("nodeCrossings.txt"));
 
@@ -147,20 +182,35 @@ void draw() {
   if (calibrationMode) {
     nodeCalibration.update();
     ledColors = nodeCalibration.drawMe();
+  } else if (positionMode) {
+    ledColors = ledPositionCalibration.drawMe();
   } else {
     ledColors = mixer.mix();
   }
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
-  image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
-  if (calibrationMode) {
-    // P3D behaelt den Inhalt des vorherigen Frames - ohne dieses Loeschen
-    // wuerde sich der HUD-Text unterhalb der Vorschau zu einem unlesbaren
-    // Klumpen stapeln, statt jeden Frame ersetzt zu werden
-    fill(0);
-    noStroke();
-    rect(0, numStripes * 10, width, height - numStripes * 10);
+  if (positionMode) {
+    // Im Positionsmodus belegt die Draufsicht-Flaeche den Bereich links, die
+    // verkleinerte LED-Vorschau sitzt rechts daneben.
+    // background(0) raeumt dabei zugleich den vorherigen Frame weg - P3D
+    // behaelt ihn sonst, und Flaeche wie HUD wuerden sich uebereinander
+    // stapeln, statt ersetzt zu werden.
+    background(0);
+    drawPositionPane();
+    image(canvas, 560, 0, 600, 120);
     fill(255);
-    text(nodeCalibration.hudText(), 10, numStripes * 10 + 20);
+    text(ledPositionCalibration.hudText(), 10, paneY + paneH + 20);
+  } else {
+    image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
+    if (calibrationMode) {
+      // P3D behaelt den Inhalt des vorherigen Frames - ohne dieses Loeschen
+      // wuerde sich der HUD-Text unterhalb der Vorschau zu einem unlesbaren
+      // Klumpen stapeln, statt jeden Frame ersetzt zu werden
+      fill(0);
+      noStroke();
+      rect(0, numStripes * 10, width, height - numStripes * 10);
+      fill(255);
+      text(nodeCalibration.hudText(), 10, numStripes * 10 + 20);
+    }
   }
   // send the visuals over Syphon/Spout to MadMapper. MadMapper can mix the impulses with other visuals/shaders, control brightness (...) with nice UI and send the data out over UDP (Art-Net)
   //server.sendTexture(canvas); //use this on Windows
@@ -187,6 +237,98 @@ void drawLedColorsToCanvas() {
   canvas.endDraw();
 }
 
+// Zeichnet die Draufsicht: Raster, Lautsprecher, gesetzte Anker, den Verlauf
+// des aktuellen Stripes und den aktuellen Eintrag. Die Umrechnung kommt aus
+// LedPositionCalibration.worldToPane, damit gezeichneter Punkt und
+// angeklickte Stelle dieselbe Rechnung benutzen.
+void drawPositionPane() {
+  float[] p = new float[2];
+  float[] q = new float[2];
+
+  noFill();
+  stroke(60);
+  strokeWeight(1);
+  rect(paneX, paneY, paneW, paneH);
+  // 1-m-Raster
+  for (float mx = -footprintX/2 + 1; mx < footprintX/2; mx += 1) {
+    ledPositionCalibration.worldToPane(mx, 0, p);
+    line(p[0], paneY, p[0], paneY + paneH);
+  }
+  for (float my = -footprintY/2 + 1; my < footprintY/2; my += 1) {
+    ledPositionCalibration.worldToPane(0, my, p);
+    line(paneX, p[1], paneX + paneW, p[1]);
+  }
+
+  // Die vier Lautsprecher auf den Seitenmitten
+  float[][] speakers = { {0, footprintY/2}, {footprintX/2, 0},
+                         {0, -footprintY/2}, {-footprintX/2, 0} };
+  noStroke();
+  fill(200, 160, 0);
+  for (int i = 0; i < speakers.length; i++) {
+    ledPositionCalibration.worldToPane(speakers[i][0], speakers[i][1], p);
+    rect(p[0] - 4, p[1] - 4, 8, 8);
+  }
+
+  // Verlauf des aktuellen Stripes ueber alle seine Anker
+  int cur = ledPositionCalibration.entryIndex();
+  if (cur >= 0) {
+    int firstLed = ledPositionCalibration.ledsOfEntry(cur)[0];
+    int stripe = firstLed / numLedsPerStripe;
+    stroke(0, 120, 200);
+    noFill();
+    int prev = -1;
+    for (int i = 0; i < numLedsPerStripe; i += 10) {
+      int idx = stripe * numLedsPerStripe + i;
+      if (!ledPositionMap.isDefined(idx)) { prev = -1; continue; }
+      ledPositionCalibration.worldToPane(ledPositionMap.x(idx), ledPositionMap.y(idx), p);
+      if (prev >= 0) {
+        ledPositionCalibration.worldToPane(ledPositionMap.x(prev), ledPositionMap.y(prev), q);
+        line(q[0], q[1], p[0], p[1]);
+      }
+      prev = idx;
+    }
+  }
+
+  // Alle gesetzten Anker
+  noStroke();
+  fill(120);
+  for (int e = 0; e < ledPositionCalibration.entryCount(); e++) {
+    if (!ledPositionCalibration.entryIsSet(e)) { continue; }
+    int led = ledPositionCalibration.ledsOfEntry(e)[0];
+    ledPositionCalibration.worldToPane(ledAnchorStore.x(led), ledAnchorStore.y(led), p);
+    ellipse(p[0], p[1], 5, 5);
+  }
+
+  // Der aktuelle Eintrag: gefuellt wenn gesetzt, hohl wenn nur Vorschlag
+  if (ledPositionCalibration.displayPosition(p)) {
+    float wx = p[0], wy = p[1];
+    ledPositionCalibration.worldToPane(wx, wy, p);
+    stroke(255);
+    strokeWeight(2);
+    if (ledPositionCalibration.entryIsSet(cur)) {
+      fill(255);
+    } else {
+      noFill();
+    }
+    ellipse(p[0], p[1], 13, 13);
+    strokeWeight(1);
+  }
+}
+
+void mousePressed() { positionClick(); }
+void mouseDragged() { positionClick(); }
+
+// Ein Klick oder Ziehen in der Draufsicht-Flaeche setzt die Position des
+// aktuellen Eintrags. Klicks ausserhalb - etwa ins HUD - werden verworfen,
+// darum kuemmert sich paneToWorld.
+void positionClick() {
+  if (!positionMode) { return; }
+  float[] w = new float[2];
+  if (ledPositionCalibration.paneToWorld(mouseX, mouseY, w)) {
+    ledPositionCalibration.setCurrent(w[0], w[1]);
+  }
+}
+
 void createRandomPipeTrigger() {
   if (counter > 60) {
     counter=0;    
@@ -202,17 +344,53 @@ void createRandomPipeTrigger() {
 void keyPressed() {
   if (calibrationMode && key == CODED) {
     nodeCalibration.handleKeyPressed(keyCode, key);
+  } else if (positionMode && key == CODED) {
+    // Pfeil hoch bewegt nach vorn, also nach +Y und auf dem Schirm nach oben
+    if (keyCode == LEFT)  { ledPositionCalibration.nudge(-1, 0); }
+    if (keyCode == RIGHT) { ledPositionCalibration.nudge(1, 0); }
+    if (keyCode == UP)    { ledPositionCalibration.nudge(0, 1); }
+    if (keyCode == DOWN)  { ledPositionCalibration.nudge(0, -1); }
+    ledPositionCalibration.abortClearAll();
   }
 }
 
 void keyReleased() {
   if (key == 'c' || key == 'C') {
     calibrationMode = !calibrationMode;
+    if (calibrationMode) { positionMode = false; }   // beide Modi belegen dieselben Tasten
     println(calibrationMode ? "Kalibriermodus an" : "Kalibriermodus aus");
     nodeCalibration.handleKeyReleased();
     // sonst zeigt ein Wiedereintritt das zuletzt gewaehlte Testbild statt
     // der Kalibrierung
     nodeCalibration.setPattern(0);
+    return;
+  }
+  if (key == 'p' || key == 'P') {
+    positionMode = !positionMode;
+    if (positionMode) { calibrationMode = false; }
+    println(positionMode ? "Positionsmodus an" : "Positionsmodus aus");
+    ledPositionCalibration.abortClearAll();
+    if (positionMode) {
+      // Die Kreuzungsliste kann sich im Kalibriermodus geaendert haben
+      ledPositionCalibration.reapply();
+      println(ledPositionCalibration.lastMessage());
+    }
+    return;
+  }
+  if (positionMode) {
+    if (key != 'l' && key != 'L') { ledPositionCalibration.abortClearAll(); }
+    if (key == ',') { ledPositionCalibration.prev(); }
+    else if (key == '.') { ledPositionCalibration.next(); }
+    else if (key == 'o' || key == 'O') { ledPositionCalibration.nextOpen(); }
+    else if (key == '\n' || key == '\r') { ledPositionCalibration.acceptProposal(); }
+    else if (key == 8 || key == 127) { ledPositionCalibration.clearCurrent(); }
+    else if (key == 'f' || key == 'F') { ledPositionCalibration.cycleStep(); }
+    else if (key == 's' || key == 'S') { ledPositionCalibration.save(); }
+    else if (key == 'r' || key == 'R') { ledPositionCalibration.reapply(); }
+    else if (key == 't' || key == 'T') { ledPositionCalibration.coverageReport(); }
+    else if (key == 'l' || key == 'L') {
+      ledPositionCalibration.requestClearAll(System.currentTimeMillis());
+    }
     return;
   }
   if (!calibrationMode) {
