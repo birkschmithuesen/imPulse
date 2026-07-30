@@ -370,6 +370,74 @@ def parse_settings(text: str) -> List[Parameter]:
     return parameters
 
 
+# ---------------------------------------------------------------------------
+# Presets
+#
+# Der Server laeuft auf derselben Maschine wie imPulse und liest data/presets/
+# deshalb direkt vom Dateisystem -- es braucht keinen OSC-Rueckkanal, um die
+# Liste zu erfahren. Geschrieben wird der Ordner ausschliesslich von imPulse:
+# nur dort ist bekannt, welche Werte gerade tatsaechlich laufen.
+# ---------------------------------------------------------------------------
+
+PRESET_NAME_MAX_LENGTH = 64
+PRESET_NAME_ALLOWED = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
+
+# Adressen, die beim Anwenden eines Presets uebergangen werden -- Spiegel von
+# PresetStore.SILENTLY_IGNORED (Kommandos, kein Zustand) und
+# PresetStore.EXCLUDED (Scheduler ist Transport, nicht Inhalt). Java ignoriert
+# sie beim Laden; das UI darf danach also keine Regler bewegen, die der Sketch
+# gar nicht gesetzt hat.
+PRESET_IGNORED_ADDRESSES = set(TRIGGER_ADDRESSES) | {
+    "/preset/scheduler/enabled",
+    "/preset/scheduler/interval",
+}
+
+
+def valid_preset_name(name: Any) -> Optional[str]:
+    """Wortgleicher Spiegel von PresetStore.isValidName() in Java.
+
+    Rueckgabe: Fehlermeldung oder None. Java bleibt die Autoritaet -- dort geht
+    es um Pfad-Traversal ("/preset/load ../../../etc/passwd"), hier nur darum,
+    ungueltige Eingaben gar nicht erst rauszuschicken. Grossbuchstaben sind
+    ausgeschlossen, weil zwei Presets, die sich nur in der Schreibweise
+    unterscheiden, auf Windows dieselbe Datei waeren.
+    """
+    if not isinstance(name, str) or not name:
+        return "Preset-Name ist leer"
+    if len(name) > PRESET_NAME_MAX_LENGTH:
+        return "Preset-Name laenger als %d Zeichen" % PRESET_NAME_MAX_LENGTH
+    for char in name:
+        if char not in PRESET_NAME_ALLOWED:
+            return ("Preset-Name enthaelt unzulaessiges Zeichen %r -- erlaubt "
+                    "sind a-z, 0-9, Unterstrich und Bindestrich" % char)
+    return None
+
+
+def list_presets(directory: str) -> Tuple[List[str], Optional[str]]:
+    """Namen aller Preset-Dateien, alphabetisch, ohne die Endung .txt.
+
+    Spiegel von PresetStore.list(): Dateien mit unzulaessigem Namen werden
+    uebergangen -- sie liessen sich ohnehin nicht laden. Ein unlesbarer Ordner
+    ist kein Abbruch, sondern eine leere Liste plus Meldung: das uebrige UI
+    soll bedienbar bleiben.
+    """
+    try:
+        entries = os.listdir(directory)
+    except OSError as exc:
+        return [], "Preset-Ordner nicht lesbar: %s" % exc
+    names: List[str] = []
+    for entry in entries:
+        if not entry.endswith(".txt"):
+            continue
+        if not os.path.isfile(os.path.join(directory, entry)):
+            continue
+        bare = entry[:-len(".txt")]
+        if valid_preset_name(bare) is None:
+            names.append(bare)
+    names.sort()
+    return names, None
+
+
 def group_key(address: str) -> str:
     """Gruppenschluessel aus dem Adress-Praefix.
 

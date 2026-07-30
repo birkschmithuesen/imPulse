@@ -9,8 +9,10 @@ remoteSettings.txt und dem OSC-Paket schiefgehen kann:
 """
 
 import os
+import shutil
 import struct
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,7 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import server  # noqa: E402
 from server import (ADVANCED_ADDRESSES, ADVANCED_GROUP_KEY, Parameter, ParameterStore,  # noqa: E402
                     TRIGGER_ADDRESSES, build_groups, build_osc_message,
-                    coupled_values, group_key, parse_settings)
+                    coupled_values, group_key, list_presets, parse_settings,
+                    valid_preset_name)
 
 
 # Ausschnitt aus einem echten Dump (Tabs!), inklusive der Eigenheiten:
@@ -388,6 +391,69 @@ class OscEncodingTest(unittest.TestCase):
             builder.add_arg(value)
             self.assertEqual(build_osc_message(address, value),
                              builder.build().dgram, address)
+
+
+class PresetNameTest(unittest.TestCase):
+    """Spiegel von PresetStore.isValidName() -- siehe PresetStore.java."""
+
+    def test_accepts_plain_name(self):
+        self.assertIsNone(valid_preset_name("standby"))
+        self.assertIsNone(valid_preset_name("hang_drum_slow"))
+        self.assertIsNone(valid_preset_name("abend-2"))
+        self.assertIsNone(valid_preset_name("a"))
+        self.assertIsNone(valid_preset_name("x" * 64))
+
+    def test_rejects_empty(self):
+        self.assertIsNotNone(valid_preset_name(""))
+        self.assertIsNotNone(valid_preset_name(None))
+
+    def test_rejects_too_long(self):
+        self.assertIsNotNone(valid_preset_name("x" * 65))
+
+    def test_rejects_uppercase(self):
+        # Windows unterscheidet Standby und standby nicht -- waeren dieselbe Datei
+        self.assertIsNotNone(valid_preset_name("Standby"))
+
+    def test_rejects_path_traversal(self):
+        for name in ("..", "../etc/passwd", "a/b", "a\\b", "a.txt", " a", "a b",
+                     "aä"):
+            self.assertIsNotNone(valid_preset_name(name), name)
+
+
+class PresetListTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir)
+
+    def write(self, filename):
+        with open(os.path.join(self.dir, filename), "w", encoding="utf-8") as handle:
+            handle.write("float\t/master/level\tx\t0.1\t0.0\t1.0\n")
+
+    def test_sorted_without_extension(self):
+        self.write("standby.txt")
+        self.write("abend.txt")
+        names, error = list_presets(self.dir)
+        self.assertEqual(names, ["abend", "standby"])
+        self.assertIsNone(error)
+
+    def test_ignores_other_files_and_directories(self):
+        self.write("standby.txt")
+        self.write("notizen.md")
+        os.mkdir(os.path.join(self.dir, "unterordner.txt"))
+        names, _ = list_presets(self.dir)
+        self.assertEqual(names, ["standby"])
+
+    def test_skips_invalid_names(self):
+        # koennte man ohnehin nicht laden -- PresetStore.list() uebergeht sie auch
+        self.write("standby.txt")
+        self.write("Gross.txt")
+        names, _ = list_presets(self.dir)
+        self.assertEqual(names, ["standby"])
+
+    def test_missing_directory_reports_error(self):
+        names, error = list_presets(os.path.join(self.dir, "gibtsnicht"))
+        self.assertEqual(names, [])
+        self.assertIsNotNone(error)
 
 
 class RealSettingsFileTest(unittest.TestCase):
