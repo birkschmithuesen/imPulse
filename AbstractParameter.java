@@ -180,7 +180,13 @@ class RemoteControlledIntParameter extends IntParameter implements OscMessageSin
 				setValue((int) theValue);
 			}
 			if (newMessage.getTypetagAsBytes()[0] == 'f') {
-				float theValue = newMessage.get(0).intValue();
+				// floatValue(), nicht intValue(): der Wert kommt normiert als 0..1 herein
+				// und wird erst hier auf min..max gespreizt. Mit intValue() wurde vor dem
+				// Mappen abgeschnitten - 0.75 wurde zu 0 und landete auf minValue, nur
+				// exakt 1.0 erreichte das Maximum. Bei /net/impulse/oscMaxCount hiess das
+				// 0 statt 192: die Klangschicht verstummt, waehrend die Oberflaeche
+				// reagiert und /net/hitNode weiter feuert.
+				float theValue = newMessage.get(0).floatValue();
 				theValue = PApplet.constrain(PApplet.map(theValue, 0f, 1f, minValue, maxValue), minValue, maxValue);
 				setValue((int) theValue);
 			}
