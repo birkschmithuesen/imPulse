@@ -425,6 +425,87 @@ public class LedPositionCalibrationTest {
     Check.that("ein neuer Klick macht die Map wieder schmutzig",
         cr.setCurrent(2.5f, 2.5f) && cr.mapNeedsApply());
 
+    // ---- Rueckmeldung im Netz ----
+    // Kreuzung {10, 30} ist Eintrag 1. Stripe 0 bekommt drei Anker (4, 10, 14),
+    // damit dort interpoliert wird; Stripe 1 bekommt ueber die Kreuzung genau
+    // einen (30), sodass dort alles ausser dem Anker selbst als extrapoliert
+    // gilt; Stripe 2 und 3 bleiben ohne Anker und damit dunkel. So sind alle
+    // drei Zustaende der Map in einem Aufbau vertreten.
+    LedAnchorStore stD = store();
+    LedPositionMap mD = new LedPositionMap(STRIPES, PER_STRIPE, FOOT_X, FOOT_Y);
+    ArrayList<LedNetworkNode> nD = new ArrayList<LedNetworkNode>();
+    LedInNetInfo[] iD = LedInNetInfo.buildNetInfo(STRIPES, PER_STRIPE);
+    LedInNetInfo.applyCrossings(cs2.crossings(), iD, nD);
+    LedPositionCalibration cd = new LedPositionCalibration(stD, mD, cs2, nD,
+        STRIPES, PER_STRIPE, NO_FILE,
+        PANE_X, PANE_Y, PANE_W, PANE_H, FOOT_X, FOOT_Y);
+
+    Check.that("Anker LED 4", stD.set(4, -3f, -1f, cs2.crossings()));
+    Check.that("Anker LED 14", stD.set(14, 2f, 1f, cs2.crossings()));
+    // Der Kreuzungsanker setzt LED 10 auf Stripe 0 UND LED 30 auf Stripe 1.
+    // Ohne ihn haette Stripe 1 gar keinen Anker und die Pruefungen auf rot und
+    // blau unten haetten kein Ziel. Die Werte sind so gewaehlt, dass die
+    // Weglaengen-Warnung nicht anspringt: 4 -> 10 sind 3,0 m Weg bei 3,42 m
+    // Luftlinie (Schwelle 3,5), 10 -> 14 sind 2,0 m Weg bei 1,97 m Luftlinie.
+    Check.that("Kreuzungsanker LED 10", stD.set(10, 0.2f, 0.2f, cs2.crossings()));
+    Check.that("die Partner-LED auf Stripe 1 ist mitgesetzt", stD.has(30));
+    Check.that("keine Weglaengen-Warnung in diesem Aufbau", !stD.lastWasWarning());
+
+    // Zeiger auf Eintrag 0 (LED 0, Stripe-Ende von Stripe 0)
+    Check.eq("Zeiger auf Eintrag 0", 0, cd.entryIndex());
+
+    // Blinkphase AN: Vielfaches von 800 ms
+    LedColor[] buf = cd.drawMe(0L);
+    Check.eq("Puffer hat die Groesse des Netzes", STRIPES * PER_STRIPE, buf.length);
+    Check.that("die LED des Eintrags leuchtet in der An-Phase weiss",
+        buf[0].x > 0.9f && buf[0].y > 0.9f && buf[0].z > 0.9f);
+
+    // Blinkphase AUS
+    LedColor[] bufOff = cd.drawMe(500L);
+    Check.that("in der Aus-Phase ist sie nicht weiss",
+        !(bufOff[0].x > 0.9f && bufOff[0].y > 0.9f && bufOff[0].z > 0.9f));
+
+    // Stripe 0 traegt die LED des Eintrags -> gruen geglommen. LED 8 liegt
+    // zwischen den Ankern 4 und 14, wird aber vom Gruen ueberschrieben.
+    Check.that("der Stripe des Eintrags glimmt gruen",
+        bufOff[8].y > 0f && bufOff[8].x == 0f && bufOff[8].z == 0f);
+
+    // Stripe 1 hat durch die Kreuzung genau einen Anker (LED 30):
+    // alles ausser LED 30 gilt als extrapoliert -> rot.
+    Check.that("Kreuzungsanker auf Stripe 1 vorhanden", stD.has(30));
+    Check.that("extrapolierte LEDs glimmen rot",
+        bufOff[25].x > 0f && bufOff[25].y == 0f && bufOff[25].z == 0f);
+    Check.that("der Anker selbst gilt als gestuetzt und glimmt blau",
+        bufOff[30].z > 0f && bufOff[30].x == 0f && bufOff[30].y == 0f);
+
+    // Stripe 2 und 3 haben keinen Anker -> dunkel
+    Check.that("ohne Anker bleibt es dunkel",
+        bufOff[2 * PER_STRIPE + 5].x == 0f
+        && bufOff[2 * PER_STRIPE + 5].y == 0f
+        && bufOff[2 * PER_STRIPE + 5].z == 0f);
+
+    // Auf der Kreuzung blinken BEIDE LEDs, auf zwei verschiedenen Stripes
+    cd.next();
+    Check.that("jetzt bei der Kreuzung", cd.entryIsCrossing(cd.entryIndex()));
+    LedColor[] bufX = cd.drawMe(0L);
+    Check.that("erste LED der Kreuzung blinkt weiss",
+        bufX[10].x > 0.9f && bufX[10].y > 0.9f && bufX[10].z > 0.9f);
+    Check.that("zweite LED der Kreuzung blinkt ebenfalls weiss",
+        bufX[30].x > 0.9f && bufX[30].y > 0.9f && bufX[30].z > 0.9f);
+
+    // Beide beteiligten Stripes glimmen gruen
+    LedColor[] bufX2 = cd.drawMe(500L);
+    Check.that("Stripe 0 glimmt gruen", bufX2[3].y > 0f && bufX2[3].x == 0f);
+    Check.that("Stripe 1 glimmt auch gruen",
+        bufX2[PER_STRIPE + 3].y > 0f && bufX2[PER_STRIPE + 3].x == 0f);
+
+    // Alle Helligkeiten bleiben im Bereich 0..1
+    float maxComp = 0f;
+    for (int i = 0; i < bufX.length; i++) {
+      maxComp = Math.max(maxComp, Math.max(bufX[i].x, Math.max(bufX[i].y, bufX[i].z)));
+    }
+    Check.that("keine Komponente ueber 1", maxComp <= 1.0f);
+
     System.exit(Check.report("LedPositionCalibrationTest"));
   }
 }

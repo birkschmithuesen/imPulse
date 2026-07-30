@@ -41,6 +41,7 @@ class LedPositionCalibration {
   private final int paneH;
   private final float footprintX;
   private final float footprintY;
+  private final LedColor[] buffer;
 
   private final List<int[]> entries = new ArrayList<int[]>();
   private int current = 0;
@@ -76,6 +77,7 @@ class LedPositionCalibration {
     this.paneH = paneH;
     this.footprintX = footprintX;
     this.footprintY = footprintY;
+    this.buffer = LedColor.createColorArray(numStripes * numLedsPerStripe);
     rebuildWorklist();
   }
 
@@ -440,5 +442,48 @@ class LedPositionCalibration {
         Integer.valueOf(store.loadedCount()), Integer.valueOf(store.sessionCount()),
         Integer.valueOf(openCount()), Float.valueOf(step()),
         message);
+  }
+
+  LedColor[] drawMe() { return drawMe(System.currentTimeMillis()); }
+
+  // Drei Regeln, spaetere ueberschreiben fruehere:
+  //   1. jede LED zeigt den Zustand der Map - blau gestuetzt, rot geraten,
+  //      dunkel unbekannt
+  //   2. jeder Stripe, der eine LED des aktuellen Eintrags traegt, glimmt
+  //      gruen; sonst waere er von den anderen nicht zu unterscheiden
+  //   3. alle LEDs des aktuellen Eintrags blinken weiss - an einer Kreuzung
+  //      markieren damit zwei LEDs denselben physischen Punkt
+  LedColor[] drawMe(long nowMillis) {
+    if (mapDirty) {
+      map.apply(store);
+      LedNetworkNode.applyPositions(map, nodes);
+      mapDirty = false;
+    }
+
+    for (int i = 0; i < buffer.length; i++) {
+      if (!map.isDefined(i)) {
+        buffer[i].set(0f, 0f, 0f);
+      } else if (map.isInterpolated(i)) {
+        buffer[i].set(0f, 0f, DIM);
+      } else {
+        buffer[i].set(DIM, 0f, 0f);
+      }
+    }
+
+    if (!entries.isEmpty()) {
+      int[] leds = entries.get(current);
+      for (int led : leds) {
+        int base = (led / numLedsPerStripe) * numLedsPerStripe;
+        for (int i = 0; i < numLedsPerStripe; i++) {
+          buffer[base + i].set(0f, DIM, 0f);
+        }
+      }
+      if (nowMillis % (2 * BLINK_MILLIS) < BLINK_MILLIS) {
+        for (int led : leds) {
+          buffer[led].set(1f, 1f, 1f);
+        }
+      }
+    }
+    return buffer;
   }
 }
