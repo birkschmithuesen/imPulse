@@ -395,13 +395,22 @@ public class LedPositionCalibrationTest {
     // ---- Abdeckungsbericht und HUD ----
     LedAnchorStore stH = store();
     LedPositionCalibration ch = build(cs2, stH);
+    // Einen einzigen Anker setzen, damit sich Gesamt- und Offen-Zahl
+    // unterscheiden. Auf einer frischen Liste sind beide gleich, und eine
+    // Pruefung auf "irgendwo steht diese Zahl" wuerde auch dann passen, wenn
+    // das HUD die falsche der beiden druckt.
+    Check.that("Punkt setzen", ch.setCurrent(0.5f, 0.5f));
+    Check.that("Gesamt- und Offen-Zahl sind jetzt verschieden",
+        ch.entryCount() != ch.openCount());
     String rep2 = ch.coverageReport();
     Check.that("Bericht nennt undefinierte LEDs", rep2.indexOf("ohne Position") >= 0);
     Check.that("coverageReport macht die Map wieder sauber", !ch.mapNeedsApply());
 
     String hud = ch.hudText();
-    Check.that("HUD nennt die Eintragszahl",
-        hud.indexOf(String.valueOf(ch.entryCount())) >= 0);
+    Check.that("HUD nennt die Eintragszahl im Zaehler 'Eintrag n/N'",
+        hud.indexOf("/" + ch.entryCount() + " ") >= 0);
+    Check.that("HUD nennt die Offen-Zahl im Feld 'offen:'",
+        hud.indexOf("offen: " + ch.openCount()) >= 0);
     Check.that("HUD nennt die Schrittweite", hud.indexOf("Schritt") >= 0);
     Check.that("HUD nennt die Tastenbelegung", hud.indexOf("ENTER") >= 0);
 
