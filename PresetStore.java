@@ -6,7 +6,82 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+
+// Was ein Parameter koennen muss, um in einem Preset zu landen. Bewusst hier
+// und nicht in AbstractParameter.java: diese Datei bleibt frei von oscP5 und
+// Processing, damit die Testsuite sie uebersetzen kann. Die drei
+// RemoteControlled*Parameter-Klassen implementieren das Interface.
+//
+// LedNetworkTransportEffect implementiert es ausdruecklich NICHT: seine zwei
+// Adressen /net/activateNode und /net/activateStripe sind Kommandos, die beim
+// Eintreffen sofort feuern. Sie koennen so per Konstruktion nicht in ein
+// Preset geraten.
+interface PresetTarget {
+
+  // Fuegt je Adresse eine Zeile {typ, adresse, beschreibung, wert, min, max}
+  // an. Ein Farbparameter liefert drei Zeilen (/Hue, /Sat, /Bright).
+  void presetEntries(List<String[]> out);
+
+  // Setzt den Wert absolut und geklemmt auf die Grenzen dieses Parameters.
+  // Rueckgabe: PresetStore.PRESET_NOT_MINE, PRESET_APPLIED oder
+  // PRESET_ADJUSTED - letzteres, wenn der uebergebene Wert dabei veraendert
+  // werden musste (geklemmt oder gerundet). Nur der Parameter selbst kennt
+  // seine Grenzen, also kann nur er das melden.
+  //
+  // Der Wert kommt als float und nicht als String, weil das Zerlegen des
+  // Textes in die gepruefte Schicht gehoert. Und er wird absolut gesetzt und
+  // nicht durch digestMessage geschickt: dort wird ein eingehender Float von
+  // 0..1 auf min..max gestreckt, ein gespeicherter Absolutwert wuerde dabei
+  // verfaelscht.
+  int applyPreset(String address, float value);
+}
+
+// Was beim Anwenden eines Presets auffiel. Bewusst gesammelt statt je Zeile
+// gemeldet: bei 49 Adressen waere Zeile-fuer-Zeile-Ausgabe unlesbar.
+class PresetApplyReport {
+
+  final List<String> unknown = new ArrayList<String>();
+  final List<String> missing = new ArrayList<String>();
+  final List<String> unparsable = new ArrayList<String>();
+  final List<String> adjusted = new ArrayList<String>();
+  int applied = 0;
+
+  boolean clean() {
+    return unknown.isEmpty() && missing.isEmpty() && unparsable.isEmpty() && adjusted.isEmpty();
+  }
+
+  String summary() {
+    StringBuilder text = new StringBuilder();
+    text.append(applied).append(" Parameter gesetzt");
+    if (!unknown.isEmpty()) {
+      text.append("; unbekannte Adressen: ").append(join(unknown));
+    }
+    if (!missing.isEmpty()) {
+      text.append("; nicht im Preset enthalten: ").append(join(missing));
+    }
+    if (!unparsable.isEmpty()) {
+      text.append("; unlesbare Werte: ").append(join(unparsable));
+    }
+    if (!adjusted.isEmpty()) {
+      text.append("; auf den zulaessigen Bereich angepasst: ").append(join(adjusted));
+    }
+    return text.toString();
+  }
+
+  private static String join(List<String> items) {
+    StringBuilder text = new StringBuilder();
+    for (int i = 0; i < items.size(); i++) {
+      if (i > 0) {
+        text.append(", ");
+      }
+      text.append(items.get(i));
+    }
+    return text.toString();
+  }
+}
 
 // Format- und Dateischicht der Presets. Bewusst ohne Processing-, oscP5- und
 // Netzabhaengigkeit, damit test/run.sh die Klasse mit nur core.jar im
@@ -221,5 +296,116 @@ class PresetStore {
     }
     message = sorted.size() + " Zeilen nach " + target.getName() + " geschrieben";
     return true;
+  }
+
+  // Kommandos, die in remoteSettings.txt stehen, aber keine Parameter sind:
+  // LedNetworkTransportEffect feuert bei diesen Adressen sofort. Beim Laden
+  // still uebergehen statt melden, damit eine handkopierte
+  // remoteSettings.txt nicht bei jedem Laden zwei Warnungen erzeugt.
+  static final String[] SILENTLY_IGNORED = {
+      "/net/activateNode",
+      "/net/activateStripe"
+  };
+
+  // Transport, nicht Inhalt. Diese beiden sind echte Parameter und wuerden
+  // sonst mitwandern - ein versehentlich mit enabled=0 gespeichertes Preset
+  // wuerde die Installation einfrieren.
+  static final String[] EXCLUDED = {
+      "/preset/scheduler/enabled",
+      "/preset/scheduler/interval"
+  };
+
+  // Rueckgabewerte von PresetTarget.applyPreset
+  static final int PRESET_NOT_MINE = 0;
+  static final int PRESET_APPLIED = 1;
+  static final int PRESET_ADJUSTED = 2;
+
+  static float clampToRange(float value, float min, float max) {
+    if (value < min) {
+      return min;
+    }
+    if (value > max) {
+      return max;
+    }
+    return value;
+  }
+
+  private static boolean contains(String[] list, String address) {
+    for (int i = 0; i < list.length; i++) {
+      if (list[i].equals(address)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Kompletter Wertesatz aller Ziele, ohne die ausgeschlossenen Adressen.
+  static List<String[]> snapshot(List<PresetTarget> targets) {
+    List<String[]> all = new ArrayList<String[]>();
+    for (int i = 0; i < targets.size(); i++) {
+      targets.get(i).presetEntries(all);
+    }
+    List<String[]> kept = new ArrayList<String[]>();
+    for (int i = 0; i < all.size(); i++) {
+      if (!contains(EXCLUDED, all.get(i)[COL_ADDRESS])) {
+        kept.add(all.get(i));
+      }
+    }
+    return kept;
+  }
+
+  // Wendet die Eintraege auf die Ziele an. Veraendert nur, was zugeordnet
+  // werden kann; alles Auffaellige steht im Bericht. Ein defektes Preset darf
+  // die Show nicht anhalten, deshalb bricht diese Methode nie ab.
+  static PresetApplyReport apply(List<String[]> entries, List<PresetTarget> targets) {
+    PresetApplyReport report = new PresetApplyReport();
+    Set<String> seen = new HashSet<String>();
+    for (int i = 0; i < entries.size(); i++) {
+      String[] entry = entries.get(i);
+      String address = entry[COL_ADDRESS];
+      if (contains(SILENTLY_IGNORED, address) || contains(EXCLUDED, address)) {
+        continue;
+      }
+      // Vor dem Zerlegen vermerken: eine Zeile mit unlesbarem Wert war da und
+      // soll nicht zusaetzlich als fehlend gemeldet werden.
+      seen.add(address);
+      float value;
+      try {
+        value = Float.parseFloat(entry[COL_VALUE].trim());
+      } catch (NumberFormatException e) {
+        report.unparsable.add(address + " (\"" + entry[COL_VALUE] + "\")");
+        continue;
+      }
+      int status = PRESET_NOT_MINE;
+      for (int t = 0; t < targets.size() && status == PRESET_NOT_MINE; t++) {
+        status = targets.get(t).applyPreset(address, value);
+      }
+      if (status == PRESET_NOT_MINE) {
+        report.unknown.add(address);
+      } else {
+        report.applied++;
+        if (status == PRESET_ADJUSTED) {
+          report.adjusted.add(address + " (\"" + entry[COL_VALUE] + "\")");
+        }
+      }
+    }
+    List<String[]> current = new ArrayList<String[]>();
+    for (int i = 0; i < targets.size(); i++) {
+      targets.get(i).presetEntries(current);
+    }
+    for (int i = 0; i < current.size(); i++) {
+      String address = current.get(i)[COL_ADDRESS];
+      if (contains(EXCLUDED, address)) {
+        continue;
+      }
+      if (!seen.contains(address) && report.missing.indexOf(address) < 0) {
+        report.missing.add(address);
+      }
+    }
+    Collections.sort(report.unknown);
+    Collections.sort(report.missing);
+    Collections.sort(report.unparsable);
+    Collections.sort(report.adjusted);
+    return report;
   }
 }
