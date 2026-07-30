@@ -10,9 +10,11 @@ auf die Standby-Szene.
   gegenüber `supercollider/klangnetz_bells.scd` im Repo-Root zum Zeitpunkt der
   Sicherung.
 
-**Hinweis:** Dies ist ein reiner Werte-Snapshot (Textdatei-Kopie), kein aktives
-Preset-Loading-Feature — imPulse liest `data/remoteSettings.txt` nur beim Start
-neu ein und schreibt sie bei jedem Start aus dem Code-Stand neu (siehe
-`CLAUDE.md`). Um diese Szene wieder live zu fahren: Werte per
-`scripts/osc_send.py` erneut senden (Restart würde stattdessen die
-Code-Defaults laden, nicht diese Szene).
+**Hinweis:** Dies war ursprünglich ein reiner Werte-Snapshot ohne Ladefunktion.
+Seit dem Preset-System (2026-07-30) liegt derselbe Wertesatz als ladbares
+Preset unter `data/presets/hang_drum_slow.txt` — abzurufen per
+`/preset/load hang_drum_slow`, per `IMPULSE_PRESET=hang_drum_slow` beim Start
+oder über den Scheduler. Die Datei hier bleibt als Herkunftsbeleg liegen: sie
+ist die 1:1-Kopie des live gezogenen Standes, das Preset ist die daraus
+abgeleitete, um die zwei Kommandozeilen bereinigte und nach Adresse sortierte
+Fassung.

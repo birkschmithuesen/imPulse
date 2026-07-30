@@ -1,0 +1,7 @@
+float	/sc/amp/max		0.5	0	1
+float	/sc/amp/min		0.08	0	1
+float	/sc/bell/decayScale		1.0	0.1	4.0
+float	/sc/bell/tilt		1.0	0.3	3.0
+int	/sc/scale/octaves		3	1	6
+int	/sc/scale/rootMidi		60	24	96
+ints	/sc/scale/steps		0,2,4,7,9	0	11
