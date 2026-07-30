@@ -81,7 +81,12 @@ class LedPositionCalibration {
   // Wird aus dem Konstruktor und bei R gerufen, damit waehrend der Sitzung
   // aufgenommene Kreuzungen auftauchen.
   void rebuildWorklist() {
-    int keepFirstLed = entries.isEmpty() ? -1 : entries.get(current)[0];
+    // Alle LEDs des aktuellen Eintrags merken, nicht nur die kleinste: eine
+    // neu aufgenommene Kreuzung kann die bisherige LED mit einer KLEINEREN
+    // zusammenlegen. Dann ist der Punkt ueber seine frueher kleinste LED nicht
+    // mehr zu finden, und der Zeiger sprang auf den Listenanfang - mitten in
+    // der Arbeit am Netz.
+    int[] keepLeds = entries.isEmpty() ? new int[0] : ledsOfEntry(current);
 
     List<int[]> built = new ArrayList<int[]>();
     Set<Integer> covered = new HashSet<Integer>();
@@ -111,15 +116,22 @@ class LedPositionCalibration {
     // Nach einem Neuaufbau soll derselbe Punkt weiter unter dem Zeiger
     // stehen, nicht ein zufaellig anderer - sonst verliert man beim Druck auf
     // R die Stelle, an der man gerade arbeitet.
-    current = 0;
-    if (keepFirstLed >= 0) {
-      for (int i = 0; i < entries.size(); i++) {
-        if (entries.get(i)[0] == keepFirstLed) {
-          current = i;
-          break;
+    int found = indexOfEntryContaining(keepLeds);
+    current = found >= 0 ? found : 0;
+  }
+
+  // Sucht den Eintrag, der eine dieser LEDs traegt. -1, wenn keiner.
+  private int indexOfEntryContaining(int[] leds) {
+    for (int i = 0; i < entries.size(); i++) {
+      for (int led : entries.get(i)) {
+        for (int wanted : leds) {
+          if (led == wanted) {
+            return i;
+          }
         }
       }
     }
+    return -1;
   }
 
   private void addEndIfFree(List<int[]> built, Set<Integer> covered, int ledIndex) {

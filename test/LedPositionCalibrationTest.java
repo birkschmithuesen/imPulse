@@ -143,6 +143,41 @@ public class LedPositionCalibrationTest {
     Check.eq("die neue Kreuzung sitzt an der richtigen Stelle", 7, c3.ledsOfEntry(1)[0]);
     Check.that("und ist offen", !c3.entryIsSet(1));
 
+    // ---- rebuildWorklist haelt den Zeiger auf demselben physischen Punkt ----
+    // Ohne Zeigerrettung faellt current nach jedem Rebuild auf 0 - und genau
+    // das passiert bei R, waehrend jemand am Netz arbeitet.
+    NodeCrossingStore csKeep = crossings(new int[][] { { 10, 30 } });
+    LedPositionCalibration ck = build(csKeep, store());
+    ck.next();
+    ck.next();
+    ck.next();
+    Check.eq("Zeiger vor dem Rebuild", 20, ck.ledsOfEntry(ck.entryIndex())[0]);
+    ck.rebuildWorklist();
+    Check.eq("nach dem Rebuild steht der Zeiger auf demselben Punkt",
+        20, ck.ledsOfEntry(ck.entryIndex())[0]);
+
+    // Der harte Fall: eine neue Kreuzung legt die LED des aktuellen Eintrags
+    // mit einer KLEINEREN zusammen. Ueber die frueher kleinste LED ist der
+    // Punkt danach nicht mehr zu finden.
+    NodeCrossingStore csMerge = crossings(new int[][] { { 10, 30 } });
+    LedPositionCalibration cm = build(csMerge, store());
+    while (cm.ledsOfEntry(cm.entryIndex())[0] != 79) {
+      cm.next();
+    }
+    Check.eq("Zeiger auf dem letzten Stripe-Ende", 79, cm.ledsOfEntry(cm.entryIndex())[0]);
+    // Stripe 0 LED 5 und Stripe 3 LED 19 (global 79) - Minimum der Kreuzung ist 5
+    Check.that("neue Kreuzung auf LED 79 aufgenommen", csMerge.add(0, 5, 3, 19));
+    cm.rebuildWorklist();
+    int[] afterMerge = cm.ledsOfEntry(cm.entryIndex());
+    boolean holds79 = false;
+    for (int led : afterMerge) {
+      if (led == 79) {
+        holds79 = true;
+      }
+    }
+    Check.that("der Zeiger folgt dem Punkt in den zusammengelegten Eintrag", holds79);
+    Check.eq("und der Eintrag traegt jetzt zwei LEDs", 2, afterMerge.length);
+
     System.exit(Check.report("LedPositionCalibrationTest"));
   }
 }
