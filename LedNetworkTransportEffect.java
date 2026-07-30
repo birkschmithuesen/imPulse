@@ -288,15 +288,11 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     //if activation hits a stripe crossing, create a new activation for each of the branches
     if (ledNetInfo[activationLedIdx].partOfNode!=null) {
       LedNetworkNode hitNode=ledNetInfo[activationLedIdx].partOfNode;
-      // Sound-Trigger ist bewusst NICHT an die nodeDeadTime-Sperre gekoppelt
-      // (Birk 2026-07-30): jede echte Node-Beruehrung soll hoerbar sein, auch
-      // wenn die Sperre die visuelle Vermehrung/Aufspaltung des Impulses fuer
-      // diesen Node gerade unterdrueckt. Sonst blieben Nodes, die innerhalb der
-      // Sperrzeit erneut getroffen werden, komplett stumm statt nur leise.
-      sendOscMessage(hitNode, curActivation);
-      // only multiply/spread at nodes that have not been active for a while
+      // only multiply at nodes that have not been active for a while
       if (currentTime-hitNode.lastActivationTime>nodeDeadTime.getValue()) {
         hitNode.lastActivationTime=currentTime;
+        //send osc Notification
+        sendOscMessage(hitNode, curActivation);
         float nActivations=hitNode.ledIndices.size();
         //float childEnergy=curActivation.energy/nActivations/2.0f-energyLoss;
         //curActivation.setEnergy(childEnergy);
