@@ -142,6 +142,118 @@ s.waitForBoot({
         ("node % -> % Hz (amp %)".format(nodeId, freq.round(0.1), amp.round(0.01))).postln;
     }, '/net/hitNode', recvPort: ~oscListenPort);
 
+    // ---- Preset-Dateien -----------------------------------------------
+    // Format wie in imPulse: sechs tabgetrennte Spalten
+    //   typ, adresse, beschreibung, wert, min, max
+    // Ein Format über beide Hälften. Die Tonleiter ist ein Array und kein
+    // Skalar - sie steht als Typ "ints" kommagetrennt in der Wertspalte, das
+    // ist die einzige Formaterweiterung gegenüber imPulse.
+    //
+    // Reihenfolge alphabetisch nach Adresse, genau wie PresetStore.write() in
+    // imPulse sortiert.
+    ~presetNameValid = { |name|
+        name.isString
+            and: { name.size > 0 }
+            and: { name.size <= 64 }
+            and: { name.every({ |char| "abcdefghijklmnopqrstuvwxyz0123456789_-".includes(char) }) };
+    };
+
+    ~presetValues = {
+        [
+            ["float", "/sc/amp/max",         ~maxAmp.asString,               "0",   "1"],
+            ["float", "/sc/amp/min",         ~minAmp.asString,               "0",   "1"],
+            ["float", "/sc/bell/decayScale", ~decayScale.asString,           "0.1", "4.0"],
+            ["float", "/sc/bell/tilt",       ~tilt.asString,                 "0.3", "3.0"],
+            ["int",   "/sc/scale/octaves",   ~numOctaves.asString,           "1",   "6"],
+            ["int",   "/sc/scale/rootMidi",  ~rootMidiNote.asString,         "24",  "96"],
+            ["ints",  "/sc/scale/steps",     ~pentatonicSteps.join(","),     "0",   "11"]
+        ];
+    };
+
+    // true, wenn die Adresse hierher gehört. Wie in imPulse wird geklemmt,
+    // nicht abgewiesen.
+    ~presetApply = { |address, value|
+        case
+        { address == "/sc/scale/steps" } {
+            var steps = value.split($,).collect({ |part| part.asInteger });
+            if (steps.size > 0) {
+                ~pentatonicSteps = steps;
+                ~recalcScale.value;
+            };
+            true;
+        }
+        { address == "/sc/scale/rootMidi" } {
+            ~rootMidiNote = ~clip.value(value.asInteger, 24, 96); true;
+        }
+        { address == "/sc/scale/octaves" } {
+            ~numOctaves = ~clip.value(value.asInteger, 1, 6); ~recalcScale.value; true;
+        }
+        { address == "/sc/amp/min" } {
+            ~minAmp = ~clip.value(value.asFloat, 0.0, 1.0); true;
+        }
+        { address == "/sc/amp/max" } {
+            ~maxAmp = ~clip.value(value.asFloat, 0.0, 1.0); true;
+        }
+        { address == "/sc/bell/decayScale" } {
+            ~decayScale = ~clip.value(value.asFloat, 0.1, 4.0); true;
+        }
+        { address == "/sc/bell/tilt" } {
+            ~tilt = ~clip.value(value.asFloat, 0.3, 3.0); true;
+        }
+        { true } { false };
+    };
+
+    ~presetSave = { |name|
+        var path, file;
+        if (~presetNameValid.value(name).not) {
+            ("SC-Preset-Name unzulaessig: %".format(name)).postln;
+        } {
+            File.mkdir(~presetDir);
+            path = ~presetDir ++ "/" ++ name ++ ".txt";
+            file = File(path, "w");
+            if (file.isOpen) {
+                ~presetValues.value.do({ |row|
+                    file.write("%\t%\t\t%\t%\t%\n".format(
+                        row[0], row[1], row[2], row[3], row[4]));
+                });
+                file.close;
+                ("SC-Preset gespeichert: %".format(path)).postln;
+            } {
+                ("SC-Preset nicht schreibbar: %".format(path)).postln;
+            };
+        };
+    };
+
+    ~presetLoad = { |name|
+        var path, applied = 0, unknown = [];
+        if (~presetNameValid.value(name).not) {
+            ("SC-Preset-Name unzulaessig: %".format(name)).postln;
+        } {
+            path = ~presetDir ++ "/" ++ name ++ ".txt";
+            if (File.exists(path).not) {
+                // Wie visuell: ein fehlendes Preset hält nichts an, der Klang
+                // bleibt wie er ist.
+                ("SC-Preset nicht gefunden: % - Klang bleibt unveraendert".format(path)).postln;
+            } {
+                File.readAllString(path).split($\n).do({ |line|
+                    var cols;
+                    if (line.stripWhiteSpace.size > 0) {
+                        cols = line.split($\t);
+                        if (cols.size >= 4) {
+                            if (~presetApply.value(cols[1], cols[3])) {
+                                applied = applied + 1;
+                            } {
+                                unknown = unknown.add(cols[1]);
+                            };
+                        };
+                    };
+                });
+                ("SC-Preset \"%\" geladen: % Werte gesetzt%".format(name, applied,
+                    if (unknown.size > 0) { ", unbekannt: " ++ unknown.join(", ") } { "" })).postln;
+            };
+        };
+    };
+
     // ---- Parameter-Steuerung per OSC ---------------------------------
     // Bewusst derselbe Port wie /net/hitNode: imPulse sendet schon dorthin
     // (oscOutput in imPulse.pde). Der bestehende Listener wird nicht
@@ -190,7 +302,17 @@ s.waitForBoot({
         OSCFunc({ |msg|
             ~tilt = ~clip.value(msg[1].asFloat, 0.3, 3.0);
             ("bell/tilt -> %".format(~tilt)).postln;
-        }, '/sc/bell/tilt', recvPort: ~oscListenPort)
+        }, '/sc/bell/tilt', recvPort: ~oscListenPort),
+
+        // Zwei mögliche Absender: imPulse bei jedem Preset-Wechsel
+        // (PresetManager.forwardToSound) und ein Bediener von aussen.
+        OSCFunc({ |msg|
+            ~presetLoad.value(msg[1].asString);
+        }, '/sc/preset/load', recvPort: ~oscListenPort),
+
+        OSCFunc({ |msg|
+            ~presetSave.value(msg[1].asString);
+        }, '/sc/preset/save', recvPort: ~oscListenPort)
     ];
 
     "KlangNetz Glockenspiel: Server gebootet, hoere auf /net/hitNode Port % - bereit.".format(~oscListenPort).postln;
