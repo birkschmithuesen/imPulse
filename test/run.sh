@@ -14,6 +14,7 @@ mkdir -p build
 
 SOURCES="LedColor.java ArtNetOutput.java"
 [ -f NodeCrossingStore.java ] && SOURCES="$SOURCES NodeCrossingStore.java"
+[ -f NodeSelection.java ] && SOURCES="$SOURCES NodeSelection.java"
 [ -f LedStripeNetworks.java ] && SOURCES="$SOURCES LedStripeNetworks.java"
 [ -f TestPatterns.java ] && SOURCES="$SOURCES TestPatterns.java"
 [ -f LedAnchorStore.java ] && SOURCES="$SOURCES LedAnchorStore.java"
@@ -23,11 +24,11 @@ SOURCES="LedColor.java ArtNetOutput.java"
 
 javac -nowarn -cp "$CORE" -d build $SOURCES test/*.java
 
-# Ohne Argumente alle vier Suiten starten - ein leerer Aufruf soll nicht
+# Ohne Argumente alle Suiten starten - ein leerer Aufruf soll nicht
 # stillschweigend als "alles bestanden" durchgehen, ohne ueberhaupt etwas
 # geprueft zu haben.
 if [ "$#" -eq 0 ]; then
-  set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest LedAnchorStoreTest
+  set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest NodeSelectionTest LedAnchorStoreTest LedPositionMapTest
 fi
 
 status=0
