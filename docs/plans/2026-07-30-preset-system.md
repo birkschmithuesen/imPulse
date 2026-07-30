@@ -20,15 +20,28 @@
 - **Beim Laden gelten die Grenzen aus dem Code**, nicht die aus den Spalten `min`/`max` der Datei.
 - **Preset-Namen:** nur `[a-z0-9_-]`, Länge 1 bis 64. Der Name kommt über OSC von außen; ohne die Prüfung wäre `/preset/load ../../../etc/passwd` ein Dateizugriff nach Wunsch des Absenders.
 - **Klassenname ≠ Dateiname.** Mehrere Klassen pro Datei sind hier Konvention (siehe `LedStripeNetworks.java`). `PresetTarget` und `PresetApplyReport` liegen mit in `PresetStore.java`.
-- **Kein Merge nach `grabicz26`.** Alle Commits bleiben auf `feature/preset-system`.
+- **Kein Merge nach `grabicz26`.** Alle Commits bleiben auf `feature/preset-system-v2` (diese Branch stammt direkt von `master`, dem Working-State-Branch — siehe `CLAUDE.md`, „Branch-Konvention"). Ein Merge nach `master` ist eine spätere, bewusste Entscheidung, kein Teil dieses Plans.
 - **Nie gegen die Installation senden.** `test/TimingProbe`, `test/PollProbe`, `test/PatternProbe` sprechen echte Hardware an und werden in diesem Plan nicht aufgerufen.
 - **Kommentare und Meldungen auf Deutsch, ohne Umlaute im Java-Quelltext** (bestehende Konvention: `Uebersetzung`, `naechste`). Markdown-Dateien dürfen Umlaute haben.
 
 ---
 
-### Task 0: Werkzeugkette herstellen
+### Task 0: Werkzeugkette herstellen — ✅ bereits vorhanden (verifiziert 2026-07-30)
 
-Ohne diese Aufgabe ist kein Prüfschritt des Plans ausführbar. Auf der Maschine, auf der dieser Plan geschrieben wurde, fehlten `java`, `javac`, `core.jar` und SuperCollider vollständig. Wer den Plan auf einem anderen Rechner ausführt, prüft das trotzdem — und überspringt die Aufgabe nur, wenn Schritt 4 grün ist.
+Auf dem Hermes-vServer bereits eingerichtet unter
+`~/.hermes/impulse-toolchain/` (JDK 8u492 Temurin + Processing 3.5.4
+core.jar). Vor jedem Arbeitsschritt exportieren:
+
+```bash
+export PATH="$HOME/.hermes/impulse-toolchain/jdk8u492-b09/bin:$PATH"
+export IMPULSE_CORE_JAR="$HOME/.hermes/impulse-toolchain/processing-3.5.4/core/library/core.jar"
+export IMPULSE_PROCESSING_JAVA="$HOME/.hermes/impulse-toolchain/processing-3.5.4"
+```
+
+Verifiziert: `test/run.sh` läuft komplett durch, alle Suiten grün (u.a.
+`ArtNetOutputTest`, `LedPositionCalibrationTest`, `ImpulseOscThrottleTest`).
+Die folgenden Steps 1–4 sind damit erledigt — bei Bedarf (neue Maschine,
+Toolchain fehlt) als Fallback nutzen.
 
 **Files:**
 - Keine Repo-Änderung. Diese Aufgabe richtet nur die Umgebung ein.
