@@ -3,9 +3,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CORE=/Applications/Processing.app/Contents/Java/core.jar
+# core.jar von Processing. Ueber die Umgebungsvariable IMPULSE_CORE_JAR
+# ueberschreibbar, damit die Suite auch ohne Processing-Installation laeuft -
+# etwa auf einem Linux-Server ohne root. Nur LedColor und LedStripeNetworks
+# brauchen ueberhaupt processing.core; die Datei genuegt, ein vollstaendiges
+# Processing ist dafuer nicht noetig:
+#   curl -o ~/lib/core.jar \
+#     https://repo1.maven.org/maven2/org/processing/core/3.3.7/core-3.3.7.jar
+#   export IMPULSE_CORE_JAR=~/lib/core.jar
+CORE="${IMPULSE_CORE_JAR:-/Applications/Processing.app/Contents/Java/core.jar}"
 if [ ! -f "$CORE" ]; then
   echo "core.jar nicht gefunden unter $CORE" >&2
+  echo "Auf einem Rechner ohne Processing: core.jar besorgen und" >&2
+  echo "IMPULSE_CORE_JAR darauf zeigen lassen, siehe Kommentar oben." >&2
   exit 1
 fi
 
