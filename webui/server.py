@@ -73,17 +73,37 @@ SPEED_COUPLED: Dict[str, Tuple[float, str]] = {
 }
 
 # Reihenfolge der Gruppen im UI; alles Unbekannte haengt alphabetisch hinten an.
+# Sections-Neuordnung nach docs/webui-parameter-review-2026-07-30.md
+# Abschnitt 2 (Birk-Freigabe 2026-07-30): Master, Impuls (Bewegung/Zeit),
+# Impuls-Farbe (RGB + FadeOut als eigener Block -- siehe SPLIT_GROUP_PREFIXES
+# unten, warum das ein group_key()-Sonderfall ist), Ambient-Spawns, Nodes,
+# Trigger, Advanced.
 GROUP_ORDER = [
     "master",
     "Master",
     "Master/opacity",
     "net/impulse",
+    "net/impulse/color",
     "net/randomSpawn",
     "net",
     "nodes",
     "nodes/radius",
     "nodes/times",
     "nodes/colors",
+]
+
+# Adress-Praefixe, die aus ihrer regulaeren group_key()-Gruppe herausgezogen
+# und in eine eigene Gruppe verschoben werden -- unabhaengig von der
+# generischen Praefix-Regel. Bisher nur fuer die Trennung Impuls/Impuls-Farbe
+# gebraucht: /net/impulse/color/* und /net/impulse/fadeOut/* landen sonst in
+# derselben Gruppe wie speed/nodeDeadTime/energyDecay (reine Adress-Praefix-
+# Gruppierung wuerde alles unter /net/impulse zusammenwerfen). Reihenfolge
+# wichtig: laengster/spezifischster Praefix zuerst, damit z.B.
+# "/net/impulse/color/gamma" nicht faelschlich unter einem kuerzeren
+# "/net/impulse"-Eintrag landet, falls der je hinzukaeme.
+SPLIT_GROUP_PREFIXES: List[Tuple[str, str]] = [
+    ("/net/impulse/color/", "net/impulse/color"),
+    ("/net/impulse/fadeOut/", "net/impulse/color"),
 ]
 
 # Schrittweiten-Leiter fuer Float-Regler (grober Wert zuerst).
@@ -109,6 +129,26 @@ ADVANCED_ADDRESSES = {
     "/net/impulse/energyExponent",
 }
 ADVANCED_GROUP_KEY = "zzz_advanced"
+
+# UI-Range-Verengung (docs/webui-parameter-review-2026-07-30.md Abschnitt 1,
+# Birk-Freigabe 2026-07-30). Betrifft NUR die angezeigte/bedienbare Range im
+# Web-UI (Slider + Zahlenfeld + Schrittweite) -- die tatsaechliche Klemmung
+# beim Senden (Parameter.coerce()/normalize(), siehe apply_value()) bleibt
+# auf der vollen, aus remoteSettings.txt gelesenen Range: die Java-Range ist
+# weiterhin das Sicherheitsnetz, hier wird nur das Alltags-UI enger gefasst,
+# damit niemand aus Versehen einen Wert waehlt, der bei 40Hz Framerate /
+# Ambient-Charakter keinen sinnvollen Effekt mehr hat.
+UI_RANGE_OVERRIDES: Dict[str, Tuple[float, float]] = {
+    # ueber 400 ist bei 40Hz Framerate kein wandernder Puls mehr sichtbar,
+    # sondern ein Blitz (Stripe mit 600 LEDs laeuft in <0.4s durch)
+    "/net/impulse/speed": (1, 400),
+    # ab ~6 kollabiert jede Energie <1 durch wiederholtes Quadrieren
+    # (energy *= energy, exponent-mal) praktisch auf 0
+    "/net/impulse/energyExponent": (1, 5),
+    # bei 30 (alle Stripes gleichzeitig) wird "Ambient" zum Flaechenblitz,
+    # kein Ambient-Charakter mehr
+    "/net/randomSpawn/count": (1, 8),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -237,14 +277,36 @@ class Parameter:
                 return candidate
         return STEP_LADDER[-1]
 
+    def ui_range(self) -> Tuple[float, float]:
+        """Angezeigte/bedienbare Range fuer den Regler.
+
+        Normalerweise identisch mit minimum/maximum. Fuer Adressen in
+        UI_RANGE_OVERRIDES wird eine engere Anzeige-Range zurueckgegeben --
+        die tatsaechliche Klemmung beim Senden (clamp()/coerce()/normalize())
+        bleibt unveraendert auf minimum/maximum, siehe Kommentar dort oben.
+        """
+        override = UI_RANGE_OVERRIDES.get(self.address)
+        if override is None:
+            return self.minimum, self.maximum
+        low, high = override
+        # Sicherheitsnetz: eine UI-Override-Range darf die eigentliche
+        # Parameter-Range nie verlassen (falscher Eintrag in
+        # UI_RANGE_OVERRIDES koennte sonst einen ungueltigen Wert anzeigen).
+        low = max(low, min(self.minimum, self.maximum))
+        high = min(high, max(self.minimum, self.maximum))
+        if low >= high:
+            return self.minimum, self.maximum
+        return low, high
+
     def as_dict(self) -> Dict[str, Any]:
+        ui_min, ui_max = self.ui_range()
         return {
             "kind": "param",
             "type": self.type,
             "address": self.address,
             "description": self.description,
-            "min": self.minimum,
-            "max": self.maximum,
+            "min": ui_min,
+            "max": ui_max,
             "step": self.step(),
             # 0/1-Ints bekommen einen Schalter statt eines Zweipunkt-Reglers
             "widget": "toggle" if (self.is_int and self.minimum == 0
@@ -306,9 +368,17 @@ def group_key(address: str) -> str:
     Setup-/Sicherheits-Parameter (ADVANCED_ADDRESSES) werden unabhaengig von
     ihrem eigentlichen Praefix in eine eigene, ans Ende sortierte Gruppe
     verschoben -- siehe docs/webui-parameter-review-2026-07-30.md Abschnitt 1.
+
+    SPLIT_GROUP_PREFIXES zieht bestimmte Unter-Praefixe (aktuell nur
+    /net/impulse/color/* und /net/impulse/fadeOut/*) aus ihrer generischen
+    Praefix-Gruppe in eine eigene Section -- Abschnitt 2 desselben Docs:
+    Impuls-Bewegung/-Zeit soll optisch von Impuls-Farbe getrennt sein.
     """
     if address in ADVANCED_ADDRESSES:
         return ADVANCED_GROUP_KEY
+    for prefix, key in SPLIT_GROUP_PREFIXES:
+        if address.startswith(prefix):
+            return key
     segments = [s for s in address.split("/") if s]
     if len(segments) <= 1:
         return segments[0] if segments else "sonstige"
@@ -321,6 +391,21 @@ def group_sort_key(key: str) -> Tuple[int, str]:
         return (GROUP_ORDER.index(key), "")
     except ValueError:
         return (len(GROUP_ORDER), key.lower())
+
+
+# Menschenlesbare Titel fuer Gruppen, die keinen sprechenden Adress-Praefix
+# als Titel hergeben (z.B. "net/impulse/color" statt "/net/impulse/color").
+GROUP_TITLE_OVERRIDES = {
+    "net/impulse/color": "Impuls-Farbe",
+}
+
+
+def group_title(key: str) -> str:
+    if key == ADVANCED_GROUP_KEY:
+        return "Advanced"
+    if key in GROUP_TITLE_OVERRIDES:
+        return GROUP_TITLE_OVERRIDES[key]
+    return key if key.startswith("Master") else "/" + key
 
 
 def build_groups(parameters: List[Parameter]) -> List[Dict[str, Any]]:
@@ -380,8 +465,7 @@ def build_groups(parameters: List[Parameter]) -> List[Dict[str, Any]]:
 
         groups.append({
             "key": key,
-            "title": "Advanced" if key == ADVANCED_GROUP_KEY
-                else (key if key.startswith("Master") else "/" + key),
+            "title": group_title(key),
             "controls": controls,
         })
     return groups
