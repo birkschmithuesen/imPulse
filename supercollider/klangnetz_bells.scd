@@ -151,6 +151,74 @@
 //   7. Die zwei Zeilen „UNGEMESSEN" durch das Messergebnis MIT DATUM
 //      ersetzen, damit der nächste nicht wieder von vorn anfängt.
 // =====================================================================
+//
+// =====================================================================
+// OSC-STEUERBARER SOUND-PARAMETER-LAYER  (Stand 2026-07-30)
+// =====================================================================
+//
+// Sieben Klangparameter sind zur Laufzeit per OSC einstellbar, unabhängig
+// vom imPulse-Netz-Traffic (eigener Port, eigenes Adress-Präfix). Jeder
+// Parameter klemmt eingehende Werte auf einen festen Bereich (siehe unten)
+// und quittiert den Empfang mit einer postln-Zeile — das ist bewusst KEIN
+// generisches Framework wie `AbstractParameter.java`/`remoteSettings.txt`
+// auf der imPulse-Seite, sondern eine kleine, für genau diese Datei
+// gebaute Registry (~params, ~registerParam), siehe deren Definition
+// weiter unten. Die Liste hier ist die Referenz für eine spätere
+// WebUI-Anbindung (siehe `webui/server.py`, das aktuell nur an Port 8001
+// sendet, also an imPulse — für diese Klangparameter bräuchte es einen
+// zweiten Sender an Port 8002 mit dieser Adressliste).
+//
+// Alle Adressen empfangen EINEN Float als erstes Argument, Port 8002
+// (~oscListenPort, derselbe wie /net/hitNode und /net/impulse):
+//
+//   /klangnetz/param/masterVolume   0.0 .. 1.5   Default 1.0
+//     Globaler Gain NACH dem Decoder (DecodeB2), VOR dem Limiter — sitzt
+//     im neuen \masterReverb-Synth (siehe unten), der genau an dieser
+//     Stelle in der Kette hängt. 1.5 statt 1.0 als Obergrenze, damit sich
+//     eine bewusst leise gemischte Szene noch anheben lässt; der Limiter
+//     dahinter fängt das ab, bevor es hart clippt.
+//
+//   /klangnetz/param/reverbMix      0.0 .. 1.0   Default 0.15
+//   /klangnetz/param/reverbRoom     0.0 .. 1.0   Default 0.5
+//   /klangnetz/param/reverbDamp     0.0 .. 1.0   Default 0.5
+//     Hall als FreeVerb NACH dem Decoder, auf den vier fertig decodierten
+//     Hardware-Kanälen (Begründung: siehe Kommentar bei \masterReverb
+//     weiter unten — kurz zusammengefasst, ein Hall VOR dem Decoder auf
+//     dem 3-kanaligen B-Format-Bus würde selbst wieder räumlich codiert
+//     und vom Decoder zu einer Phantomquelle verschmiert statt zu einem
+//     diffusen Raumklang; FreeVerb je Hardware-Kanal — durch SCs
+//     Multichannel-Expansion automatisch vier UNABHÄNGIGE Hallfahnen —
+//     ergibt eine echte, dekorrelierte Umhüllung, wie man sie von einem
+//     realen Raum erwartet). reverbMix ist der trocken/nass-Regler von
+//     FreeVerb selbst (0 = trocken, 1 = nur Hall), reverbRoom die
+//     gefühlte Raumgrösse/Nachhallzeit, reverbDamp die Höhendämpfung im
+//     Hallschweif (0 = hell/lang nachklingend, 1 = dumpf/kurz).
+//
+//   /klangnetz/param/brightness     0.0 .. 2.0   Default 1.0
+//     \glockenBell: Amp-Faktor auf die VIER oberen Partialtöne (Grundton
+//     bleibt unverändert). 1.0 = aktueller Klang, 0 = reiner Sinuston,
+//     2.0 = deutlich obertonreicher/heller. Wirkt nur auf NEU getriggerte
+//     Töne (Glocken sind kurze One-Shots, kein Sinn in einem Live-.set
+//     auf eine schon abklingende Hülle).
+//
+//   /klangnetz/param/detune         0.0 .. 1.0   Default 1.0
+//     \glockenBell: wieviel von der unharmonischen Verstimmung der
+//     Teiltöne (siehe ~partials) tatsächlich zum Tragen kommt. 1.0 = die
+//     bisherigen, leicht schwebenden Verhältnisse (metallischer
+//     Glockenklang), 0.0 = exakt ganzzahlige Verhältnisse (1:2:3:4:5,
+//     harmonisch/rein, klingt eher wie eine Orgelpfeife als eine Glocke).
+//     Interpoliert linear zwischen beiden Zuständen. Ebenfalls nur bei
+//     NEUEN Tönen wirksam, aus demselben Grund wie brightness.
+//
+//   /klangnetz/param/droneLpfMult   1.0 .. 12.0  Default 6.0
+//     \impulseDrone: Multiplikator auf die LPF-Grenzfrequenz (bisher fest
+//     `freq*6`, jetzt `freq*droneLpfMult`). Klein = dumpfer/dunkler,
+//     gross = heller/obertonreicher. Wirkt SOFORT auf alle gerade
+//     laufenden Drohnen (per .set in einer Schleife über ~drones, siehe
+//     ~registerParam-Aufruf unten) — anders als brightness/detune, weil
+//     eine Drohne (anders als eine Glocke) über Sekunden gehalten wird
+//     und ein Live-Regler an ihr hörbar Sinn ergibt.
+// =====================================================================
 
 (
 // ---- Konfiguration ---------------------------------------------------
@@ -251,6 +319,41 @@ s.options.numOutputBusChannels = 4;
 // steht meist allein.
 ~droneAmpScale = 0.06;
 
+// ---- OSC-Sound-Parameter-Registry --------------------------------------
+// Kleine, für DIESE Datei gebaute Registry — kein Anspruch auf
+// Wiederverwendbarkeit in anderen Patches. Jeder Eintrag: Environment-
+// Variable, Default, Range, optionaler onSet-Callback (für Parameter, die
+// SOFORT auf laufende Synths wirken sollen statt nur beim nächsten
+// Trigger, siehe droneLpfMult). Der eigentliche Wert liegt als einfache
+// Environment-Variable (~masterVolume etc.) — das reicht hier, weil die
+// SynthDefs unten entweder (a) den Wert bei jedem NEUEN Synth als
+// Start-Argument lesen (brightness, detune) oder (b) ihn über einen
+// eigenen, dauerhaft laufenden Effekt-Synth als Control-Bus-Wert
+// bekommen (masterVolume, reverb*, siehe \masterReverb). Ein
+// Control-Bus für ALLE Parameter wäre hier Overhead ohne Nutzen.
+~params = IdentityDictionary.new;
+
+~registerParam = { |name, default, lo, hi, onSet|
+    ~params[name] = (default: default, lo: lo, hi: hi, onSet: onSet);
+    // Environment-Variable mit Default vorbelegen, BEVOR OSC etwas
+    // schickt — sonst lesen Synths vor der ersten Nachricht nil.
+    currentEnvironment[name] = default;
+};
+
+~registerParam.(\masterVolume, 1.0, 0.0, 1.5, nil);
+~registerParam.(\reverbMix,    0.15, 0.0, 1.0, nil);
+~registerParam.(\reverbRoom,   0.5,  0.0, 1.0, nil);
+~registerParam.(\reverbDamp,   0.5,  0.0, 1.0, nil);
+~registerParam.(\brightness,   1.0,  0.0, 2.0, nil);
+~registerParam.(\detune,       1.0,  0.0, 1.0, nil);
+// droneLpfMult wirkt auf alle GERADE LAUFENDEN Drohnen, nicht nur auf
+// künftige — deshalb der onSet-Callback, der über ~drones iteriert.
+~registerParam.(\droneLpfMult, 6.0, 1.0, 12.0, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\lpfMult, val);
+    }) };
+});
+
 s.waitForBoot({
     // ---- Alten Aufbau abräumen ---------------------------------------
     // Nur beim Re-Evaluieren im Live-Coding relevant, beim ersten Lauf sind
@@ -265,15 +368,21 @@ s.waitForBoot({
     ~netHitNodeOscFunc !? { |f| f.free };
     OSCdef(\impulseStream) !? { |d| d.free };
     ~droneReaper !? { |r| r.stop };
+    ~paramOscDefs !? { |defs| defs.do({ |d| d.free }) };
+    ~masterReverbSyn !? { |syn| syn.free };
     ~decoderSyn  !? { |syn| syn.free };
     ~voices      !? { |g| g.free };   // frei macht auch alle Stimmen darin
     ~bformatBus  !? { |b| b.free };
+    ~decodedBus  !? { |b| b.free };
     ~drones = nil;
 
     // B-Format-Bus: 2D erster Ordnung, drei Kanäle W X Y. Alle Klangobjekte
     // schreiben hier hinein, EIN Decoder-Synth am Ende macht daraus die vier
     // Lautsprecherkanäle.
     ~bformatBus = Bus.audio(s, 3);
+    // 4-kanaliger Zwischenbus zwischen \b2Decoder und \masterReverb — siehe
+    // Begründung der Kettenreihenfolge beim \masterReverb-SynthDef.
+    ~decodedBus = Bus.audio(s, 4);
     ~voices = Group.new;
 
     // ---- Position -> B-Format ----------------------------------------
@@ -316,19 +425,35 @@ s.waitForBoot({
     // hin ausdünnt). Kurzer Attack (3 ms), langer exponentieller Decay.
     // Die Klangfarbe ist gegenüber der Zweikanal-Fassung unverändert; ersetzt
     // sind nur pan/Pan2 durch x/y und die Ambisonic-Kette.
-    SynthDef(\glockenBell, { |freq = 440, amp = 0.3, out = 0, x = 0, y = 0|
-        var sig, partials, partialAmps, partialDecays;
+    //
+    // brightness und detune sind Start-Argumente, keine .set-baren Controls:
+    // eine Glocke ist ein kurzer One-Shot (EnvGen mit doneAction:2, weg nach
+    // ~3s), ein späteres .set würde nie mehr ankommen, bevor der Synth sich
+    // selbst freigibt. Wer den Klang live hören will, hört den NÄCHSTEN
+    // getriggerten Ton — bei der Anschlagsrate der Installation (Hits im
+    // Sekundenbereich) praktisch sofort.
+    SynthDef(\glockenBell, { |freq = 440, amp = 0.3, out = 0, x = 0, y = 0,
+            brightness = 1.0, detune = 1.0|
+        var sig, partials, partialAmps, partialDecays, harmonicPartials;
 
         // Frequenzverhältnisse der Teiltöne (1 = Grundton), leicht verstimmt
         // gegenüber ganzzahligen Harmonischen für metallischen Glockenklang.
         partials      = #[1.0, 2.001, 2.998, 4.204, 5.515];
+        // Rein harmonische Gegenprobe (1:2:3:4:5) — Ziel von detune = 0.
+        harmonicPartials = #[1.0, 2.0, 3.0, 4.0, 5.0];
         partialAmps   = #[1.0, 0.55, 0.30, 0.18, 0.10];
         partialDecays = #[3.2, 2.1, 1.35, 0.85, 0.55]; // Sekunden, lang & abnehmend
 
         sig = Mix.fill(partials.size, { |i|
-            var pFreq, pAmp, pDecay, env;
-            pFreq  = freq * partials[i];
-            pAmp   = partialAmps[i];
+            var pFreq, pRatio, pAmp, pDecay, env;
+            // detune blendet zwischen der unharmonischen und der rein
+            // harmonischen Verhältniszahl. 1.0 = wie bisher, 0.0 = rein.
+            pRatio = partials[i].blend(harmonicPartials[i], 1.0 - detune);
+            pFreq  = freq * pRatio;
+            // brightness skaliert NUR die oberen vier Partialtöne (i > 0) —
+            // der Grundton bleibt Referenzpunkt, sonst würde brightness auch
+            // die Gesamtlautstärke verschieben statt nur die Klangfarbe.
+            pAmp   = if (i == 0) { partialAmps[i] } { partialAmps[i] * brightness };
             pDecay = partialDecays[i];
             // kurzer linearer Attack, langer exponentieller Decay-Tail
             env = EnvGen.kr(
@@ -347,8 +472,9 @@ s.waitForBoot({
     // Leiser gehaltener Ton für einen reisenden Impuls. Die Klangfarbe ist
     // ein schlichter Startpunkt und ausdrücklich zum Ersetzen gedacht — die
     // Mechanik drumherum ist der Teil, der stimmen muss.
-    SynthDef(\impulseDrone, { |freq = 220, amp = 0.08, out = 0, x = 0, y = 0, gate = 1|
-        var sig, env, xl, yl, ampl;
+    SynthDef(\impulseDrone, { |freq = 220, amp = 0.08, out = 0, x = 0, y = 0, gate = 1,
+            lpfMult = 6|
+        var sig, env, xl, yl, ampl, lpfMultLagged;
         // Lag VOR der Umrechnung: ein springender Positionswert darf nicht
         // als Klick durchschlagen. Bei 10 Hz Melderate glättet 0.1 s die
         // Sprünge zwischen zwei Meldungen.
@@ -360,9 +486,13 @@ s.waitForBoot({
         // wie ein Sprung der Position. Gleiche Zeit wie oben, damit
         // Lautstärke und Ort nicht auseinanderlaufen.
         ampl = Lag.kr(amp, 0.1);
+        // lpfMult kommt live per .set vom OSC-Parameter droneLpfMult (siehe
+        // ~registerParam-Aufruf oben) — genauso lagged, sonst knackt ein
+        // Regler-Sprung mitten im Filterverlauf.
+        lpfMultLagged = Lag.kr(lpfMult, 0.1);
         env = EnvGen.kr(Env.asr(0.05, 1, 0.3, \sin), gate, doneAction: 2);
         sig = LFTri.ar(freq) * 0.5 + SinOsc.ar(freq * 2.01, 0, 0.2);
-        sig = LPF.ar(sig, freq * 6);
+        sig = LPF.ar(sig, freq * lpfMultLagged);
         sig = sig * ampl * env;
         Out.ar(out, ~toBformat.(sig, xl, yl));
     }).add;
@@ -373,10 +503,47 @@ s.waitForBoot({
     // verdrahtet, damit sich die Messung vor Ort mit ~setOrientation.() in
     // einem Aufruf nachhören lässt. Gedreht wird das Klangbild woanders,
     // nämlich mit ~azimuthOffset im Encoder.
-    SynthDef(\b2Decoder, { |in = 0, orientation = 0, amp = 1|
+    //
+    // Schreibt NICHT mehr direkt auf die Hardware-Kanäle (Out.ar(0, ...)),
+    // sondern auf ~decodedBus — dazwischen hängt jetzt \masterReverb (Hall +
+    // Master-Volume + Limiter), siehe dort für die Begründung der Reihenfolge.
+    SynthDef(\b2Decoder, { |in = 0, orientation = 0, amp = 1, out = 0|
         var bf, sig;
         bf  = In.ar(in, 3);
         sig = DecodeB2.ar(4, bf[0], bf[1], bf[2], orientation) * amp;
+        Out.ar(out, sig);
+    }).add;
+
+    // ---- SynthDef: Master-Volume + Reverb + Limiter --------------------
+    // Fester Anschlusspunkt NACH dem Decoder, auf den vier fertig
+    // decodierten Hardware-Kanälen — bewusst NICHT auf dem 3-kanaligen
+    // B-Format-Bus davor. Zwei Gründe:
+    //
+    //  1. Ein Hall VOR dem Decoder würde selbst als B-Format kodiert
+    //     (PanB2 kennt nur Punktquellen, kein FreeVerb-Ausgang ist eine
+    //     solche) und beim Decodieren wieder zu einer einzigen Phantom-
+    //     richtung verschmiert statt zu einem diffusen, allseitigen
+    //     Raumklang — das Gegenteil von dem, was ein Hall leisten soll.
+    //  2. NACH dem Decoder liegen schon vier UNABHÄNGIGE Kanäle vor. Ein
+    //     FreeVerb je Kanal (durch SCs Multichannel-Expansion automatisch
+    //     vier separate Hallfahnen mit eigenem internen Zufallsrauschen)
+    //     ergibt eine echte dekorrelierte Umhüllung, wie ein realer Raum
+    //     sie hat — kein künstlich korrelierter „Hall aus einer Box".
+    //
+    // Master-Volume sitzt VOR dem Limiter (Auftrag: „NACH dem Decoder, VOR
+    // dem Limiter") — ein Volume-Push, der den Limiter hörbar zum Greifen
+    // bringt, ist ausdrücklich erwünschtes Verhalten (z.B. für einen
+    // bewusst dichten/lauten Moment), kein Fehler.
+    SynthDef(\masterReverb, { |in = 0, out = 0,
+            masterVolume = 1.0, reverbMix = 0.15, reverbRoom = 0.5, reverbDamp = 0.5|
+        var dry, wet, sig;
+        dry = In.ar(in, 4);
+        // FreeVerb ist ein Standard-SC-Core-UGen (kein Quark nötig).
+        // .ar mit einem 4-Kanal-Signal expandiert automatisch zu vier
+        // unabhängigen FreeVerb-Instanzen (Multichannel-Expansion) — siehe
+        // Begründung oben.
+        wet = FreeVerb.ar(dry, reverbMix, reverbRoom, reverbDamp);
+        sig = wet * masterVolume;
         // Schutznetz gegen hartes digitales Clipping. Rechnung: für eine
         // einzelne Glocke ist amp * Summe(partialAmps) = 0.5 * 2.13 ≈ 1.07
         // die OBERE SCHRANKE — erreicht wird sie nie, weil die fünf
@@ -389,11 +556,12 @@ s.waitForBoot({
         // Dazu kommen bis zu ~droneLimit = 32 Drohnen à höchstens
         // 2 * ~droneAmpScale = 0.12. Die Summe kann also 1.0 überschreiten
         // — sie tut es nur bei zufälliger Gleichphasigkeit, weil die
-        // Stimmen auf verschiedenen Tonhöhen liegen, aber „selten" ist kein
+        // Stimmen auf verschiedenen Tonhöhen liegen, aber "selten" ist kein
         // Schutz. Eine einzelne Glocke bleibt mit 0.86 unter der Schwelle,
         // der Limiter ist im Normalfall also untätig und hörbar nur, wenn
-        // wirklich viel gleichzeitig klingt. Unterhalb von 0.95 greift er
-        // nicht ein.
+        // wirklich viel gleichzeitig klingt — oder masterVolume > 1 einen
+        // sonst unauffälligen Moment bewusst anhebt. Unterhalb von 0.95
+        // greift er nicht ein.
         // Er wirkt je Kanal getrennt (Multichannel-Expansion): setzt er ein,
         // kann das Klangbild kurz wandern. Das ist der Preis dafür, dass ein
         // gekoppelter Vierkanal-Limiter kein Kern-UGen ist, und immer noch
@@ -401,7 +569,7 @@ s.waitForBoot({
         // verzögert damit den GESAMTEN Ausgang um 10 ms — gleichmässig über
         // alle vier Kanäle, das Klangbild bleibt also unberührt.
         sig = Limiter.ar(sig, 0.95, 0.01);
-        Out.ar(0, sig);
+        Out.ar(out, sig);
     }).add;
 
     // ---- SynthDef: Messhilfe -----------------------------------------
@@ -419,7 +587,18 @@ s.waitForBoot({
     // Der Decoder MUSS hinter den Stimmen laufen, sonst decodiert er einen
     // Bus, in den sie im selben Block noch nicht geschrieben haben.
     ~decoderSyn = Synth.after(~voices, \b2Decoder, [
-        \in, ~bformatBus.index, \orientation, ~decoderOrientation
+        \in, ~bformatBus.index, \orientation, ~decoderOrientation, \out, ~decodedBus.index
+    ]);
+
+    // ---- Master-Volume + Reverb starten --------------------------------
+    // MUSS hinter dem Decoder laufen (derselbe Grund wie oben: sonst liest
+    // er ~decodedBus, bevor \b2Decoder im selben Block hineingeschrieben
+    // hat) und ist der letzte Synth vor der Hardware — Out.ar(0, ...) im
+    // SynthDef selbst.
+    ~masterReverbSyn = Synth.after(~decoderSyn, \masterReverb, [
+        \in, ~decodedBus.index, \out, 0,
+        \masterVolume, ~masterVolume, \reverbMix, ~reverbMix,
+        \reverbRoom, ~reverbRoom, \reverbDamp, ~reverbDamp
     ]);
 
     // orientation zur Laufzeit umstellen. Bewusst über Neuanlegen statt über
@@ -440,7 +619,7 @@ s.waitForBoot({
         ~decoderOrientation = o;
         ~decoderSyn.free;
         ~decoderSyn = Synth.after(~voices, \b2Decoder, [
-            \in, ~bformatBus.index, \orientation, ~decoderOrientation
+            \in, ~bformatBus.index, \orientation, ~decoderOrientation, \out, ~decodedBus.index
         ]);
         ("Decoder neu angelegt mit orientation = %".format(o)).postln;
     };
@@ -482,7 +661,7 @@ s.waitForBoot({
                 ~drones[id] = (
                     synth: Synth(\impulseDrone, [
                         \freq, ~droneFreq.(id), \x, px, \y, py,
-                        \amp, amp, \out, ~bformatBus.index
+                        \amp, amp, \out, ~bformatBus.index, \lpfMult, ~droneLpfMult
                     ], ~voices),
                     lastSeen: Main.elapsedTime
                 );
@@ -540,13 +719,50 @@ s.waitForBoot({
         // Die frühere Zufalls-Panoramisierung entfällt: sie war der
         // Platzhalter für genau diese Knotenposition.
         Synth(\glockenBell, [
-            \freq, freq, \amp, amp, \x, px, \y, py, \out, ~bformatBus.index
+            \freq, freq, \amp, amp, \x, px, \y, py, \out, ~bformatBus.index,
+            \brightness, ~brightness, \detune, ~detune
         ], ~voices);
 
         ("node % -> % Hz (amp %) bei (%, %) m".format(
             nodeId, freq.round(0.1), amp.round(0.01), px.round(0.01), py.round(0.01)
         )).postln;
     }, '/net/hitNode', recvPort: ~oscListenPort);
+
+    // ---- OSC-Empfang: Sound-Parameter-Layer ---------------------------
+    // Ein OSCdef je registriertem Parameter (siehe ~registerParam oben) —
+    // schlichter Loop über ~params statt sieben Kopien desselben Rumpfs.
+    // Jede Nachricht bringt EINEN Float als erstes Argument, wird auf
+    // [lo, hi] geklemmt, in die Environment-Variable geschrieben, an einen
+    // etwaigen onSet-Callback gereicht und dann an den laufenden
+    // \masterReverb-Synth weitergegeben (der einzige Sink, der die vier
+    // reinen Environment-Parameter masterVolume/reverbMix/reverbRoom/
+    // reverbDamp live braucht — brightness/detune/droneLpfMult werden
+    // anders zugestellt, siehe deren Kommentare bei den SynthDefs).
+    // recvPort ist ~oscListenPort, derselbe wie /net/hitNode — ein OSCdef
+    // pro Adresse ist die feinste Granularität, die SC anbietet, ein
+    // gemeinsamer Empfänger für alle sieben Adressen bräuchte selbst
+    // wieder eine Verzweigung nach Adresse und würde nur Code verschieben.
+    ~paramOscDefs = ~params.keys.collect({ |name|
+        OSCdef(
+            ("klangnetzParam_" ++ name).asSymbol,
+            { |msg|
+                var entry = ~params[name];
+                var val = msg[1].asFloat.clip(entry[\lo], entry[\hi]);
+                currentEnvironment[name] = val;
+                entry[\onSet] !? { |cb| cb.(val) };
+                // Die vier Master-/Reverb-Parameter wirken über den
+                // dauerhaft laufenden \masterReverb-Synth — ein .set auf
+                // alle vier ist billig und robust gegen Aufrufreihenfolge
+                // (unschädlich, wenn ein SynthDef-Argumentname bei diesem
+                // Parameter gar nicht existiert, .set ignoriert unbekannte
+                // Keys still).
+                ~masterReverbSyn !? { |syn| syn.set(name, val) };
+                ("klangnetz param % -> %".format(name, val.round(0.001))).postln;
+            },
+            ("/klangnetz/param/" ++ name).asSymbol,
+            recvPort: ~oscListenPort
+        );
+    });
 
     // =================================================================
     // Messhilfen für die zwei ungemessenen Werte
@@ -688,6 +904,8 @@ s.waitForBoot({
 
     "KlangNetz: Server gebootet (% Ausgangskanäle), hoere auf /net/hitNode und /net/impulse, Port % - bereit.".format(
         s.options.numOutputBusChannels, ~oscListenPort).postln;
+    ("Sound-Parameter-Layer aktiv: % Parameter unter /klangnetz/param/<name>, Port % - siehe Adressliste im Kopf der Datei.".format(
+        ~params.size, ~oscListenPort)).postln;
     ("ACHTUNG: ~azimuthSign (= %) und ~azimuthOffset (= %) sind UNGEMESSEN. Vor der ersten Vorstellung ~testChannels.(), ~testAzimuth.(), ~testSweep.() durchlaufen - interaktiv in der IDE oder einer sclang-REPL, siehe Kopf der Datei.".format(
         ~azimuthSign, ~azimuthOffset)).postln;
     "HINWEIS: ~decoderOrientation ist auf SC 3.11.2 GEMESSEN wirkungslos (NRT-Messung 2026-07-30, Gegenprobe mit PanAz). Gedreht wird mit ~azimuthOffset im Encoder. Auf dem Show-Rechner ist die Messung zu wiederholen.".postln;
@@ -698,6 +916,18 @@ s.waitForBoot({
 // (
 // NetAddr("127.0.0.1", 8002).sendMsg("/net/hitNode", 3, 1.0, 3.5, 2.0);
 // NetAddr("127.0.0.1", 8002).sendMsg("/net/impulse", 42, -5.0, 1.0, 0.8);
+// )
+
+// ---- Sound-Parameter-Layer testen (ohne imPulse-Verbindung) ------------
+// Adressliste siehe Kopf der Datei ("OSC-STEUERBARER SOUND-PARAMETER-LAYER").
+// (
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/masterVolume", 1.2);
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/reverbMix", 0.4);
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/reverbRoom", 0.8);
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/reverbDamp", 0.3);
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/brightness", 1.8);
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/detune", 0.0);
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/droneLpfMult", 2.0);
 // )
 
 // ---- Messung der zwei ungemessenen Werte -------------------------------
@@ -728,5 +958,6 @@ s.waitForBoot({
 // ~netHitNodeOscFunc.free;
 // OSCdef(\impulseStream).free;
 // ~droneReaper.stop;
+// ~paramOscDefs.do({ |d| d.free });
 // s.freeAll;
 // )
