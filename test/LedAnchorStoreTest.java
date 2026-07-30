@@ -159,6 +159,77 @@ public class LedAnchorStoreTest {
     Check.that("die Meldung nennt die Anzahl", c.lastMessage().length() > 0);
     Check.that("danach ist wieder Setzen moeglich", c.set(0, 1f, 1f, NO_CROSSINGS));
 
+    // ---- Weglaengen-Warnung ----
+    // Zwei Anker auf Stripe 0 mit Index-Abstand 4. Bei PITCH 0.5 ist die
+    // Weglaenge 2,0 m, die Warnschwelle also 2,5 m Luftlinie.
+
+    // Knapp darunter: keine Warnung
+    LedAnchorStore w1 = store();
+    Check.that("erster Anker", w1.set(0, 0f, 0f, NO_CROSSINGS));
+    Check.that("zweiter Anker bei 2,4 m", w1.set(4, 2.4f, 0f, NO_CROSSINGS));
+    Check.that("2,4 m liegen unter der Schwelle von 2,5", !w1.lastWasWarning());
+    Check.that("die Position ist gesetzt", w1.has(4));
+
+    // Knapp darueber: Warnung, aber gesetzt
+    LedAnchorStore w2 = store();
+    Check.that("erster Anker", w2.set(0, 0f, 0f, NO_CROSSINGS));
+    Check.that("zweiter Anker bei 2,6 m wird trotzdem angenommen",
+        w2.set(4, 2.6f, 0f, NO_CROSSINGS));
+    Check.that("2,6 m loesen die Warnung aus", w2.lastWasWarning());
+    Check.that("die Meldung nennt die Luftlinie",
+        w2.lastMessage().indexOf("Luftlinie") >= 0);
+    Check.that("die Position ist trotz Warnung gesetzt", w2.has(4));
+    Check.near("und zwar mit dem angegebenen Wert", 2.6, w2.x(4), TOL);
+
+    // Genau auf der Schwelle: keine Warnung (verglichen wird mit >)
+    LedAnchorStore w3 = store();
+    w3.set(0, 0f, 0f, NO_CROSSINGS);
+    Check.that("genau 2,5 m", w3.set(4, 2.5f, 0f, NO_CROSSINGS));
+    Check.that("genau auf der Schwelle warnt nicht", !w3.lastWasWarning());
+
+    // Diagonal gerechnet, nicht nur in x
+    LedAnchorStore w4 = store();
+    w4.set(0, 0f, 0f, NO_CROSSINGS);
+    // 3-4-5-Dreieck: Luftlinie 5 m, Weglaenge 2 m -> Warnung
+    Check.that("diagonal weit entfernt wird angenommen", w4.set(4, 3f, 4f, NO_CROSSINGS));
+    Check.that("und warnt", w4.lastWasWarning());
+
+    // Anker auf verschiedenen Stripes haben keine Weglaengen-Beziehung
+    LedAnchorStore w5 = store();
+    w5.set(0, -7f, -4f, NO_CROSSINGS);
+    Check.that("Anker auf einem anderen Stripe", w5.set(PER_STRIPE, 7f, 4f, NO_CROSSINGS));
+    Check.that("ueber Stripe-Grenzen wird nicht gewarnt", !w5.lastWasWarning());
+
+    // Ein einzelner Anker auf dem Stripe hat keinen Nachbarn
+    LedAnchorStore w6 = store();
+    Check.that("einzelner Anker", w6.set(10, 7f, 4f, NO_CROSSINGS));
+    Check.that("ohne Nachbarn keine Warnung", !w6.lastWasWarning());
+
+    // Nur die UNMITTELBAREN Nachbarn werden geprueft: 0 -> 4 -> 8 ist je
+    // Schritt zulaessig, 0 -> 8 waere es nicht (4,8 m gegen 4,0 + 0,5).
+    LedAnchorStore w7 = store();
+    w7.set(0, 0f, 0f, NO_CROSSINGS);
+    w7.set(4, 2.4f, 0f, NO_CROSSINGS);
+    Check.that("dritter Anker", w7.set(8, 4.8f, 0f, NO_CROSSINGS));
+    Check.that("nur die unmittelbaren Nachbarn zaehlen", !w7.lastWasWarning());
+
+    // Ein sauberes set() danach loescht die Warnung wieder
+    LedAnchorStore w8 = store();
+    w8.set(0, 0f, 0f, NO_CROSSINGS);
+    w8.set(4, 3f, 4f, NO_CROSSINGS);
+    Check.that("Warnung steht", w8.lastWasWarning());
+    Check.that("sauberer Anker auf einem anderen Stripe",
+        w8.set(2 * PER_STRIPE, 0f, 0f, NO_CROSSINGS));
+    Check.that("die Warnung ist zurueckgesetzt", !w8.lastWasWarning());
+
+    // Auch eine Ablehnung setzt die Warnung zurueck
+    LedAnchorStore w9 = store();
+    w9.set(0, 0f, 0f, NO_CROSSINGS);
+    w9.set(4, 3f, 4f, NO_CROSSINGS);
+    Check.that("Warnung steht", w9.lastWasWarning());
+    Check.that("abgelehnt wegen Grundflaeche", !w9.set(6, 99f, 0f, NO_CROSSINGS));
+    Check.that("und die Warnung ist weg", !w9.lastWasWarning());
+
     System.exit(Check.report("LedAnchorStoreTest"));
   }
 }
