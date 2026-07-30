@@ -530,7 +530,7 @@ async function reload() {
 
 const coupling = bootstrap.coupling || { speedAddress: '/net/impulse/speed', targets: [] };
 
-couplingEl.checked = localStorage.getItem(COUPLING_STORAGE_KEY) !== '0';
+couplingEl.checked = localStorage.getItem(COUPLING_STORAGE_KEY) === '1';
 couplingEl.addEventListener('change', () => {
   localStorage.setItem(COUPLING_STORAGE_KEY, couplingEl.checked ? '1' : '0');
   setStatus(couplingEl.checked
