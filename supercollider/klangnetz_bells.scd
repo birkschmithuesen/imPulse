@@ -45,10 +45,14 @@ s.options.numInputBusChannels = 2;
 // konstantem Wert). Fix: Range nach oben verschoben, damit auch die leisesten
 // Treffer klar hörbar bleiben.
 // -10dB gegenüber dem urspruenglichen Pegel (0.22/0.55), linear: *0.316228
-// (Birk, 2026-07-30, "master -10db" für den Sound), DANACH +6dB (Faktor x2,
-// Birk vor Ort 2026-07-31): 0.06957*2 / 0.17393*2.
-~minAmp = 0.13914;
-~maxAmp = 0.34786;
+// (Birk, 2026-07-30, "master -10db" für den Sound).
+// Danach kurzzeitig +6dB (Birk vor Ort 2026-07-31), dann wieder zurueckgenommen
+// UND -6dB gegenueber dem -10dB-Stand gefahren (Birk vor Ort 2026-07-31,
+// zweite Korrektur): 0.06957 * 0.501187 / 0.17393 * 0.501187 (Faktor
+// 10**(-6/20) = 0.501187). Das liegt damit LEISER als der urspruengliche
+// -10dB-Stand vom 07-30, nicht nur zurueck auf ihn.
+~minAmp = 0.03487;
+~maxAmp = 0.08717;
 ~numOutChannels = 4;
 
 // Limiter am Summenbus (Birk vor Ort 2026-07-31): bei vielen gleichzeitig
