@@ -22,7 +22,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   LedColor[] bufferLedColors;
   ArrayList <LedNetworkNode> nodes;
   double lastCyclePos=(double)System.currentTimeMillis()/1000;
-  
+  double lastRandomSpawnTime=(double)System.currentTimeMillis()/1000; // Zeitpunkt des letzten randomSpawn-Events
+
   LedColor[] stripeColorMapping = {new LedColor(68/255f,0/255f,62/255f), new LedColor(189/255f,103/255f,0/255f), new LedColor(236/255f,204/255f,0/255f), new LedColor(221/255f,65/255f,8/255f),
                              new LedColor(187/255f,213/255f,67/255f), new LedColor(126/255f,201/255f,232/255f), new LedColor(210/255f,39/255f,45/255f), new LedColor(234/255f,147/255f,44/255f)};
 
@@ -50,6 +51,17 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledFloatParameter fadeOutG;
   RemoteControlledFloatParameter fadeOutB;
 
+  // ambient/idle-Verhalten: unabhaengig von /tube/trigger und Node-Kettenreaktionen spawnen
+  // in regelmaessigen (oder verjitterten) Abstaenden zufaellige Impulse am Anfang zufaellig
+  // gewaehlter Stripes - Geschwindigkeit kommt bewusst von impulseSpeed (kein eigener
+  // Speed-Parameter), damit random gespawnte und tube-getriggerte Impulse gleich schnell wirken
+  RemoteControlledIntParameter randomSpawnEnabled;      // /net/randomSpawn/enabled - 0/1, ganz abschaltbar ohne Neustart
+  RemoteControlledIntParameter randomSpawnCount;        // /net/randomSpawn/count - Stripes pro Spawn-Event
+  RemoteControlledFloatParameter randomSpawnInterval;   // /net/randomSpawn/interval - Sekunden zwischen Spawn-Events
+  RemoteControlledFloatParameter randomSpawnEnergy;     // /net/randomSpawn/energy - Energie je gespawntem Impuls
+  RemoteControlledFloatParameter randomSpawnDirectionBias; // /net/randomSpawn/directionBias - Wahrscheinlichkeit fuer "vorwaerts"
+  RemoteControlledFloatParameter randomSpawnJitter;     // /net/randomSpawn/jitter - 0=exakt periodisch, 1=stark verjittert
+
   LedNetworkTransportEffect(String _id, int _numLeds, int _nStripes, int _nLedsInStripe, LedInNetInfo[] _ledNetInfo, 	ArrayList <LedNetworkNode> nodes_, OscP5 _oscP5, NetAddress _remoteLocation) {
     id=_id;
     numLeds = _numLeds;
@@ -75,6 +87,15 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     fadeOutR= new RemoteControlledFloatParameter("/net/impulse/fadeOut/r", 0.97f, 0f, 1f); // color of travelling impulse
     fadeOutG= new RemoteControlledFloatParameter("/net/impulse/fadeOut/g", 0.96f, 0f, 1f); // color of travelling impulse
     fadeOutB= new RemoteControlledFloatParameter("/net/impulse/fadeOut/b", 0.56f, 0f, 1f); // color of travelling impulse
+
+    // Start-Default bewusst aus (0) - ein neues ambientes Verhalten soll nicht ungefragt bei
+    // jedem Sketch-Start live gehen, sondern erst wenn der Operator es per OSC einschaltet
+    randomSpawnEnabled= new RemoteControlledIntParameter("/net/randomSpawn/enabled", 0, 0, 1);
+    randomSpawnCount= new RemoteControlledIntParameter("/net/randomSpawn/count", 1, 1, nStripes);
+    randomSpawnInterval= new RemoteControlledFloatParameter("/net/randomSpawn/interval", 3f, 0.05f, 10f);
+    randomSpawnEnergy= new RemoteControlledFloatParameter("/net/randomSpawn/energy", 0.6f, 0f, 1f);
+    randomSpawnDirectionBias= new RemoteControlledFloatParameter("/net/randomSpawn/directionBias", 0.5f, 0f, 1f);
+    randomSpawnJitter= new RemoteControlledFloatParameter("/net/randomSpawn/jitter", 0f, 0f, 1f);
 
     OscMessageDistributor.registerAdress("/net/activateNode", this);
     OscMessageDistributor.registerAdress("/net/activateStripe", this);
@@ -186,8 +207,11 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     double currentTime=(double)System.currentTimeMillis()/1000;
     float timeStep=(float) (currentTime-lastCyclePos);
     lastCyclePos=currentTime;
-    float speed=impulseSpeed.getValue(); 
+    float speed=impulseSpeed.getValue();
     float energyLoss=impulseDecay.getValue();
+
+    spawnRandomImpulses(currentTime);
+
     //iterate through activations and build a new list of activations in the meanwhile.
     LinkedList<TravellingActivation> newActivations=new LinkedList<TravellingActivation>();
 
@@ -311,6 +335,52 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     //myMessage.add(hitNode.position.y);
     //myMessage.add(hitNode.position.z);
     oscP5.send(myMessage, remoteLocation);
+  }
+
+  // ambient/idle-Spawns: unabhaengig von /tube/trigger und Node-Kettenreaktionen, siehe
+  // /net/randomSpawn/* in CLAUDE.md. papplet ist hier ungenutzt/null (siehe Konventionen),
+  // also Math.random() statt papplet.random() fuer den Zufall.
+  private void spawnRandomImpulses(double currentTime) {
+    if (randomSpawnEnabled.getValue() != 1) {
+      return;
+    }
+    float jitter=randomSpawnJitter.getValue();
+    float jitterFactor=1f + jitter*(float) (Math.random()*2.0 - 1.0); // 0 => exakt periodisch, 1 => 0..2x interval
+    float effectiveInterval=Math.max(randomSpawnInterval.getValue()*jitterFactor, 0.02f); // Mindestabstand gegen 0/negative Intervalle durch Jitter
+    if (currentTime-lastRandomSpawnTime < effectiveInterval) {
+      return;
+    }
+    lastRandomSpawnTime=currentTime;
+
+    int count=randomSpawnCount.getValue(); // bereits durch min/max des Parameters auf 1..nStripes begrenzt
+    float energy=randomSpawnEnergy.getValue();
+    float directionBias=randomSpawnDirectionBias.getValue();
+    float speed=impulseSpeed.getValue(); // bewusst kein eigener Speed-Parameter, siehe Feldkommentar
+
+    for (int stripeIdx : pickDistinctStripes(count)) {
+      boolean forward=Math.random() < directionBias;
+      // "rueckwaerts" beginnt am anderen Ende des Stripes, sonst wuerde der Impuls sofort
+      // wieder aus den Bounds fallen (siehe activationIsValid) statt eine sichtbare Strecke zu reisen
+      float startPos=forward ? stripeIdx*nLedsInStripe : stripeIdx*nLedsInStripe + (nLedsInStripe-1);
+      activations.add(new TravellingActivation(startPos, stripeIdx, forward ? speed : -speed, energy));
+    }
+  }
+
+  // liefert `count` verschiedene Stripe-Indizes (0..nStripes-1), Ziehen ohne Zuruecklegen
+  // ueber einen partiellen Fisher-Yates-Shuffle
+  private int[] pickDistinctStripes(int count) {
+    int n=Math.min(count, nStripes);
+    int[] pool=new int[nStripes];
+    for (int i=0; i<nStripes; i++) {
+      pool[i]=i;
+    }
+    for (int i=0; i<n; i++) {
+      int j=i + (int) (Math.random()*(nStripes-i));
+      int tmp=pool[i];
+      pool[i]=pool[j];
+      pool[j]=tmp;
+    }
+    return Arrays.copyOf(pool, n);
   }
 
   void createRandomActivation() {

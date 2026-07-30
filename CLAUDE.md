@@ -76,6 +76,26 @@ Zwei Mechanismen, die man beim Ändern kennen muss:
 
 Bei einem Node-Treffer erhält jeder Zweig aktuell die **volle** Energie des Elternimpulses (`childEnergy = curActivation.energy`) — ein bewusster Quick-Fix, jede Aufspaltung vervielfacht also die Gesamtenergie. Die auskommentierte Zeile darüber zeigt die energieerhaltende Variante.
 
+**Ambient/idle Random-Spawns** (`spawnRandomImpulses()`, aufgerufen aus `drawMe()`):
+unabhängig von `/tube/trigger` und Node-Kettenreaktionen spawnt der Effekt in
+regelmäßigen (oder verjitterten) Abständen zufällige Impulse am Anfang
+zufällig gewählter Stripes — Standard-Zustand ist **aus** (`enabled=0`), ein
+Operator schaltet es live per OSC ein. Alle Parameter live tunbar, folgen dem
+üblichen `RemoteControlled*Parameter`-Muster, tauchen also automatisch in
+`remoteSettings.txt` auf:
+- `/net/randomSpawn/enabled` (int 0/1) — ganz abschaltbar ohne Neustart
+- `/net/randomSpawn/count` (int, 1..nStripes) — Anzahl Stripes pro Spawn-Event (Ziehen ohne Zurücklegen)
+- `/net/randomSpawn/interval` (float, 0.05..10s) — Sekunden zwischen Spawn-Events
+- `/net/randomSpawn/energy` (float, 0..1) — Energie je gespawntem Impuls
+- `/net/randomSpawn/directionBias` (float, 0..1, default 0.5) — Wahrscheinlichkeit für "vorwärts"; rückwärts spawnt bewusst am anderen Stripe-Ende, sonst fällt der Impuls sofort aus den Bounds
+- `/net/randomSpawn/jitter` (float, 0..1, default 0) — 0 = exakt periodisch, 1 = Intervall stark verjittert (0..2× `interval`)
+
+Geschwindigkeit kommt bewusst von `impulseSpeed` (kein eigener Speed-Parameter),
+damit random gespawnte und tube-getriggerte Impulse gleich schnell wirken.
+Gespawnte Impulse sind normale `TravellingActivation`-Objekte und laufen
+durch dieselbe Node-Kollisions-/Energie-Decay-/Render-Pipeline wie alle
+anderen Impulse.
+
 ### Ausgabepfade
 
 Beide Pfade sind in `setup()`/`draw()` per Kommentar umschaltbar:
