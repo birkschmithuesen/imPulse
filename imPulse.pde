@@ -101,15 +101,30 @@ static final float CALIBRATION_MASTER_LEVEL = 0.1f;
 
 
 void setup() {
-  // Fensterhoehe: die Vorschau braucht numStripes*10 Pixel (image() weiter
-  // unten skaliert genau darauf), bei 30 Stripes also 300px. Darunter zeigt
-  // das HUD im Kalibriermodus vier Textzeilen (Cursorstaende/Zaehler/Auswahl,
-  // Meldung, Tastenbelegung auf zwei Zeilen) beginnend bei y=numStripes*10+20 - dafuer
-  // braucht es nochmal gut 100px Reserve. 450 ist bei 30 Stripes sicher
-  // ausreichend (300 Vorschau + 20 Abstand + 4 Zeilen + Rand). size()
-  // erlaubt hier keine Variablen, deshalb ein Literal - bei einer anderen
-  // Stripe-Zahl muss dieser Wert von Hand neu aus derselben Rechnung
-  // (numStripes*10 + ca. 150) bestimmt werden.
+  // Fenstergroesse. size() erlaubt hier keine Variablen, deshalb Literale -
+  // bei einer anderen Stripe-Zahl muessen sie von Hand aus den drei Ansichten
+  // neu bestimmt werden, die sich das Fenster teilen:
+  //
+  //   Showbetrieb:      Vorschau bei 0/0, numStripes*10 Pixel hoch (image()
+  //                     weiter unten skaliert genau darauf), bei 30 Stripes
+  //                     also 300px, Breite numLedsPerStripe*2 = 1200px.
+  //   Kalibriermodus C: dieselbe Vorschau, darunter das HUD von
+  //                     NodeCalibration.hudText() mit VIER Zeilen
+  //                     (Cursorstaende/Zaehler/Auswahl, Meldung,
+  //                     Tastenbelegung auf zwei Zeilen), beginnend bei
+  //                     y = numStripes*10 + 20.
+  //   Positionsmodus P: die Draufsicht-Flaeche paneW x paneH = 525x300 bei
+  //                     paneX/paneY = 10/10 (endet also bei 535/310), rechts
+  //                     daneben die verkleinerte Vorschau bei x=560, 600x120,
+  //                     und darunter das HUD von
+  //                     LedPositionCalibration.hudText() mit FUENF Zeilen ab
+  //                     y = paneY + paneH + 20 = 330.
+  //
+  // Die Hoehe muss also den groesseren der beiden Faelle tragen:
+  // max(numStripes*10, paneY + paneH) + 20 Abstand + fuenf Textzeilen + Rand.
+  // Bei 30 Stripes sind das 310 + 20 + ca. 70 + Rand; 450 hat dafuer Reserve.
+  // Die Breite deckt mit 1400 sowohl die 1200px-Vorschau des Showbetriebs als
+  // auch 560+600 = 1160 des Positionsmodus ab.
   size(1400, 450, P3D);
   frameRate(40);
   //opens the port to receive OSC
