@@ -196,13 +196,18 @@ void draw() {
     ledColors = mixer.mix();
   }
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
+  // P3D behaelt den Inhalt des vorherigen Frames. Ohne dieses Loeschen wuerde
+  // sich der HUD-Text Frame um Frame zu einem unlesbaren Klumpen stapeln, und
+  // nach dem Verlassen eines Kalibriermodus blieben HUD und Draufsicht-Flaeche
+  // eingefroren stehen: die Vorschau deckt nur 1200x300 Pixel des 1400x450
+  // grossen Fensters ab, alles darunter und rechts daneben wird im Showbetrieb
+  // sonst nie wieder ueberschrieben. Ein Vollbild-Clear kostet auf der GPU
+  // praktisch nichts und erledigt alle drei Modi mit einer Zeile - deshalb hier
+  // vor der Fallunterscheidung statt je Zweig einzeln.
+  background(0);
   if (positionMode) {
     // Im Positionsmodus belegt die Draufsicht-Flaeche den Bereich links, die
     // verkleinerte LED-Vorschau sitzt rechts daneben.
-    // background(0) raeumt dabei zugleich den vorherigen Frame weg - P3D
-    // behaelt ihn sonst, und Flaeche wie HUD wuerden sich uebereinander
-    // stapeln, statt ersetzt zu werden.
-    background(0);
     drawPositionPane();
     image(canvas, 560, 0, 600, 120);
     fill(255);
@@ -210,12 +215,6 @@ void draw() {
   } else {
     image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
     if (calibrationMode) {
-      // P3D behaelt den Inhalt des vorherigen Frames - ohne dieses Loeschen
-      // wuerde sich der HUD-Text unterhalb der Vorschau zu einem unlesbaren
-      // Klumpen stapeln, statt jeden Frame ersetzt zu werden
-      fill(0);
-      noStroke();
-      rect(0, numStripes * 10, width, height - numStripes * 10);
       fill(255);
       text(nodeCalibration.hudText(), 10, numStripes * 10 + 20);
     }
