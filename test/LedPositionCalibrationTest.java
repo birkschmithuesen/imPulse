@@ -178,6 +178,71 @@ public class LedPositionCalibrationTest {
     Check.that("der Zeiger folgt dem Punkt in den zusammengelegten Eintrag", holds79);
     Check.eq("und der Eintrag traegt jetzt zwei LEDs", 2, afterMerge.length);
 
+    // ---- Umrechnung Flaeche <-> Meter ----
+    // Pane (0,0,525,300) fuer 14 x 8 m. 525:300 == 14:8, keine Verzerrung.
+    LedPositionCalibration cP = build(cs, store());
+    float[] w = new float[2];
+    float[] p = new float[2];
+    final double MTOL = 0.03;   // ein Pixel sind 2,67 cm
+
+    // Ecken. Y zeigt nach vorn und auf dem Schirm nach oben:
+    // Pixel-Y 0 ist also +4 m, Pixel-Y 300 ist -4 m.
+    Check.that("linke obere Ecke ist innen", cP.paneToWorld(PANE_X, PANE_Y, w));
+    Check.near("linke obere Ecke x", -7.0, w[0], MTOL);
+    Check.near("linke obere Ecke y", 4.0, w[1], MTOL);
+
+    Check.that("rechte untere Ecke ist innen",
+        cP.paneToWorld(PANE_X + PANE_W, PANE_Y + PANE_H, w));
+    Check.near("rechte untere Ecke x", 7.0, w[0], MTOL);
+    Check.near("rechte untere Ecke y", -4.0, w[1], MTOL);
+
+    Check.that("rechte obere Ecke ist innen",
+        cP.paneToWorld(PANE_X + PANE_W, PANE_Y, w));
+    Check.near("rechte obere Ecke x", 7.0, w[0], MTOL);
+    Check.near("rechte obere Ecke y", 4.0, w[1], MTOL);
+
+    Check.that("linke untere Ecke ist innen",
+        cP.paneToWorld(PANE_X, PANE_Y + PANE_H, w));
+    Check.near("linke untere Ecke x", -7.0, w[0], MTOL);
+    Check.near("linke untere Ecke y", -4.0, w[1], MTOL);
+
+    // Mitte
+    Check.that("Mitte ist innen",
+        cP.paneToWorld(PANE_X + PANE_W / 2, PANE_Y + PANE_H / 2, w));
+    Check.near("Mitte x ist der Ursprung", 0.0, w[0], MTOL);
+    Check.near("Mitte y ist der Ursprung", 0.0, w[1], MTOL);
+
+    // Ausserhalb wird verworfen, out2 bleibt unberuehrt
+    w[0] = 42f;
+    w[1] = 42f;
+    Check.that("links daneben wird verworfen", !cP.paneToWorld(PANE_X - 1, PANE_Y, w));
+    Check.that("rechts daneben wird verworfen",
+        !cP.paneToWorld(PANE_X + PANE_W + 1, PANE_Y, w));
+    Check.that("darueber wird verworfen", !cP.paneToWorld(PANE_X, PANE_Y - 1, w));
+    Check.that("darunter - im HUD - wird verworfen",
+        !cP.paneToWorld(PANE_X, PANE_Y + PANE_H + 1, w));
+    Check.near("out2 bleibt unberuehrt, x", 42.0, w[0], 1e-6);
+    Check.near("out2 bleibt unberuehrt, y", 42.0, w[1], 1e-6);
+
+    // Rundlauf in beiden Richtungen
+    float[][] probes = { { 0f, 0f }, { -7f, 4f }, { 7f, -4f },
+                         { -3.25f, 1.1f }, { 2.9f, -0.45f }, { 6.99f, 3.99f } };
+    for (float[] q : probes) {
+      cP.worldToPane(q[0], q[1], p);
+      Check.that("Rundlauf: (" + q[0] + "," + q[1] + ") liegt innen",
+          cP.paneToWorld((int) (p[0] + 0.5f), (int) (p[1] + 0.5f), w));
+      Check.near("Rundlauf x bei " + q[0], q[0], w[0], MTOL);
+      Check.near("Rundlauf y bei " + q[1], q[1], w[1], MTOL);
+    }
+
+    // worldToPane rechnet die Ecken auf die Rechteckecken
+    cP.worldToPane(-7f, 4f, p);
+    Check.near("worldToPane linke obere Ecke px", PANE_X, p[0], 0.5);
+    Check.near("worldToPane linke obere Ecke py", PANE_Y, p[1], 0.5);
+    cP.worldToPane(7f, -4f, p);
+    Check.near("worldToPane rechte untere Ecke px", PANE_X + PANE_W, p[0], 0.5);
+    Check.near("worldToPane rechte untere Ecke py", PANE_Y + PANE_H, p[1], 0.5);
+
     System.exit(Check.report("LedPositionCalibrationTest"));
   }
 }

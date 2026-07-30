@@ -233,4 +233,28 @@ class LedPositionCalibration {
     sb.append(entryIsSet(current) ? " - gesetzt" : " - offen");
     return sb.toString();
   }
+
+  // Pixel -> Meter. Liefert false, wenn der Punkt ausserhalb des Rechtecks
+  // liegt, damit ein Klick ins HUD keine Position setzt; out2 bleibt dann
+  // unberuehrt. Die Raender gehoeren dazu, sonst waere die aeusserste Ecke
+  // der Grundflaeche nicht anklickbar.
+  boolean paneToWorld(int px, int py, float[] out2) {
+    if (px < paneX || px > paneX + paneW || py < paneY || py > paneY + paneH) {
+      return false;
+    }
+    float fx = (float) (px - paneX) / (float) paneW;
+    float fy = (float) (py - paneY) / (float) paneH;
+    out2[0] = fx * footprintX - footprintX / 2f;
+    // Y zeigt nach vorn und auf dem Schirm nach oben - hier kippt das
+    // Vorzeichen, und nur hier.
+    out2[1] = footprintY / 2f - fy * footprintY;
+    return true;
+  }
+
+  // Meter -> Pixel, als float. imPulse.pde zeichnet damit ohne
+  // Rundungssprung, und der Rundlauf mit paneToWorld bleibt pixelgenau.
+  void worldToPane(float x, float y, float[] out2) {
+    out2[0] = paneX + (x + footprintX / 2f) / footprintX * paneW;
+    out2[1] = paneY + (footprintY / 2f - y) / footprintY * paneH;
+  }
 }
