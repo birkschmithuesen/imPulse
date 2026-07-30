@@ -87,6 +87,24 @@ class NodeCrossingStore {
     return true;
   }
 
+  // Loescht einen beliebigen Eintrag, auch einen beim Start geladenen - anders
+  // als undo(), das nur das Ende des Stapels abtraegt. Gedacht fuer den Fall,
+  // dass eine einzelne Kreuzung falsch sitzt und neu gesetzt werden soll; die
+  // Datei aendert sich erst beim naechsten save().
+  boolean removeAt(int index) {
+    if (index < 0 || index >= crossings.size()) {
+      message = "Kein Eintrag an Position " + (index + 1);
+      return false;
+    }
+    TreeSet<Integer> removed = crossings.remove(index);
+    // War es ein geladener Eintrag, wandert die Grenze mit - sonst zaehlte der
+    // Store einen Sitzungseintrag als geladen und undo() koennte ihn nicht
+    // mehr zuruecknehmen.
+    if (index < loadedCount) loadedCount--;
+    message = "Node " + (index + 1) + " geloescht: " + removed;
+    return true;
+  }
+
   // Verwirft die gesamte Liste einschliesslich der beim Start geladenen
   // Kreuzungen - anders als undo(), das geladene Eintraege bewusst schuetzt.
   // Fuer den Fall, dass eine Kalibrierung aus einer anderen Geometrie stammt

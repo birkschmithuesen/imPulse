@@ -28,6 +28,12 @@ public class NodeCalibration implements runnableLedEffect {
   private int stepIndex = 1;
   private boolean showNodes = false;
 
+  // Zeiger auf einen einzelnen Eintrag der Liste, um eine falsch gesetzte
+  // Kreuzung gezielt zu loeschen - BACKSPACE traegt nur das Ende des Stapels
+  // ab und schuetzt ausserdem die geladenen Eintraege.
+  private final NodeSelection selection = new NodeSelection();
+  private static final long SELECTION_BLINK_MILLIS = 400;
+
   private int heldLed = 0;      // -1, 0, +1
   private int heldStripe = 0;
   private long lastRepeat = 0;
@@ -176,10 +182,36 @@ public class NodeCalibration implements runnableLedEffect {
     }
     if (key == 8 || key == 127) {   // Backspace bzw. Delete
       store.undo();
+      selection.clampTo(store.size());
       message = store.lastMessage();
       return true;
     }
+    // Einen einzelnen Eintrag heraussuchen und loeschen. Ohne das liesse sich
+    // eine falsch gesetzte Kreuzung nur ueber den Texteditor und einen Neustart
+    // korrigieren, sobald ein paar weitere Knoten darauf liegen.
+    if (key == ',' || key == '.') {
+      if (key == '.') selection.next(store.size());
+      else selection.prev(store.size());
+      message = describeSelection();
+      return true;
+    }
+    if (key == 'x' || key == 'X') {
+      if (!selection.hasSelection()) {
+        message = "Kein Node ausgewaehlt - mit , und . durchblaettern";
+        return true;
+      }
+      int index = selection.index();
+      // die Cursor vor dem Loeschen auf den Eintrag stellen, danach ist er weg.
+      // So wird aus "loeschen" ein "korrigieren": anfahren, ENTER, fertig.
+      moveCursorsTo(store.crossings().get(index));
+      store.removeAt(index);
+      selection.clampTo(store.size());
+      message = store.lastMessage() + " - Cursor stehen darauf, ENTER setzt neu";
+      System.out.println(message);
+      return true;
+    }
     if (key == 'l' || key == 'L') {
+      selection.clear();
       long now = System.currentTimeMillis();
       long sinceArmed = now - clearAllArmedAt;
       if (clearAllPending && sinceArmed < CLEAR_ALL_CONFIRM_MIN_MILLIS) {
@@ -232,15 +264,40 @@ public class NodeCalibration implements runnableLedEffect {
     return false;
   }
 
+  // Setzt beide Cursor auf die ersten zwei LEDs eines Eintrags. Mehr als zwei
+  // Indizes sind erlaubt (drei Stripes an einer Stelle), dann bleiben die
+  // weiteren unberuecksichtigt - von Hand nachfahren.
+  private void moveCursorsTo(TreeSet<Integer> pair) {
+    int cursor = 0;
+    for (Integer idx : pair) {
+      if (cursor > 1) break;
+      cursorStripe[cursor] = idx / numLedsPerStripe;
+      cursorLed[cursor] = idx % numLedsPerStripe;
+      cursor++;
+    }
+    active = 0;
+  }
+
+  private String describeSelection() {
+    if (!selection.hasSelection()) return "Auswahl aufgehoben";
+    int index = selection.index();
+    return "Node " + (index + 1) + "/" + store.size() + " ausgewaehlt: "
+        + store.crossings().get(index)
+        + (index < store.loadedCount() ? " (geladen)" : " (neu)");
+  }
+
   String hudText() {
     return String.format(
         "Stripe A [%2d] LED %3d%s    Stripe B [%2d] LED %3d%s    "
-        + "Nodes: %d geladen + %d neu    Schritt: %d%n%s%n"
-        + "TAB Cursor  ENTER speichern  BACKSPACE zurueck  F Schritt  "
-        + "S schreiben  R uebernehmen  N Nodes  0-5 Testbild  L alles verwerfen  C beenden",
+        + "Nodes: %d geladen + %d neu    Auswahl: %s    Schritt: %d%n%s%n"
+        // Tastenbelegung auf zwei Zeilen, damit sie in der Fensterbreite bleibt
+        + "TAB Cursor  ENTER speichern  BACKSPACE zurueck  F Schritt  S schreiben  R uebernehmen%n"
+        + ", . Auswahl blaettern  X Auswahl loeschen  N Nodes  0-5 Testbild  L alles verwerfen  C beenden",
         cursorStripe[0], cursorLed[0], active == 0 ? " <-" : "  ",
         cursorStripe[1], cursorLed[1], active == 1 ? " <-" : "  ",
-        store.loadedCount(), store.sessionCount(), step(), message);
+        store.loadedCount(), store.sessionCount(),
+        selection.hasSelection() ? (selection.index() + 1) + "/" + store.size() : "-",
+        step(), message);
   }
 
   public LedColor[] drawMe() {
@@ -263,6 +320,16 @@ public class NodeCalibration implements runnableLedEffect {
             else buffer[idx].set(new LedColor(1, 0, 1));               // geladen: magenta
           }
         }
+      }
+    }
+
+    // der ausgewaehlte Eintrag blinkt weiss, unabhaengig von N - sonst waere
+    // nicht zu sehen, was X gleich loescht
+    selection.clampTo(store.size());
+    if (selection.hasSelection()
+        && System.currentTimeMillis() % (2 * SELECTION_BLINK_MILLIS) < SELECTION_BLINK_MILLIS) {
+      for (Integer idx : store.crossings().get(selection.index())) {
+        if (idx >= 0 && idx < buffer.length) buffer[idx].set(new LedColor(1, 1, 1));
       }
     }
 

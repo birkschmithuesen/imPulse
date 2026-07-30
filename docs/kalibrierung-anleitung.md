@@ -53,6 +53,8 @@ Vier Gründe, alle mit Klartext im HUD und auf der Konsole:
 
 `S` schreibt die vollständige Liste nach `data/nodeCrossings.txt`. Das ist gefahrlos beliebig oft möglich: geschrieben wird in eine Nebendatei, die anschliessend über die Zieldatei umbenannt wird — es wird nichts angehängt und nichts verdoppelt. **Mach das nach jeweils ein paar Knoten.**
 
+Speichern nimmt dir nichts aus der Hand: `BACKSPACE` funktioniert danach weiter, alle Kreuzungen dieser Sitzung bleiben zurücknehmbar. Nur denk daran, nach einer Korrektur erneut `S` zu drücken — sonst steht in der Datei noch der Stand von vorher.
+
 ## Gegenprüfen, ohne neu zu starten
 
 Das ist der eigentliche Zeitgewinn gegenüber früher:
@@ -67,11 +69,30 @@ Mit `N` lassen sich die gesetzten Kreuzungen einblenden: **magenta** sind beim S
 
 ## Korrigieren
 
-**`BACKSPACE`** nimmt die letzte Kreuzung dieser Sitzung zurück, beliebig oft bis zum Anfang der Sitzung.
+Zwei Wege, je nachdem wie alt der Fehler ist.
+
+### Die letzte Aufnahme zurücknehmen
+
+**`BACKSPACE`** nimmt die letzte Kreuzung dieser Sitzung zurück, beliebig oft bis zum Anfang der Sitzung. Auch nach `S`.
 
 Wichtig zu wissen: geladene Einträge sind davor **geschützt**. Startest du den Sketch neu, gelten alle bereits gespeicherten Kreuzungen als geladen und `BACKSPACE` fasst sie nicht mehr an. Das ist Absicht — eine mühsam aufgenommene Kalibrierung soll sich nicht mit einer gehaltenen Taste abräumen lassen.
 
-Willst du trotzdem alles verwerfen, etwa weil die Aufnahme aus einer anderen Geometrie stammt: **`L`** zweimal drücken. Der erste Druck kündigt an und nennt die Anzahl, der zweite muss zwischen 0,3 und 5 Sekunden später kommen. Jede andere Taste bricht ab. Einzelne alte Einträge entfernst du am einfachsten im Texteditor.
+### Eine bestimmte Kreuzung heraussuchen und neu setzen
+
+Dafür sind **`,`** und **`.`** da — damit blätterst du durch die Liste. Der ausgewählte Knoten **blinkt weiss im Netz** (unabhängig davon, ob `N` eingeschaltet ist), das HUD nennt seine Position, seine Indizes und ob er geladen oder neu ist. `,` am Anfang der Liste hebt die Auswahl wieder auf.
+
+Steht der richtige Knoten, drückst du **`X`**:
+
+- der Eintrag wird gelöscht — **auch ein geladener**, und egal wie weit hinten er liegt
+- beide Cursor stehen danach auf seinen zwei LEDs
+
+Damit ist das Neusetzen eine Kleinigkeit: Cursor um die paar LEDs nachfahren, die daneben lagen, `ENTER`, `S`. Sass er ganz falsch, lässt du ihn einfach gelöscht.
+
+`X` fragt nicht nach — im Gegensatz zu `L`. Zwei Gründe: du siehst genau den einen Knoten blinken, den es trifft, und die Datei ändert sich erst beim nächsten `S`. Ein Fehlgriff kostet dich also nur die eine Kreuzung, und bis zum nächsten `S` gar nichts.
+
+### Alles verwerfen
+
+Etwa weil die Aufnahme aus einer anderen Geometrie stammt: **`L`** zweimal drücken. Der erste Druck kündigt an und nennt die Anzahl, der zweite muss zwischen 0,3 und 5 Sekunden später kommen. Jede andere Taste bricht ab.
 
 ## Am Ende
 

@@ -148,6 +148,62 @@ public class NodeCrossingStoreTest {
     afterClear.load(clearFile.getAbsolutePath());
     Check.eq("nach save() im Anschluss an clearAll: Datei ist leer", 0, afterClear.size());
 
+    // ---- removeAt(): beliebigen Eintrag loeschen, um ihn neu zu setzen ----
+    NodeCrossingStore rm = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    rm.add(0, 10, 1, 20);     // global 10 + 620
+    rm.add(2, 30, 3, 40);     // global 1230 + 1840
+    rm.add(4, 50, 5, 60);     // global 2450 + 3060
+
+    Check.that("removeAt trifft den mittleren Eintrag", rm.removeAt(1));
+    Check.eq("nach removeAt", 2, rm.size());
+    Check.that("der erste Eintrag ist noch da", rm.crossings().get(0).contains(10));
+    Check.that("der letzte Eintrag ist nachgerutscht", rm.crossings().get(1).contains(2450));
+    Check.that("der geloeschte Eintrag ist weg",
+        !rm.crossings().get(0).contains(1230) && !rm.crossings().get(1).contains(1230));
+    Check.that("removeAt meldet etwas", rm.lastMessage().length() > 0);
+
+    Check.that("removeAt unterhalb des Bereichs wird abgewiesen", !rm.removeAt(-1));
+    Check.that("removeAt oberhalb des Bereichs wird abgewiesen", !rm.removeAt(2));
+    Check.eq("Groesse nach abgewiesenem removeAt unveraendert", 2, rm.size());
+
+    // Ein geloeschtes Paar darf neu gesetzt werden - genau dafuer ist removeAt da
+    Check.that("das geloeschte Paar laesst sich wieder hinzufuegen", rm.add(2, 30, 3, 40));
+    Check.eq("nach dem Neusetzen", 3, rm.size());
+
+    // ---- removeAt() und die Grenze zwischen geladen und neu ----
+    File removeFile = new File(dir, "remove.txt");
+    NodeCrossingStore baseRemove = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    baseRemove.add(0, 10, 1, 20);
+    baseRemove.add(2, 30, 3, 40);
+    baseRemove.save(removeFile.getAbsolutePath());
+
+    NodeCrossingStore mix = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    mix.load(removeFile.getAbsolutePath());
+    mix.add(4, 50, 5, 60);
+    Check.eq("vor removeAt: geladen", 2, mix.loadedCount());
+    Check.eq("vor removeAt: neu", 1, mix.sessionCount());
+
+    Check.that("removeAt loescht auch einen geladenen Eintrag", mix.removeAt(0));
+    Check.eq("loadedCount sinkt beim Loeschen eines geladenen Eintrags", 1, mix.loadedCount());
+    Check.eq("sessionCount bleibt dabei unveraendert", 1, mix.sessionCount());
+    Check.eq("Groesse nach removeAt", 2, mix.size());
+
+    Check.that("removeAt eines neuen Eintrags laesst loadedCount stehen", mix.removeAt(1));
+    Check.eq("loadedCount unveraendert", 1, mix.loadedCount());
+    Check.eq("sessionCount sinkt", 0, mix.sessionCount());
+    Check.that("Undo greift danach nicht auf den geladenen Eintrag", !mix.undo());
+    Check.eq("der geladene Eintrag bleibt", 1, mix.size());
+
+    mix.save(removeFile.getAbsolutePath());
+    NodeCrossingStore afterRemove = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    afterRemove.load(removeFile.getAbsolutePath());
+    Check.eq("save() schreibt den reduzierten Stand", 1, afterRemove.size());
+    Check.that("und zwar den verbliebenen Eintrag", afterRemove.crossings().get(0).contains(1230));
+
+    // removeAt auf leerer Liste
+    NodeCrossingStore empty = new NodeCrossingStore(STRIPES, PER_STRIPE);
+    Check.that("removeAt auf leerer Liste tut nichts", !empty.removeAt(0));
+
     System.exit(Check.report("NodeCrossingStoreTest"));
   }
 }
