@@ -157,7 +157,7 @@ void setup() {
       numStripes, numLedsPerStripe, dataPath("nodeCrossings.txt"));
 
   //initialize visual effects
-  ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, oscP5, oscOutput);
+  ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, ledPositionMap, oscP5, oscOutput);
   ledNetworkNodeEffects = new LedNetworkNodeEffects("1", numLeds, ledNetInfo, listOfNodes);
 
   mixer = new Mixer(numLeds);

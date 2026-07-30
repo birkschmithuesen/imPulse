@@ -42,6 +42,11 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   OscP5 oscP5;
   NetAddress remoteLocation;
 
+  LedPositionMap positionMap;
+  final ImpulseOscThrottle impulseThrottle = new ImpulseOscThrottle();
+  RemoteControlledFloatParameter impulseOscRate;      // Hz, 0 schaltet ab
+  RemoteControlledIntParameter impulseOscMaxCount;    // Obergrenze je Takt
+
   //settings
   RemoteControlledFloatParameter nodeDeadTime; // Time between two activations of a node
   RemoteControlledFloatParameter impulseDecay; // loss of energy/second
@@ -71,7 +76,9 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledFloatParameter randomSpawnDirectionBias; // /net/randomSpawn/directionBias - Wahrscheinlichkeit fuer "vorwaerts"
   RemoteControlledFloatParameter randomSpawnJitter;     // /net/randomSpawn/jitter - 0=exakt periodisch, 1=stark verjittert
 
-  LedNetworkTransportEffect(String _id, int _numLeds, int _nStripes, int _nLedsInStripe, LedInNetInfo[] _ledNetInfo, 	ArrayList <LedNetworkNode> nodes_, OscP5 _oscP5, NetAddress _remoteLocation) {
+  LedNetworkTransportEffect(String _id, int _numLeds, int _nStripes, int _nLedsInStripe,
+      LedInNetInfo[] _ledNetInfo, ArrayList <LedNetworkNode> nodes_,
+      LedPositionMap _positionMap, OscP5 _oscP5, NetAddress _remoteLocation) {
     id=_id;
     numLeds = _numLeds;
     nStripes = _nStripes;
@@ -81,6 +88,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     nodes=nodes_;
     oscP5=_oscP5;
     remoteLocation=_remoteLocation;
+    positionMap=_positionMap;
 
     // 2026-07-30, Birk: Working-State-Defaults - Speed×10 langsamer als der
     // urspruengliche Auslieferungswert, alle davon abhaengigen Zeit-Parameter
@@ -118,6 +126,12 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // vorwaerts" die vom Nutzer gewuenschte Grenze ist.
     randomSpawnDirectionBias= new RemoteControlledFloatParameter("/net/randomSpawn/directionBias", 1f, 0f, 1f);
     randomSpawnJitter= new RemoteControlledFloatParameter("/net/randomSpawn/jitter", 0f, 0f, 1f);
+
+    // 0 schaltet den Strom ab - der Notausgang, wenn Netz oder Klangrechner
+    // waehrend der Show nicht mitkommen. /net/hitNode laeuft davon unberuehrt
+    // weiter.
+    impulseOscRate = new RemoteControlledFloatParameter("/net/impulse/oscRate", 10f, 0f, 40f);
+    impulseOscMaxCount = new RemoteControlledIntParameter("/net/impulse/oscMaxCount", 32, 0, 256);
 
     OscMessageDistributor.registerAdress("/net/activateNode", this);
     OscMessageDistributor.registerAdress("/net/activateStripe", this);
@@ -301,6 +315,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         iter.remove();
       }
     }
+    sendImpulseStream(currentTime);
     return bufferLedColors;
   }
 
@@ -371,6 +386,47 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     myMessage.add(hitNode.posX);
     myMessage.add(hitNode.posY);
     oscP5.send(myMessage, remoteLocation);
+  }
+
+  // Gedrosselter Positionsstrom der reisenden Impulse.
+  //
+  // Wird bewusst NACH der Zeichenschleife gerufen: die hat die Filler im
+  // selben Frame ueber iter.remove() wieder entfernt, in activations steht
+  // hier also genau ein Eintrag je echtem Impuls. Ohne diese Reihenfolge
+  // muesste man Filler von Hand aussortieren und wuerde denselben Impuls
+  // mehrfach melden.
+  //
+  // Kein Todes-Signal: der Strom ist durch oscMaxCount ohnehin lueckenhaft -
+  // ein Impuls kann aus der Auswahl fallen, ohne zu sterben. Die Klangseite
+  // muss mit stillem Verschwinden umgehen koennen, und dann deckt ihr Timeout
+  // auch den echten Tod ab.
+  private void sendImpulseStream(double currentTime) {
+    if (!impulseThrottle.due(currentTime, impulseOscRate.getValue())) {
+      return;
+    }
+    int n = activations.size();
+    if (n == 0) {
+      return;
+    }
+    float[] energies = new float[n];
+    TravellingActivation[] flat = new TravellingActivation[n];
+    int k = 0;
+    for (TravellingActivation a : activations) {
+      flat[k] = a;
+      energies[k] = a.energy;
+      k++;
+    }
+    int[] chosen = impulseThrottle.select(energies, impulseOscMaxCount.getValue());
+    for (int i = 0; i < chosen.length; i++) {
+      TravellingActivation a = flat[chosen[i]];
+      int ledIndex = a.getLedIndex();
+      OscMessage myMessage = new OscMessage("/net/impulse");
+      myMessage.add(a.id);
+      myMessage.add(positionMap.x(ledIndex));
+      myMessage.add(positionMap.y(ledIndex));
+      myMessage.add(a.energy);
+      oscP5.send(myMessage, remoteLocation);
+    }
   }
 
   // ambient/idle-Spawns: unabhaengig von /tube/trigger und Node-Kettenreaktionen, siehe
