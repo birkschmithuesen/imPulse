@@ -456,6 +456,60 @@ class PresetListTest(unittest.TestCase):
         self.assertIsNotNone(error)
 
 
+class PresetApplyTest(unittest.TestCase):
+    """Uebernahme einer geparsten Preset-Datei in die Regleranzeige."""
+
+    def setUp(self):
+        self.store = ParameterStore(path="egal")
+        self.store.parameters = parse_settings(SAMPLE)
+        self.store.by_address = {p.address: p for p in self.store.parameters}
+        self.store.values = {p.address: p.coerce(p.value)
+                             for p in self.store.parameters}
+
+    def apply(self, text):
+        return server.apply_preset_entries(self.store, parse_settings(text))
+
+    def test_sets_known_addresses(self):
+        result = self.apply("float\t/nodes/times/recover\tx\t7.5\t0.0\t10.0\n")
+        self.assertAlmostEqual(result["values"]["/nodes/times/recover"], 7.5)
+        self.assertAlmostEqual(self.store.values["/nodes/times/recover"], 7.5)
+
+    def test_int_stays_int(self):
+        result = self.apply("int\t/net/impulse/speed\tx\t42\t1\t1500\n")
+        self.assertEqual(result["values"]["/net/impulse/speed"], 42)
+        self.assertIsInstance(result["values"]["/net/impulse/speed"], int)
+
+    def test_unknown_address_is_reported_not_applied(self):
+        result = self.apply("float\t/gibt/es/nicht\tx\t1.0\t0.0\t2.0\n")
+        self.assertEqual(result["unknown"], ["/gibt/es/nicht"])
+        self.assertEqual(result["values"], {})
+
+    def test_value_outside_ui_range_is_reported(self):
+        # /net/impulse/speed: Java-Range 1..1500, UI-Range 1..100
+        result = self.apply("int\t/net/impulse/speed\tx\t160\t1\t1500\n")
+        self.assertEqual(result["values"]["/net/impulse/speed"], 160)
+        self.assertEqual(result["outOfRange"],
+                         [{"address": "/net/impulse/speed", "value": 160,
+                           "shown": 100}])
+
+    def test_value_inside_ui_range_is_not_reported(self):
+        result = self.apply("int\t/net/impulse/speed\tx\t16\t1\t1500\n")
+        self.assertEqual(result["outOfRange"], [])
+
+    def test_clamps_to_settings_range_not_to_file_range(self):
+        # Die min/max-Spalten der Datei werden ignoriert -- es gelten die
+        # Grenzen aus remoteSettings.txt, genau wie in PresetStore.applyPreset
+        result = self.apply("float\t/nodes/times/recover\tx\t99.0\t0.0\t1000.0\n")
+        self.assertAlmostEqual(result["values"]["/nodes/times/recover"], 10.0)
+
+    def test_ignored_addresses_are_skipped_silently(self):
+        text = ("int\t/net/activateNode\tx\t5\t0\t100\n"
+                "int\t/preset/scheduler/enabled\tx\t0\t0\t1\n")
+        result = self.apply(text)
+        self.assertEqual(result["values"], {})
+        self.assertEqual(result["unknown"], [])
+
+
 class RealSettingsFileTest(unittest.TestCase):
     """Gegenprobe an der echten data/remoteSettings.txt im Repo."""
 

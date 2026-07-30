@@ -640,6 +640,50 @@ class ParameterStore:
             self.values[address] = value
 
 
+def apply_preset_entries(store: ParameterStore,
+                         entries: List[Parameter]) -> Dict[str, Any]:
+    """Uebernimmt die Werte einer geparsten Preset-Datei in den Store.
+
+    Preset-Dateien haben dasselbe Format wie remoteSettings.txt, ``entries``
+    kommt also aus ``parse_settings()``.
+
+    Geklemmt wird auf die Range aus remoteSettings.txt, nicht auf die aus der
+    Preset-Datei -- dieselbe Regel wie in ``PresetStore.applyPreset()`` auf der
+    Java-Seite, damit aeltere Presets nach einer Bereichsaenderung korrekt
+    bleiben.
+
+    Die Werte gehen bewusst NICHT als OSC raus: das Anwenden macht imPulse
+    selbst nach ``/preset/load``, hier wird nur die Anzeige nachgezogen.
+
+    Zwei Sonderfaelle werden gemeldet statt verschluckt:
+    ``unknown`` sind Adressen, die es in remoteSettings.txt nicht gibt (Preset
+    und Dump aus verschiedenen Codestaenden), ``outOfRange`` sind Werte
+    ausserhalb der verengten UI-Range (UI_RANGE_OVERRIDES) -- dort klemmt der
+    Regler sichtbar und darf nicht stillschweigend etwas anderes behaupten als
+    der Sketch faehrt.
+    """
+    values: Dict[str, Any] = {}
+    unknown: List[str] = []
+    out_of_range: List[Dict[str, Any]] = []
+    for entry in entries:
+        if entry.address in PRESET_IGNORED_ADDRESSES:
+            continue
+        param = store.get(entry.address)
+        if param is None:
+            unknown.append(entry.address)
+            continue
+        value = param.coerce(entry.value)
+        ui_min, ui_max = param.ui_range()
+        low, high = min(ui_min, ui_max), max(ui_min, ui_max)
+        shown = max(low, min(high, value))
+        if shown != value:
+            out_of_range.append({"address": entry.address, "value": value,
+                                 "shown": shown})
+        values[entry.address] = value
+        store.store(entry.address, value)
+    return {"values": values, "unknown": unknown, "outOfRange": out_of_range}
+
+
 def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Parameter, float]],
                                                                  List[Dict[str, str]]]:
     """Berechnet die an die Geschwindigkeit gekoppelten Werte.
