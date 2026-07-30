@@ -1,0 +1,6 @@
+# Abhaengigkeiten des imPulse-Web-UI (webui/server.py)
+#
+# Bewusst nur zwei Pakete, beide reines Python -- damit die Installation auf
+# dem Windows-Laptop ohne Compiler und ohne Node/npm durchlaeuft.
+Flask>=2.3,<4
+python-osc>=1.8,<2

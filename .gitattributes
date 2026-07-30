@@ -1,0 +1,2 @@
+# Windows-Batchdateien brauchen CRLF, sonst stolpert cmd.exe darueber.
+*.bat text eol=crlf

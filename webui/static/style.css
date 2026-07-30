@@ -1,0 +1,171 @@
+/* imPulse Web-UI - bewusst ohne Framework, damit auf dem Windows-Laptop
+   kein npm/Build-Schritt noetig ist. */
+
+:root {
+  --bg: #14161a;
+  --panel: #1e2229;
+  --panel-hi: #262b34;
+  --line: #333a45;
+  --text: #e6e9ee;
+  --muted: #98a2b3;
+  --accent: #4ea1ff;
+  --ok: #4ec982;
+  --warn: #ffb648;
+  --err: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 0 3rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.4 system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+h1 { margin: 0; font-size: 1.1rem; letter-spacing: 0.08em; text-transform: uppercase; }
+
+.meta { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.78rem; }
+
+.actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+
+.switch { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; user-select: none; }
+.switch input { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
+
+button {
+  padding: 0.4rem 0.9rem;
+  background: var(--panel-hi);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+
+.status {
+  margin: 0;
+  padding: 0.4rem 1rem;
+  min-height: 1.9rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  background: #171a1f;
+}
+.status.ok { color: var(--ok); }
+.status.warn { color: var(--warn); }
+.status.err { color: var(--err); }
+
+main {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+  align-items: start;
+}
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+section > h2 {
+  margin: 0;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.85rem;
+  font-family: ui-monospace, "Consolas", monospace;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--panel-hi);
+  border-bottom: 1px solid var(--line);
+}
+
+.param {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid #23272f;
+}
+.param:last-child { border-bottom: none; }
+
+.param-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.param-name {
+  font-family: ui-monospace, "Consolas", monospace;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+.param-name .prefix { color: var(--muted); }
+
+.param-range { color: var(--muted); font-size: 0.7rem; white-space: nowrap; }
+
+.param-body { display: flex; align-items: center; gap: 0.6rem; }
+
+input[type=range] {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+  height: 1.4rem;
+}
+
+input[type=number] {
+  flex: 0 0 6.2rem;
+  padding: 0.25rem 0.35rem;
+  background: #12151a;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: 0.82rem ui-monospace, "Consolas", monospace;
+  text-align: right;
+}
+input[type=number]:focus, input[type=range]:focus { outline: 1px solid var(--accent); }
+
+.toggle-body { display: flex; align-items: center; gap: 0.5rem; }
+.toggle-body input { width: 1.2rem; height: 1.2rem; accent-color: var(--accent); }
+.toggle-body span { color: var(--muted); font-size: 0.8rem; }
+
+.color .swatch-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.4rem; }
+input[type=color] {
+  flex: 0 0 3rem;
+  height: 2rem;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.color .components .param { padding-left: 0; padding-right: 0; }
+.color .components .param:last-child { padding-bottom: 0; }
+
+.param.coupled { animation: flash 0.6s ease-out; }
+@keyframes flash {
+  from { background: rgba(78, 161, 255, 0.28); }
+  to { background: transparent; }
+}
+
+@media (max-width: 600px) {
+  main { grid-template-columns: 1fr; padding: 0.6rem; gap: 0.6rem; }
+  header { padding: 0.6rem; }
+  input[type=number] { flex-basis: 5.2rem; }
+}

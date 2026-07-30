@@ -1,0 +1,596 @@
+#!/usr/bin/env python3
+"""Web-Oberflaeche fuer die OSC-Parameter des imPulse-Sketches.
+
+Laeuft auf derselben Maschine wie imPulse (Windows-Laptop), bindet auf
+0.0.0.0:8080 und schickt Parameteraenderungen per OSC an localhost:8001.
+
+Die Parameterliste wird NICHT hart verdrahtet, sondern bei jedem Seitenaufruf
+aus ``data/remoteSettings.txt`` gelesen -- diese Datei schreibt imPulse bei
+jedem Start aus den registrierten ``RemoteControlled*Parameter`` neu
+(``OscMessageDistributor.dumpParameterInfo``). Ein neuer Parameter im Sketch
+taucht damit ohne Codeaenderung hier im UI auf.
+
+Start:  python server.py            (Optionen siehe --help / README.md)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import socket
+import struct
+import sys
+import threading
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    from flask import Flask, jsonify, render_template, request
+except ImportError as _flask_error:  # Tests laufen ohne Flask, siehe test_webui.py
+    Flask = None
+    _FLASK_IMPORT_ERROR = _flask_error
+else:
+    _FLASK_IMPORT_ERROR = None
+
+# ---------------------------------------------------------------------------
+# Voreinstellungen (alle per Umgebungsvariable und Kommandozeile ueberschreibbar)
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_SETTINGS_PATH = os.path.join(REPO_ROOT, "data", "remoteSettings.txt")
+DEFAULT_OSC_HOST = "127.0.0.1"
+DEFAULT_OSC_PORT = 8001
+DEFAULT_HTTP_HOST = "0.0.0.0"
+DEFAULT_HTTP_PORT = 8080
+
+# ---------------------------------------------------------------------------
+# Speed-Kopplung
+#
+# Referenzwerte laut Brief bzw. tune_speed.py (Hermes-Skill-Repo): bei
+# impulseSpeed = 160 gehoeren die untenstehenden Werte zusammen. Aendert Birk
+# die Geschwindigkeit, wird
+#     faktor = neuer_speed / SPEED_REFERENCE
+# gebildet und die gekoppelten Parameter proportional (energyDecay*) bzw.
+# invers (nodeDeadTime, randomSpawn/interval) mitskaliert.
+#
+# Achtung: die Konstruktor-Defaults in LedNetworkTransportEffect.java stehen
+# aktuell auf einem anderen Arbeitspunkt (speed 16, energyDecay 0.001,
+# energyDecayfactor 0.02, nodeDeadTime 5.0, randomSpawn/interval 30.0). Die
+# Kopplung bezieht sich bewusst auf den hier notierten Referenzpunkt -- wer
+# stattdessen den Sketch-Arbeitspunkt koppeln will, aendert nur diesen Block.
+# ---------------------------------------------------------------------------
+
+SPEED_ADDRESS = "/net/impulse/speed"
+SPEED_REFERENCE = 160.0
+
+# address -> (Referenzwert bei SPEED_REFERENCE, "proportional" | "invers")
+SPEED_COUPLED: Dict[str, Tuple[float, str]] = {
+    "/net/impulse/energyDecay": (0.01, "proportional"),
+    "/net/impulse/energyDecayfactor": (0.2, "proportional"),
+    "/net/impulse/nodeDeadTime": (1.0, "invers"),
+    "/net/randomSpawn/interval": (3.0, "invers"),
+}
+
+# Reihenfolge der Gruppen im UI; alles Unbekannte haengt alphabetisch hinten an.
+GROUP_ORDER = [
+    "master",
+    "Master",
+    "Master/opacity",
+    "net/impulse",
+    "net/randomSpawn",
+    "net",
+    "nodes",
+    "nodes/radius",
+    "nodes/times",
+    "nodes/colors",
+]
+
+# Schrittweiten-Leiter fuer Float-Regler (grober Wert zuerst).
+STEP_LADDER = [1.0, 0.5, 0.1, 0.05, 0.01, 0.005, 0.001, 0.0005, 0.0001]
+
+COLOR_COMPONENTS = ("Hue", "Sat", "Bright")
+
+
+# ---------------------------------------------------------------------------
+# OSC-Versand
+# ---------------------------------------------------------------------------
+
+
+def _osc_string(text: str) -> bytes:
+    """OSC-String: UTF-8, mit mindestens einem Nullbyte auf 4 Byte aufgefuellt."""
+    raw = text.encode("utf-8") + b"\x00"
+    return raw + b"\x00" * ((-len(raw)) % 4)
+
+
+def build_osc_message(address: str, value: Any) -> bytes:
+    """Baut ein OSC-Paket mit genau einem Argument (int -> 'i', float -> 'f')."""
+    if isinstance(value, bool):
+        raise TypeError("bool ist kein gueltiges OSC-Argument")
+    if isinstance(value, int):
+        return _osc_string(address) + _osc_string(",i") + struct.pack(">i", value)
+    if isinstance(value, float):
+        return _osc_string(address) + _osc_string(",f") + struct.pack(">f", value)
+    raise TypeError("nicht unterstuetzter OSC-Argumenttyp: %r" % type(value))
+
+
+class OscSender:
+    """Schickt einzelne OSC-Nachrichten per UDP.
+
+    Bevorzugt ``python-osc``; fuer Adressen ohne fuehrenden Schraegstrich
+    (``Master/trace``, ``Master/0/opacity/0.Impulse`` -- so registriert in
+    mixer.java, so erwartet von ``checkAddrPattern``) wird immer der eigene
+    Encoder genutzt, weil python-osc solche Adressen ablehnt. Die Bytes sind
+    fuer regulaere Adressen identisch, siehe test_webui.py.
+    """
+
+    def __init__(self, host: str, port: int) -> None:
+        self.host = host
+        self.port = port
+        self._lock = threading.Lock()
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._client = None
+        try:
+            from pythonosc.udp_client import SimpleUDPClient  # type: ignore
+
+            self._client = SimpleUDPClient(host, port)
+        except Exception as exc:  # pragma: no cover - haengt an der Installation
+            print("[webui] python-osc nicht nutzbar (%s), nutze eingebauten "
+                  "OSC-Encoder" % exc, file=sys.stderr)
+
+    def send(self, address: str, value: Any) -> None:
+        with self._lock:
+            if self._client is not None and address.startswith("/"):
+                self._client.send_message(address, value)
+            else:
+                self._socket.sendto(build_osc_message(address, value),
+                                    (self.host, self.port))
+
+    def close(self) -> None:
+        with self._lock:
+            self._socket.close()
+
+
+# ---------------------------------------------------------------------------
+# remoteSettings.txt lesen
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Parameter:
+    """Eine Zeile aus remoteSettings.txt.
+
+    Format (Tabs), siehe ``writeToStream`` in AbstractParameter.java:
+        typ \t adresse \t beschreibung \t wert \t min \t max
+    """
+
+    type: str          # "float" oder "int"
+    address: str
+    description: str
+    value: float
+    minimum: float
+    maximum: float
+
+    @property
+    def is_int(self) -> bool:
+        return self.type == "int"
+
+    def clamp(self, value: float) -> float:
+        low, high = self.minimum, self.maximum
+        if low > high:
+            low, high = high, low
+        return max(low, min(high, value))
+
+    def coerce(self, value: float) -> float:
+        """Klemmt auf den erlaubten Bereich und rundet Int-Parameter."""
+        clamped = self.clamp(float(value))
+        return int(round(clamped)) if self.is_int else clamped
+
+    def normalize(self, value: float) -> Any:
+        """Wandelt einen Wert in das, was imPulse per OSC erwartet.
+
+        Float-Parameter: ``digestMessage`` mappt eingehende Floats selbst per
+        ``PApplet.map(value, 0, 1, min, max)`` -- gesendet wird also der auf
+        0..1 normalisierte Anteil, nicht der Rohwert.
+
+        Int-Parameter: unveraendert als Ganzzahl. Die Float-Variante von
+        ``RemoteControlledIntParameter.digestMessage`` ruft ``intValue()`` auf
+        dem Float auf und verstuemmelt den Wert dadurch -- ein Float darf an
+        einen Int-Parameter also nie geschickt werden.
+        """
+        clamped = self.clamp(float(value))
+        if self.is_int:
+            return int(round(clamped))
+        span = self.maximum - self.minimum
+        if span == 0:
+            return 0.0
+        return max(0.0, min(1.0, (clamped - self.minimum) / span))
+
+    def step(self) -> float:
+        if self.is_int:
+            return 1.0
+        span = abs(self.maximum - self.minimum)
+        if span <= 0:
+            return 0.001
+        target = span / 100.0
+        for candidate in STEP_LADDER:
+            if candidate <= target:
+                return candidate
+        return STEP_LADDER[-1]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": "param",
+            "type": self.type,
+            "address": self.address,
+            "description": self.description,
+            "min": self.minimum,
+            "max": self.maximum,
+            "step": self.step(),
+            # 0/1-Ints bekommen einen Schalter statt eines Zweipunkt-Reglers
+            "widget": "toggle" if (self.is_int and self.minimum == 0
+                                   and self.maximum == 1) else "slider",
+        }
+
+
+def parse_settings(text: str) -> List[Parameter]:
+    """Parst den Inhalt von remoteSettings.txt.
+
+    Kaputte Zeilen werden uebersprungen (mit Hinweis auf stderr), damit eine
+    einzelne unerwartete Zeile nicht das ganze UI lahmlegt. Doppelte Adressen
+    gewinnen beim ersten Auftreten.
+    """
+    parameters: List[Parameter] = []
+    seen: Dict[str, Parameter] = {}
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.rstrip("\r\n")
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        if len(fields) < 6:
+            print("[webui] remoteSettings.txt Zeile %d uebersprungen "
+                  "(%d Felder statt 6): %r" % (lineno, len(fields), line),
+                  file=sys.stderr)
+            continue
+        kind, address, description = fields[0].strip(), fields[1].strip(), fields[2]
+        if kind not in ("float", "int"):
+            print("[webui] remoteSettings.txt Zeile %d uebersprungen "
+                  "(unbekannter Typ %r)" % (lineno, kind), file=sys.stderr)
+            continue
+        try:
+            value, minimum, maximum = (float(fields[3]), float(fields[4]),
+                                       float(fields[5]))
+        except ValueError:
+            print("[webui] remoteSettings.txt Zeile %d uebersprungen "
+                  "(unlesbare Zahl): %r" % (lineno, line), file=sys.stderr)
+            continue
+        if not address:
+            continue
+        if address in seen:
+            print("[webui] doppelte Adresse %s in Zeile %d ignoriert"
+                  % (address, lineno), file=sys.stderr)
+            continue
+        param = Parameter(kind, address, description, value, minimum, maximum)
+        seen[address] = param
+        parameters.append(param)
+    return parameters
+
+
+def group_key(address: str) -> str:
+    """Gruppenschluessel aus dem Adress-Praefix.
+
+    Alles unterhalb von ``/net/impulse`` landet in einer Gruppe, alles
+    unterhalb von ``/net/randomSpawn`` in einer anderen. Rein numerische
+    Segmente (``Master/0/opacity/...``) fallen raus, sonst bekaeme jeder
+    Mixer-Kanal seine eigene Gruppe.
+    """
+    segments = [s for s in address.split("/") if s]
+    if len(segments) <= 1:
+        return segments[0] if segments else "sonstige"
+    parent = [s for s in segments[:-1] if not s.isdigit()] or [segments[0]]
+    return "/".join(parent[:2])
+
+
+def group_sort_key(key: str) -> Tuple[int, str]:
+    try:
+        return (GROUP_ORDER.index(key), "")
+    except ValueError:
+        return (len(GROUP_ORDER), key.lower())
+
+
+def build_groups(parameters: List[Parameter]) -> List[Dict[str, Any]]:
+    """Sortiert die Parameter in Gruppen und fasst HSB-Tripel zu Farbwaehlern.
+
+    Farbparameter (``RemoteControlledColorParameter``) tauchen in
+    remoteSettings.txt nicht als eigener Typ auf, sondern als drei
+    Float-Zeilen ``<basis>/Hue``, ``<basis>/Sat`` und ``<basis>/Bright``.
+    Liegen alle drei vor, wird daraus ein Farbwaehler.
+    """
+    by_group: Dict[str, List[Parameter]] = {}
+    for param in parameters:
+        by_group.setdefault(group_key(param.address), []).append(param)
+
+    groups: List[Dict[str, Any]] = []
+    for key in sorted(by_group, key=group_sort_key):
+        members = sorted(by_group[key], key=lambda p: p.address)
+        by_address = {p.address: p for p in members}
+
+        color_bases: List[str] = []
+        for param in members:
+            base, _, leaf = param.address.rpartition("/")
+            if leaf != COLOR_COMPONENTS[0] or not base:
+                continue
+            if all(("%s/%s" % (base, c)) in by_address for c in COLOR_COMPONENTS):
+                color_bases.append(base)
+
+        consumed = {"%s/%s" % (base, c)
+                    for base in color_bases for c in COLOR_COMPONENTS}
+
+        controls: List[Dict[str, Any]] = []
+        for base in color_bases:
+            controls.append({
+                "kind": "color",
+                "base": base,
+                "label": base.split("/")[-1] or base,
+                "components": {
+                    "hue": by_address["%s/Hue" % base].as_dict(),
+                    "sat": by_address["%s/Sat" % base].as_dict(),
+                    "bright": by_address["%s/Bright" % base].as_dict(),
+                },
+            })
+        for param in members:
+            if param.address not in consumed:
+                controls.append(param.as_dict())
+
+        groups.append({
+            "key": key,
+            "title": key if key.startswith("Master") else "/" + key,
+            "controls": controls,
+        })
+    return groups
+
+
+# ---------------------------------------------------------------------------
+# Zustand
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Applied:
+    address: str
+    value: float
+    sent: Any
+
+
+@dataclass
+class ParameterStore:
+    """Haelt die geparste Parameterliste und die zuletzt gesetzten Werte.
+
+    Die Werte stammen beim ersten Laden aus remoteSettings.txt (die Datei
+    enthaelt nach jedem imPulse-Start die aktiven Registrierungswerte).
+    Danach fuehrt der Server sie im Speicher weiter -- die Datei wird von
+    imPulse ja nur beim Start geschrieben, waere also sofort veraltet.
+    Aendert sich die Datei (imPulse wurde neu gestartet), wird komplett neu
+    eingelesen.
+    """
+
+    path: str
+    parameters: List[Parameter] = field(default_factory=list)
+    values: Dict[str, float] = field(default_factory=dict)
+    by_address: Dict[str, Parameter] = field(default_factory=dict)
+    mtime: Optional[float] = None
+    error: Optional[str] = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def _read(self) -> None:
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+            self.mtime = os.path.getmtime(self.path)
+            self.error = None
+        except OSError as exc:
+            self.parameters = []
+            self.by_address = {}
+            self.values = {}
+            self.mtime = None
+            self.error = "remoteSettings.txt nicht lesbar: %s" % exc
+            print("[webui] %s" % self.error, file=sys.stderr)
+            return
+        self.parameters = parse_settings(text)
+        self.by_address = {p.address: p for p in self.parameters}
+        self.values = {p.address: p.coerce(p.value) for p in self.parameters}
+
+    def refresh(self, force: bool = False) -> None:
+        with self._lock:
+            if force or not self.parameters:
+                self._read()
+                return
+            try:
+                current = os.path.getmtime(self.path)
+            except OSError:
+                self._read()
+                return
+            if current != self.mtime:
+                print("[webui] remoteSettings.txt hat sich geaendert, lese neu",
+                      file=sys.stderr)
+                self._read()
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            groups = build_groups(self.parameters)
+            return {
+                "groups": groups,
+                "values": dict(self.values),
+                "settings": {
+                    "path": self.path,
+                    "mtime": self.mtime,
+                    "count": len(self.parameters),
+                    "error": self.error,
+                },
+            }
+
+    def get(self, address: str) -> Optional[Parameter]:
+        with self._lock:
+            return self.by_address.get(address)
+
+    def store(self, address: str, value: float) -> None:
+        with self._lock:
+            self.values[address] = value
+
+
+def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Parameter, float]],
+                                                                 List[Dict[str, str]]]:
+    """Berechnet die an die Geschwindigkeit gekoppelten Werte.
+
+    Rueckgabe: Liste (Parameter, Wert) plus Liste uebersprungener Adressen --
+    uebersprungen wird, was in remoteSettings.txt gar nicht vorkommt (z.B.
+    ``/net/randomSpawn/*`` in einem Dump vor Einfuehrung der Random-Spawns).
+    """
+    factor = speed / SPEED_REFERENCE
+    result: List[Tuple[Parameter, float]] = []
+    skipped: List[Dict[str, str]] = []
+    if factor <= 0:
+        return result, [{"address": a, "reason": "Faktor 0"} for a in SPEED_COUPLED]
+    for address, (reference, mode) in SPEED_COUPLED.items():
+        param = store.get(address)
+        if param is None:
+            skipped.append({"address": address,
+                            "reason": "nicht in remoteSettings.txt"})
+            continue
+        raw = reference * factor if mode == "proportional" else reference / factor
+        result.append((param, param.coerce(raw)))
+    return result, skipped
+
+
+# ---------------------------------------------------------------------------
+# Flask-App
+# ---------------------------------------------------------------------------
+
+
+def create_app(settings_path: str, osc_host: str, osc_port: int):
+    if Flask is None:
+        raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
+                         % _FLASK_IMPORT_ERROR)
+    app = Flask(__name__)
+    store = ParameterStore(path=settings_path)
+    store.refresh(force=True)
+    sender = OscSender(osc_host, osc_port)
+
+    app.config["IMPULSE_STORE"] = store
+    app.config["IMPULSE_SENDER"] = sender
+
+    def apply_value(param: Parameter, value: float) -> Applied:
+        coerced = param.coerce(value)
+        payload = param.normalize(coerced)
+        sender.send(param.address, payload)
+        store.store(param.address, coerced)
+        return Applied(param.address, coerced, payload)
+
+    @app.route("/")
+    def index() -> str:
+        store.refresh()
+        snapshot = store.snapshot()
+        return render_template(
+            "index.html",
+            bootstrap=json.dumps({
+                **snapshot,
+                "osc": {"host": osc_host, "port": osc_port},
+                "coupling": {
+                    "speedAddress": SPEED_ADDRESS,
+                    "reference": SPEED_REFERENCE,
+                    "targets": [
+                        {"address": a, "value": r, "mode": m}
+                        for a, (r, m) in SPEED_COUPLED.items()
+                    ],
+                },
+            }),
+        )
+
+    @app.route("/api/parameters")
+    def api_parameters():
+        store.refresh(force=request.args.get("force") == "1")
+        snapshot = store.snapshot()
+        snapshot["osc"] = {"host": osc_host, "port": osc_port}
+        return jsonify(snapshot)
+
+    @app.route("/api/set", methods=["POST"])
+    def api_set():
+        body = request.get_json(silent=True) or {}
+        updates = body.get("updates")
+        if updates is None:
+            updates = [{"address": body.get("address"), "value": body.get("value")}]
+        if not isinstance(updates, list) or not updates:
+            return jsonify({"ok": False, "error": "keine Aenderungen im Request"}), 400
+
+        applied: List[Applied] = []
+        skipped: List[Dict[str, str]] = []
+        couple = bool(body.get("coupleSpeed"))
+
+        for update in updates:
+            if not isinstance(update, dict):
+                return jsonify({"ok": False, "error": "ungueltiger Eintrag"}), 400
+            address = update.get("address")
+            param = store.get(address) if isinstance(address, str) else None
+            if param is None:
+                return jsonify({"ok": False,
+                                "error": "unbekannte Adresse: %r" % (address,)}), 400
+            try:
+                value = float(update.get("value"))
+            except (TypeError, ValueError):
+                return jsonify({"ok": False,
+                                "error": "ungueltiger Wert fuer %s" % address}), 400
+            if value != value or value in (float("inf"), float("-inf")):
+                return jsonify({"ok": False,
+                                "error": "ungueltiger Wert fuer %s" % address}), 400
+            applied.append(apply_value(param, value))
+
+            if couple and address == SPEED_ADDRESS:
+                targets, missing = coupled_values(store, applied[-1].value)
+                skipped.extend(missing)
+                for target, target_value in targets:
+                    applied.append(apply_value(target, target_value))
+
+        return jsonify({
+            "ok": True,
+            "applied": [{"address": a.address, "value": a.value, "sent": a.sent}
+                        for a in applied],
+            "skipped": skipped,
+        })
+
+    return app
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--settings",
+                        default=os.environ.get("IMPULSE_SETTINGS", DEFAULT_SETTINGS_PATH),
+                        help="Pfad zu remoteSettings.txt (Vorgabe: %(default)s)")
+    parser.add_argument("--osc-host",
+                        default=os.environ.get("IMPULSE_OSC_HOST", DEFAULT_OSC_HOST),
+                        help="Ziel-Host fuer OSC (Vorgabe: %(default)s)")
+    parser.add_argument("--osc-port", type=int,
+                        default=int(os.environ.get("IMPULSE_OSC_PORT", DEFAULT_OSC_PORT)),
+                        help="Ziel-Port fuer OSC (Vorgabe: %(default)s)")
+    parser.add_argument("--host",
+                        default=os.environ.get("IMPULSE_WEBUI_HOST", DEFAULT_HTTP_HOST),
+                        help="Bind-Adresse des Webservers (Vorgabe: %(default)s)")
+    parser.add_argument("--port", type=int,
+                        default=int(os.environ.get("IMPULSE_WEBUI_PORT", DEFAULT_HTTP_PORT)),
+                        help="Port des Webservers (Vorgabe: %(default)s)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Flask-Debugmodus (Autoreload)")
+    args = parser.parse_args(argv)
+
+    settings_path = os.path.abspath(args.settings)
+    app = create_app(settings_path, args.osc_host, args.osc_port)
+
+    print("[webui] remoteSettings: %s" % settings_path)
+    print("[webui] OSC-Ziel:       %s:%d" % (args.osc_host, args.osc_port))
+    print("[webui] HTTP:           http://%s:%d" % (args.host, args.port))
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

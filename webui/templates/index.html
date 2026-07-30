@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>imPulse &ndash; Fernsteuerung</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <div class="titles">
+      <h1>imPulse</h1>
+      <p class="meta" id="meta"></p>
+    </div>
+    <div class="actions">
+      <label class="switch" title="Skaliert energyDecay, energyDecayfactor, nodeDeadTime und randomSpawn/interval mit, wenn /net/impulse/speed geaendert wird">
+        <input type="checkbox" id="coupling" checked>
+        <span>Speed-Kopplung aktiv</span>
+      </label>
+      <button type="button" id="reload" title="remoteSettings.txt neu einlesen (nach einem imPulse-Neustart)">Neu laden</button>
+    </div>
+  </header>
+
+  <p class="status" id="status" role="status">&nbsp;</p>
+
+  <main id="groups"></main>
+
+  <script type="application/json" id="bootstrap">{{ bootstrap|safe }}</script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
