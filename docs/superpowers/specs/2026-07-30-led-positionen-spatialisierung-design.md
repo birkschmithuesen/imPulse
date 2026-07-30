@@ -38,17 +38,35 @@ Am 2026-07-30 mit dem Betreiber der Installation festgelegt, nicht angenommen.
 | Lautsprecher | vier, auf den **Seitenmitten**: (0, +4), (+7, 0), (0, −4), (−7, 0) |
 | Stripes | 30, je 600 LEDs auf 10 m → LED-Abstand 16,667 mm |
 | Stripe-Aufbau | die zwei 5-m-Stücke eines Outputs sind **durchgehend** verbunden, LED 299 und 300 liegen physisch nebeneinander |
-| Kreuzungen heute | 23 Zeilen in `data/nodeCrossings.txt` |
+| Kreuzungen | **wächst laufend**, siehe 2.3 |
 
 ### 2.1 Warum Anker und nicht nur Knoten
 
-Interpoliert werden kann nur zwischen zwei bekannten Punkten **auf demselben Stripe**. Bei 23 Kreuzungen auf 30 Stripes hat ein Teil der Stripes keine oder nur eine Kreuzung, und vor der ersten sowie hinter der letzten Kreuzung eines Stripes fehlt ohnehin die zweite Stützstelle.
+Interpoliert werden kann nur zwischen zwei bekannten Punkten **auf demselben Stripe**. Solange die Kalibrierung nicht abgeschlossen ist, hat ein Teil der Stripes keine oder nur eine Kreuzung, und vor der ersten sowie hinter der letzten Kreuzung eines Stripes fehlt ohnehin die zweite Stützstelle. Beim Stand von 02:18 (23 Kreuzungen) hatten 30 Stripes im Mittel weniger als zwei Kreuzungen; auch beim Stand von 03:40 (77 Kreuzungen) hat der schwächste Stripe nur zwei.
 
 Deshalb ist die Ankermenge: **alle Kreuzungs-LEDs plus LED 0 und LED 599 jedes Stripes.**
 
-Eine Kreuzung ist ein einzelner physischer Punkt mit zwei LEDs auf zwei verschiedenen Stripes. Eine gesetzte Position gilt damit für **alle** LEDs dieses Knotens — das ist keine Schätzung, sondern eine Tatsache der Geometrie. Aus 23 + 30·2 = **83 zu setzenden Positionen** werden 23·2 + 60 = **106 LED-Anker**, und jeder gesetzte Knoten liefert sofort eine Stützstelle auf einem zweiten Stripe.
+Eine Kreuzung ist ein einzelner physischer Punkt mit zwei LEDs auf zwei verschiedenen Stripes. Eine gesetzte Position gilt damit für **alle** LEDs dieses Knotens — das ist keine Schätzung, sondern eine Tatsache der Geometrie. Jeder gesetzte Knoten liefert also sofort eine Stützstelle auf einem zweiten Stripe.
 
 Wären die zwei 5-m-Stücke getrennt im Netz verlegt, lägen zwischen LED 299 und 300 ein physischer Sprung und es bräuchte Segmentgrenzen sowie vier Anker je Stripe. Nach 2 ist das nicht der Fall; Segmentgrenzen werden **nicht** gebaut.
+
+### 2.3 Alle abgeleiteten Zahlen werden gerechnet, nicht verdrahtet
+
+`data/nodeCrossings.txt` **wächst während der Kalibrierung**. Am 2026-07-30 um 02:18 standen 23 Kreuzungen darin, um 03:40 waren es 77. Keine Zahl, die von der Kreuzungszahl abhängt, darf im Code oder in einem Test als Konstante stehen — weder die Länge der Arbeitsliste noch die Zahl der Anker.
+
+Es gilt, mit `C` als Zahl der Kreuzungen und `S = 30` Stripes:
+
+```
+LED-Anker gesamt          = 2*S + 2*C          (jede Kreuzung hat genau zwei LEDs)
+davon von Hand zu klicken =   2*S + C          (die Partner-LED schliesst sich mit)
+Arbeitslisten-Eintraege   = 2*S + 2*C          (einer je LED-Anker, siehe 4.1)
+```
+
+Bei C = 77 sind das 214 Anker, 137 Klicks. Bei C = 23 waren es 106 Anker und 83 Klicks. Beide Zahlen stehen hier nur als Beispiel; verlässlich ist die Formel.
+
+Für die Tests heisst das: **kleine synthetische Vorgaben**, keine Prüfung gegen `data/nodeCrossings.txt`. Ein Test, der 214 erwartet, ist beim nächsten `S` im Kalibriermodus rot.
+
+Geprüft: alle Zeilen der Datei haben genau **zwei** Indizes, und keine Kreuzungs-LED liegt auf einem Stripe-Ende (LED 0 oder 599). Der Kern muss mit beidem trotzdem umgehen — mehr als zwei Indizes je Zeile erlaubt `NodeCrossingStore.load()` ausdrücklich, und fällt eine Kreuzung auf ein Stripe-Ende, darf der Eintrag in der Arbeitsliste nur **einmal** vorkommen.
 
 ### 2.2 Was verworfen wird
 
@@ -210,9 +228,13 @@ Arbeitsteilung wie beim bestehenden HUD: die Klasse hält Zustand und Logik proc
 
 ### 4.1 Arbeitsliste
 
-83 Einträge, sortiert nach Stripe und darin nach Index in Stripe: pro Stripe LED 0, dann die Kreuzungs-LEDs aufsteigend, dann LED 599.
+**Ein Eintrag je LED-Anker**, sortiert nach Stripe und darin nach Index in Stripe: pro Stripe LED 0, dann die Kreuzungs-LEDs dieses Stripes aufsteigend, dann LED 599. Fällt eine Kreuzung genau auf LED 0 oder 599, steht sie nur **einmal** in der Liste.
 
-Die Reihenfolge ist Absicht — man arbeitet einen Stripe ab, und sobald zwei seiner Punkte stehen, sind alle weiteren vorgeschlagen. Erreicht man später einen Stripe, dessen Kreuzung schon über den Partner-Stripe gesetzt wurde, meldet das HUD „bereits bekannt" und man blättert weiter.
+Eine Kreuzung erscheint damit **zweimal** in der Liste — einmal auf jedem beteiligten Stripe. Das ist Absicht: arbeitest du Stripe 7 ab, willst du alle seine Anker in Reihenfolge sehen, auch die schon bekannten, weil sich daran die Form des Strangs prüfen lässt. Nur einer der beiden Einträge braucht einen Klick; beim zweiten meldet das HUD „bereits bekannt" und man blättert weiter.
+
+Die Länge ist `2*numStripes + Summe der LEDs aller Kreuzungen`, siehe 2.3 — sie wird gerechnet, nie verdrahtet, und die Liste wird bei `R` neu gebaut, damit während der Sitzung aufgenommene Kreuzungen auftauchen.
+
+Die Sortierung nach Stripe ist ebenfalls Absicht: sobald zwei Punkte eines Stripes stehen, sind alle weiteren vorgeschlagen.
 
 ```java
 class LedPositionCalibration implements runnableLedEffect {
@@ -396,7 +418,7 @@ Praktisches Vorgehen: `\b2Decoder` bekommt vorübergehend einen Testmodus, der e
 
 Bewusst weggelassen, mit Grund, damit es nicht als Versehen wiederkommt:
 
-- **Kamera-gestützte Erfassung.** Kamera mittig unter dem Netz, senkrecht nach oben; je Anker eine kurze LED-Strecke einschalten, Bild greifen, hellsten Fleck suchen. Der Reiz liegt nicht in der Ersparnis bei 83 Ankern, sondern darin, dass man dann nicht auf Anker beschränkt ist: jede zehnte LED jedes Stripes abzufahren sind 1800 Aufnahmen, bei vier je Sekunde eine Viertelstunde, und danach ist die Interpolation praktisch exakt. Der Preis wäre dunkler Raum, feste Belichtung, ein Fischauge mit einzumessender Verzerrung, die `processing.video`-Bibliothek und ein Bildverarbeitungsteil, der sich ohne Hardware kaum prüfen lässt. Der Kern aus Abschnitt 3 weiss nicht, woher die Anker kommen — ein Kamera-Scan wäre ein zweiter Schreiber in dieselbe Datei, ohne Umbau.
+- **Kamera-gestützte Erfassung.** Kamera mittig unter dem Netz, senkrecht nach oben; je Anker eine kurze LED-Strecke einschalten, Bild greifen, hellsten Fleck suchen. Der Reiz liegt nicht in der Ersparnis bei ein- bis zweihundert Ankern, sondern darin, dass man dann nicht auf Anker beschränkt ist: jede zehnte LED jedes Stripes abzufahren sind 1800 Aufnahmen, bei vier je Sekunde eine Viertelstunde, und danach ist die Interpolation praktisch exakt. Der Preis wäre dunkler Raum, feste Belichtung, ein Fischauge mit einzumessender Verzerrung, die `processing.video`-Bibliothek und ein Bildverarbeitungsteil, der sich ohne Hardware kaum prüfen lässt. Der Kern aus Abschnitt 3 weiss nicht, woher die Anker kommen — ein Kamera-Scan wäre ein zweiter Schreiber in dieselbe Datei, ohne Umbau.
 - **Globale Ausgleichsrechnung über alle Anker.** Ein gesetzter Punkt könnte automatisch auf eine plausible Position rutschen, wenn man die Weglängen aller Stripe-Abschnitte gleichzeitig als Nebenbedingung auflöst; jeder Abschnitt eine Kette mit Höchstlänge, die Knoten verbinden die Ketten, und eine Federrelaxation konvergiert da zuverlässig. Der Nebeneffekt macht es beim Aufnehmen aber unangenehm: der eigene Klick wird zur weichen Empfehlung, und vorher gesetzte Punkte wandern unter der Hand weg. Der Vektor-Vorschlag aus 3.3 holt den grössten Teil des Nutzens ab.
 - **Höhe / Z.** Siehe 2.2.
 - **Segmentgrenzen innerhalb eines Stripes.** Siehe 2.1.
@@ -448,8 +470,9 @@ Drei neue Suiten in `test/run.sh`, dessen Übersetzungsliste um `LedAnchorStore.
 
 **`LedPositionCalibrationTest`**
 
-- Länge und Reihenfolge der Arbeitsliste: 83 Einträge bei 23 Kreuzungen und 30 Stripes, sortiert nach Stripe und Index
-- eine neu hinzugefügte Kreuzung erscheint als offener Eintrag an der richtigen Stelle
+- Länge und Reihenfolge der Arbeitsliste an einer **kleinen synthetischen Vorgabe** (etwa 4 Stripes, 2 Kreuzungen → 2·4 + 2·2 = 12 Einträge), sortiert nach Stripe und Index. Nicht gegen `data/nodeCrossings.txt` prüfen, siehe 2.3
+- eine Kreuzung genau auf LED 0 eines Stripes erzeugt nur einen Eintrag, keinen doppelten
+- eine neu hinzugefügte Kreuzung erscheint nach dem Neuaufbau der Liste als offener Eintrag an der richtigen Stelle
 - `o` springt zum nächsten offenen Eintrag und bleibt stehen, wenn keiner mehr folgt
 - `,` am Listenanfang und `.` am Listenende bleiben stehen, kein Umlauf
 - Rundlauf `worldToPane` → `paneToWorld` auf Pixelgenauigkeit, an allen vier Ecken und in der Mitte
