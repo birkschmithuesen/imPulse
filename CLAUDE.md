@@ -77,7 +77,7 @@ Ausgehend an Port 8002 (`oscOutput` in `imPulse.pde`, Auslieferungsziel `127.0.0
 Die zwei zugehörigen Parameter, beide in `LedNetworkTransportEffect`:
 
 - `/net/impulse/oscRate` (float, Auslieferungswert 10, Bereich 0..40 Hz) — Sendetakt des Positionsstroms. **0 schaltet ihn ab**: kein Objekt, keine Liste, kein Datagramm. Der Not-Aus, wenn Netz oder Klangrechner während der Show nicht mitkommen; `/net/hitNode` läuft davon unberührt weiter. Beim Wiedereinschalten kommt sofort ein Takt (`lastSend` wird auf `-Infinity` zurückgesetzt), nicht erst nach einem Intervall — und es wird nichts nachgeholt: nach einer langen Pause gibt es **einen** Takt, keinen Schwall.
-- `/net/impulse/oscMaxCount` (int, Auslieferungswert 32, Bereich 0..256) — höchstens so viele Impulse je Takt, ausgewählt nach Energie absteigend. 0 sendet ebenfalls nichts, verbraucht aber den Takt und allokiert zwei Arrays — der teurere der beiden Schalter.
+- `/net/impulse/oscMaxCount` (int, Auslieferungswert 32, Bereich 0..256) — höchstens so viele Impulse je Takt, ausgewählt nach Energie absteigend. 0 sendet ebenfalls nichts, verbraucht aber den Takt und allokiert vier Arrays (`energies`, `flat`, den `Arrays.copyOf(...)` und `select()`s `new int[0]`) — der teurere der beiden Schalter.
 
 ### Web-UI (webui/)
 
@@ -207,7 +207,7 @@ Der **Vorschlag**, den das Werkzeug anzeigt, *ist* das Ergebnis von `LedPosition
 
 Ein/Aus mit `p`/`P` (`positionMode` in `imPulse.pde`); solange aktiv, ersetzt `ledPositionCalibration.drawMe()` komplett die Mixer-Ausgabe. `p` und `c` **schliessen sich gegenseitig aus** — beide belegen `,` `.` `S` `R` `F` `L`, der zuletzt eingeschaltete gewinnt. Beim Eintritt in den Positionsmodus läuft `reapply()`, weil sich die Kreuzungsliste im Kalibriermodus geändert haben kann. Anders als die Testbilder läuft der Positionsmodus auf dem Show-Fader `masterLevel`, nicht auf `CALIBRATION_MASTER_LEVEL`: das Netz zeigt hier nur schwache Farbflächen und einen blinkenden Punkt, und ein Fader lässt sich per OSC hochziehen, eine Konstante nicht.
 
-Das Fenster zeigt links die **Draufsicht-Fläche** bei `(paneX, paneY, paneW, paneH) = (0, 0, 525, 300)` px — 525:300 entspricht 14:8 genau, es gibt also keine Verzerrung, ein Pixel sind 2,7 cm. Gezeichnet werden 1-m-Raster, die vier Lautsprecher, alle gesetzten Anker, der Verlauf des aktuellen Stripes und der aktuelle Eintrag (gefüllt = gesetzt, hohl = nur Vorschlag). Rechts daneben sitzt die verkleinerte LED-Vorschau, darunter das HUD. Gezeichnet und angeklickt wird über dieselbe Umrechnung (`worldToPane`/`paneToWorld`), Klicks ausserhalb der Fläche werden verworfen.
+Das Fenster zeigt links die **Draufsicht-Fläche** bei `(paneX, paneY, paneW, paneH) = (0, 0, 525, 300)` px — 525:300 entspricht 14:8 genau, es gibt also keine Verzerrung, ein Pixel sind 2,67 cm. Gezeichnet werden 1-m-Raster, die vier Lautsprecher, alle gesetzten Anker, der Verlauf des aktuellen Stripes und der aktuelle Eintrag (gefüllt = gesetzt, hohl = nur Vorschlag). Rechts daneben sitzt die verkleinerte LED-Vorschau (`image(canvas, 560, 0, 600, 120)`). Das HUD sitzt **darunter**, aber unterhalb der Draufsicht-Fläche links im Fenster (`text(..., 10, paneY + paneH + 20)`), nicht unter der Vorschau. Gezeichnet und angeklickt wird über dieselbe Umrechnung (`worldToPane`/`paneToWorld`), Klicks ausserhalb der Fläche werden verworfen.
 
 Tastenbelegung (nur wirksam im Positionsmodus, ausser `p`/`P` selbst):
 - **Maus** (Klick oder Ziehen): Position des aktuellen Eintrags setzen — bei einer Kreuzung beide LEDs auf einmal
@@ -222,7 +222,7 @@ Tastenbelegung (nur wirksam im Positionsmodus, ausser `p`/`P` selbst):
 - **T**: Abdeckungsbericht auf die Konsole und ins HUD
 - **L**: **alle** Anker verwerfen, auch die geladenen — Bestätigung wie in der Node-Kalibrierung: erster Druck kündigt an, ein zweiter zwischen 300 ms und 5 s danach führt aus, jede andere Taste bricht ab
 
-Rückmeldung im Netz (`drawMe()`, spätere Regel überschreibt frühere): jede LED zeigt den Zustand der Karte — **dunkel** = dieser Stripe hat keinen Anker, **rot** = nur extrapoliert, **blau** = zwischen zwei Ankern; der Stripe des aktuellen Eintrags glimmt **grün**; die LEDs des aktuellen Eintrags **blinken weiss** (400 ms an/aus). Die Karte wird nur nach einer Änderung neu gerechnet (`mapDirty`), nicht in jedem Frame.
+Rückmeldung im Netz (`drawMe()`, spätere Regel überschreibt frühere): jede LED zeigt den Zustand der Karte — **dunkel** = dieser Stripe hat keinen Anker, **rot** = nur extrapoliert, **blau** = zwischen zwei Ankern; die Stripes der beteiligten LEDs des aktuellen Eintrags glimmen **grün** (einer bei einem Stripe-Ende, zwei bei einer Kreuzung); die LEDs des aktuellen Eintrags **blinken weiss** (400 ms an/aus). Die Karte wird nur nach einer Änderung neu gerechnet (`mapDirty`), nicht in jedem Frame.
 
 **`R` in der Node-Kalibrierung zieht die Positionen mit nach.** `LedInNetInfo.applyCrossings` baut die `LedNetworkNode`-Objekte komplett neu auf, die frischen Knoten haben also `posX/posY = 0`. Deshalb ruft `imPulse.pde` direkt danach `ledPositionCalibration.reapply()`. Ohne diese Zeile meldete `/net/hitNode` ab diesem Moment für **jeden** Knoten (0,0) — die Netzmitte, alle Stimmen auf einem Punkt — und zwar ohne Fehler, ohne sichtbares Symptom und bis zum nächsten Neustart. Nicht wegkürzen.
 

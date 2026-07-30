@@ -8,7 +8,7 @@ Geschrieben für die Garbicz-Fassung: 15 Controller, 30 Stripes à 600 LEDs, Gru
 
 - **Die Kreuzungen müssen aufgenommen sein.** `data/nodeCrossings.txt` ist die Grundlage: jede Kreuzung wird zu einem Eintrag der Arbeitsliste. Fehlt sie, fehlen die Einträge, und die Positionen der Knoten — also genau die Punkte, die Töne auslösen — wären nur geraten. Zuerst also `docs/kalibrierung-anleitung.md` durcharbeiten.
 - **Der Sketch wird aus der Processing-IDE gestartet.** Wie bei der Kreuzungskalibrierung: `imPulse.pde` öffnen, Play.
-- **Der Master-Pegel bleibt bei 0,1.** Der Positionsmodus läuft anders als die Testbilder auf dem Show-Fader `/master/level` (Auslieferungswert 0,1). Nicht hochdrehen — man braucht die Helligkeit nicht, der blinkende Punkt ist auch bei 0,1 im dunklen Netz eindeutig.
+- **Der Master-Pegel bleibt in der Regel bei 0,1, darf für eine Abdeckungsprüfung aber kurz hoch.** Der Positionsmodus läuft anders als die Testbilder auf dem Show-Fader `/master/level` (Auslieferungswert 0,1). Bei diesem Pegel ist die blau/rote Einfärbung der Abdeckung (siehe „Farben im Netz") mit rund 1,5/255 pro Kanal praktisch unsichtbar — die einzige verlässliche Anzeige ist der blinkende weisse Punkt, und der reicht für die eigentliche Aufnahme locker. Will man sich stattdessen einen Überblick verschaffen, wo noch Rot oder Dunkel liegt, `/master/level` kurz hochziehen und danach wieder auf 0,1 zurück; dauerhaft oben lassen sollte man ihn nicht, die Stripes sind nicht für volle Helligkeit ausgelegt.
 - **Ein Meterband oder wenigstens ein Plan der Halle.** Angeklickt wird eine Draufsicht der Grundfläche mit 1-m-Raster; ohne eine Vorstellung davon, wo im Raum die Netzmitte liegt, klickt man ins Blaue.
 - Die Controller müssen erreichbar sein. Kurzprobe: `ping 2.2.2.2`.
 
@@ -20,11 +20,11 @@ Die vier Lautsprecher stehen auf den **Seitenmitten**, nicht in den Ecken: vorn 
 
 ## Das Prinzip
 
-`P` schaltet den Positionsmodus ein. Links im Fenster erscheint die **Draufsicht-Fläche** (525 × 300 Pixel für 14 × 8 m, ein Pixel also 2,7 cm), rechts daneben eine verkleinerte LED-Vorschau, darunter das HUD.
+`P` schaltet den Positionsmodus ein. Links im Fenster erscheint die **Draufsicht-Fläche** (525 × 300 Pixel für 14 × 8 m, ein Pixel also 2,67 cm), rechts daneben eine verkleinerte LED-Vorschau; das HUD sitzt darunter — genauer: unterhalb der Draufsicht-Fläche links im Fenster, nicht unter der Vorschau.
 
 Ein **Eintrag** der Arbeitsliste ist ein *physischer Punkt*, nicht eine LED. Eine Kreuzung ist damit ein Eintrag mit zwei (selten mehr) LEDs auf zwei Stripes — sie hängen ja an derselben Stelle. Ein Stripe-Ende ist ein Eintrag mit einer LED.
 
-Der aktuelle Eintrag **blinkt weiss im Netz**, 0,4 s an, 0,4 s aus. Bei einer Kreuzung blinken beide LEDs auf beiden Stripes gleichzeitig; damit man den Stripe im Gewirr überhaupt findet, glimmt er zusätzlich schwach grün auf seiner ganzen Länge.
+Der aktuelle Eintrag **blinkt weiss im Netz**, 0,4 s an, 0,4 s aus. Bei einer Kreuzung blinken beide LEDs auf beiden Stripes gleichzeitig; damit man sie im Gewirr überhaupt findet, glimmen die beteiligten Stripes zusätzlich schwach grün auf ihrer ganzen Länge — bei einem Stripe-Ende ist das einer, bei einer Kreuzung zwei.
 
 Der Ablauf ist dann kurz:
 
@@ -36,7 +36,7 @@ Der Klick setzt beide LEDs einer Kreuzung auf einmal. Ziehen mit gedrückter Mau
 
 ## Der Vorschlag
 
-Ab dem **zweiten** gesetzten Punkt eines Stripes rechnet der Sketch für jeden weiteren Eintrag eine Position vor und zeigt sie als **hohlen weissen Ring**. Gesetzte Einträge zeigt er als gefüllte Scheibe.
+Ab dem **ersten** gesetzten Punkt eines Stripes rechnet der Sketch für jeden weiteren Eintrag eine Position vor und zeigt sie als **hohlen weissen Ring** — nach nur einem Anker allerdings noch ohne Richtung, dazu gleich mehr. Gesetzte Einträge zeigt er als gefüllte Scheibe; alle anderen bereits gesetzten Einträge sieht man daneben als kleine graue Punkte in der Fläche, praktisch für den Überblick, was in der Umgebung schon erledigt ist.
 
 - Zwischen zwei Ankern wird interpoliert, jenseits des äussersten der Vektor der letzten beiden fortgesetzt.
 - **Stimmt der Vorschlag**, `ENTER` — er wird damit zum Anker.
@@ -45,7 +45,7 @@ Ab dem **zweiten** gesetzten Punkt eines Stripes rechnet der Sketch für jeden w
 
 Nach dem *ersten* Anker eines Stripes zeigt der Ring noch keine Richtung — er sitzt genau auf diesem einen Punkt, weil ein einzelner Anker keine Richtung hergibt. Das ist kein Fehler, sondern der Zustand „ich weiss nur, dass der Stripe hier irgendwo langläuft".
 
-Solange ein Stripe gar keinen Anker hat, gibt es keinen Vorschlag; das HUD meldet dann „Kein Vorschlag moeglich".
+Solange ein Stripe gar keinen Anker hat, gibt es keinen Vorschlag; das HUD zeigt bei „Position" dann schlicht „keine Position". Erst ein Versuch, ihn zu übernehmen — `ENTER` oder eine Pfeiltaste —, bekommt die eigentliche Meldung „Kein Vorschlag moeglich - dieser Stripe hat noch keinen Anker" zurück, in der Meldungszeile und zusätzlich auf der Konsole.
 
 ## Reihenfolge: stripeweise arbeiten
 
@@ -79,7 +79,7 @@ Rot verschwindet auf einem Stripe genau dann, wenn beide Enden gesetzt sind. Ein
 ## Gegenprüfen, ohne neu zu starten
 
 - **`R`** rechnet die Positionskarte neu, überträgt sie auf die Knoten und baut die Arbeitsliste neu auf. Ab da schickt `/net/hitNode` die neuen Koordinaten, ohne Neustart.
-- **`T`** schreibt den Abdeckungsbericht auf die Konsole und ins HUD: wieviele LEDs gar keine Position haben, wieviele nur extrapoliert sind, und welche Stripes noch **ohne jeden Anker** sind. Der Bericht nennt die Stripes bei der Nummer — das ist die schnellste Antwort auf „woran muss ich noch ran?".
+- **`T`** schreibt den Abdeckungsbericht auf die Konsole und ins HUD: wieviele LEDs gar keine Position haben, wieviele nur extrapoliert sind, und welche Stripes noch **ohne jeden Anker** sind. Der Bericht nennt die Stripes ohne Anker beim Namen — das ist die schnellste Antwort auf „woran muss ich noch ran?".
 
 Zum Hören: `P` verlässt den Positionsmodus, die Show läuft wieder, ein Rohr anschlagen (oder per OSC an Port 8001 ein `/tube/trigger` mit der Stripe-Nummer schicken, 1-basiert) und darauf achten, ob der Ton aus der Ecke kommt, in der das Licht steht. `P` bringt einen zurück, und beim Wiedereintritt wird ohnehin neu gerechnet.
 

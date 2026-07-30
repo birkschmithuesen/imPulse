@@ -7,8 +7,8 @@ Geschrieben für die Garbicz-Fassung: 15 Controller, 30 Stripes à 600 LEDs. Die
 ## Vor dem Anfangen
 
 - **Der Sketch wird aus der Processing-IDE gestartet.** Auf diesem Rechner gibt es kein `processing-java`. `open -a Processing imPulse.pde`, dann Play.
-- **Die Datei ist leer.** `data/nodeCrossings.txt` hat 0 Zeilen — du fängst bei null an. Die Aufnahme der vorigen Installation liegt als `data/nodeCrossings_16x720.txt` daneben und ist für die neue Geometrie wertlos, weil sich mit 600 statt 720 LEDs pro Stripe alle Indizes verschoben haben.
-- **Der Master-Pegel steht auf 0,1** und ist auf 0,3 gedeckelt. Nicht hochdrehen — die Stripes vertragen keine volle Helligkeit.
+- **Die Datei füllt sich mit jeder Sitzung.** `data/nodeCrossings.txt` sammelt die bereits aufgenommenen Kreuzungen; wieviele es schon sind, zeigt `wc -l data/nodeCrossings.txt`. Die Aufnahme der vorigen Installation liegt als `data/nodeCrossings_16x720.txt` daneben und ist für die neue Geometrie wertlos, weil sich mit 600 statt 720 LEDs pro Stripe alle Indizes verschoben haben.
+- **Der Master-Pegel läuft im Kalibriermodus auf einem eigenen Fixpegel.** `CALIBRATION_MASTER_LEVEL = 0,1` in `imPulse.pde` ist eine Konstante, nicht per OSC erreichbar — sie sichert vor allem die Testbilder (`1`–`5`), von denen zwei Vollweiss senden. Der Show-Fader `/master/level` selbst geht ausserhalb des Kalibriermodus inzwischen von 0 bis 1 (Auslieferungswert weiterhin 0,1; die frühere Deckelung auf 0,3 gibt es nicht mehr), greift aber erst wieder, sobald der Kalibriermodus mit `c` verlassen ist — dann gilt: nicht hochdrehen, die Stripes vertragen keine volle Helligkeit.
 - Die Controller müssen erreichbar sein. Kurzprobe: `ping 2.2.2.2`.
 
 ## Die Ergonomie, ehrlich vorweg
