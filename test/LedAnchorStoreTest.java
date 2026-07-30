@@ -31,6 +31,20 @@ public class LedAnchorStoreTest {
     return list;
   }
 
+  // Zaehlt die DATENZEILEN der Datei - Kommentar- und Leerzeilen zaehlen nicht.
+  // Gebraucht, um "save() haengt nicht an" wirklich zu pruefen: die Ankerzahl
+  // nach dem Laden kann das nicht leisten, weil anchors eine TreeMap ist und
+  // put() auf denselben Schluessel Duplikate stillschweigend kollabiert.
+  static int dataLineCount(java.io.File f) throws Exception {
+    String all = new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8");
+    int n = 0;
+    for (String ln : all.split("\n")) {
+      String t = ln.trim();
+      if (t.length() > 0 && !t.startsWith("#")) { n++; }
+    }
+    return n;
+  }
+
   public static void main(String[] args) throws Exception {
     // ---- Gueltiges Setzen ----
     LedAnchorStore s = store();
@@ -276,22 +290,44 @@ public class LedAnchorStoreTest {
     // beim naechsten Start nicht mehr.
     String written = new String(
         java.nio.file.Files.readAllBytes(file.toPath()), "UTF-8");
-    int dataLines = 0;
     for (String ln : written.split("\n")) {
       String t = ln.trim();
       if (t.length() == 0 || t.startsWith("#")) { continue; }
-      dataLines++;
       Check.that("Datenzeile ohne Komma: \"" + t + "\"", t.indexOf(',') < 0);
       Check.that("Datenzeile mit Punkt: \"" + t + "\"", t.indexOf('.') >= 0);
     }
-    Check.eq("drei Datenzeilen geschrieben", 3, dataLines);
+    Check.eq("drei Datenzeilen geschrieben", 3, dataLineCount(file));
 
     // ---- Mehrfaches Speichern verdoppelt nichts ----
+    // dataLineCount statt Anker-Anzahl: anchors ist eine TreeMap, put() auf
+    // denselben Schluessel kollabiert Duplikate stillschweigend. Ein
+    // anhaengendes save() wuerde also bei gleichbleibenden Schluesseln nicht
+    // auffallen, wenn nur ueber rd3.size() geprueft wird - deshalb zusaetzlich
+    // die tatsaechliche Zeilenzahl der Datei messen (3 -> 9 bei einer
+    // Anhaenge-Regression).
+    int linesAfterOneSave = dataLineCount(file);
     wr.save(file.getAbsolutePath());
     wr.save(file.getAbsolutePath());
+    Check.eq("dreimaliges Speichern aendert die Zeilenzahl der Datei nicht",
+        linesAfterOneSave, dataLineCount(file));
     LedAnchorStore rd3 = store();
     rd3.load(file.getAbsolutePath());
     Check.eq("nach dreimal speichern immer noch drei Anker", 3, rd3.size());
+
+    // ---- save() spiegelt eine schrumpfende Ankerliste ----
+    // Prueft die Anhaenge-Regression von der anderen Seite: ein anhaengendes
+    // save() wuerde die entfernte Zeile stehen lassen, und das Nachladen
+    // wuerde den geloeschten Anker wiederbeleben.
+    int linesBeforeRemove = dataLineCount(file);
+    Check.that("ein Anker wird vor dem Speichern entfernt",
+        wr.remove(PER_STRIPE + 3));
+    wr.save(file.getAbsolutePath());
+    Check.eq("save() nach remove() hat eine Zeile weniger",
+        linesBeforeRemove - 1, dataLineCount(file));
+    LedAnchorStore afterRemove = store();
+    afterRemove.load(file.getAbsolutePath());
+    Check.that("der entfernte Anker bleibt nach dem Laden weg",
+        !afterRemove.has(PER_STRIPE + 3));
 
     // ---- Fehlende Datei ----
     LedAnchorStore missing = store();
@@ -334,6 +370,23 @@ public class LedAnchorStoreTest {
     int firstLoad = twice.size();
     twice.load(file.getAbsolutePath());
     Check.eq("zweites load() ersetzt statt anzuhaengen", firstLoad, twice.size());
+
+    // Schaerfer: dieselben Schluessel vor und nach load() koennen eine
+    // fehlende anchors.clear() nicht auffangen, weil put() sie einfach
+    // ueberschreibt. Deshalb hier mit Ankern auf Indizes vorbelegen, die in
+    // der Datei gar nicht vorkommen - eine fehlende clear() wuerde die Summe
+    // statt der Datei-Anzahl ergeben, und die alten Indizes blieben da.
+    LedAnchorStore replaced = store();
+    replaced.set(6, 1f, 1f, NO_CROSSINGS);
+    replaced.set(12, 1f, 1f, NO_CROSSINGS);
+    Check.eq("zwei fremde Anker vor dem Laden", 2, replaced.size());
+    replaced.load(file.getAbsolutePath());
+    Check.eq("nach load() nur noch die Anker aus der Datei",
+        dataLineCount(file), replaced.size());
+    Check.that("die fremden Anker sind weg",
+        !replaced.has(6) && !replaced.has(12));
+    Check.that("der verbliebene Datei-Anker ist da", replaced.has(5));
+    Check.that("und auch der zweite", replaced.has(2 * PER_STRIPE));
 
     System.exit(Check.report("LedAnchorStoreTest"));
   }
