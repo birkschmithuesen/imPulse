@@ -23,6 +23,23 @@ class Check {
     }
   }
 
+  // Fliesskommavergleich mit Toleranz. Positionen sind Meter, verglichen wird
+  // deshalb nie auf Gleichheit - schon die Interpolation rundet, und die
+  // Positionsdatei haelt nur drei Dezimalstellen.
+  //
+  // NaN gilt ausdruecklich als Fehler: eine Division durch einen
+  // Index-Abstand von 0 wuerde sonst still durchgehen.
+  static void near(String what, double expected, double actual, double tol) {
+    checks++;
+    if (Double.isNaN(actual) || Math.abs(expected - actual) > tol) {
+      failures++;
+      if (failures <= 20) {
+        System.out.println("  FEHLER " + what + ": erwartet " + expected
+            + " +-" + tol + ", war " + actual);
+      }
+    }
+  }
+
   static void that(String what, boolean condition) {
     checks++;
     if (!condition) {

@@ -16,6 +16,10 @@ SOURCES="LedColor.java ArtNetOutput.java"
 [ -f NodeCrossingStore.java ] && SOURCES="$SOURCES NodeCrossingStore.java"
 [ -f LedStripeNetworks.java ] && SOURCES="$SOURCES LedStripeNetworks.java"
 [ -f TestPatterns.java ] && SOURCES="$SOURCES TestPatterns.java"
+[ -f LedAnchorStore.java ] && SOURCES="$SOURCES LedAnchorStore.java"
+[ -f LedPositionMap.java ] && SOURCES="$SOURCES LedPositionMap.java"
+[ -f LedPositionCalibration.java ] && SOURCES="$SOURCES LedPositionCalibration.java"
+[ -f ImpulseOscThrottle.java ] && SOURCES="$SOURCES ImpulseOscThrottle.java"
 
 javac -nowarn -cp "$CORE" -d build $SOURCES test/*.java
 
