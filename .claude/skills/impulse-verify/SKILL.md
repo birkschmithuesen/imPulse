@@ -68,14 +68,30 @@ Wissenswertes:
   genau das, was der `processing-java`-Wrapper tut. Die Klassenpfad-Rezeptur
   stammt aus Processings eigenem Werkzeug „Install processing-java"
   (`processing/app/tools/InstallCommander.class`).
-- Der Sketch wird nur **gelesen**. Alles Erzeugte landet unter `TMPDIR` und
-  wird danach gelöscht; der Arbeitsbaum bleibt unberührt und eine parallel
+- Der Sketch wird nur **gelesen**. Übersetzt wird eine Kopie unter `TMPDIR`,
+  die danach gelöscht wird; der Arbeitsbaum bleibt unberührt und eine parallel
   laufende Processing-IDE wird nicht gestört.
 - Der Sketch wird **nicht gestartet**. Es geht nichts ans Netz, die LEDs
   bleiben unangetastet.
-- Die Bibliotheken `oscP5` und `Syphon` löst Processing aus dem Sketchbook
-  (`~/Documents/Processing/libraries`), nicht aus `libraries/` im Repo. Schlägt
-  die Übersetzung mit einer fehlenden Bibliothek fehl, ist das der Grund.
+- Die Bibliotheken kommen aus `libraries/*/library/*.jar` **im Repo**, nicht
+  aus dem Sketchbook: das Skript legt sie in einen `code/`-Unterordner der
+  Kopie, und einen `code/`-Ordner nimmt Processing immer in den Klassenpfad.
+  Nötig war das, weil `~/Documents/Processing/libraries` auf diesem Rechner
+  unter der macOS-Datenschutzsperre für den Documents-Ordner nicht lesbar ist —
+  jeder Aufruf endete mit „No library found for netP5 / oscP5 /
+  codeanticode.syphon", auch mit abgeschalteter Sandbox. `oscP5.jar` bringt
+  `netP5` mit; Syphons `.jnilib` wird nur zur Laufzeit gebraucht, zum
+  Übersetzen genügen die Jars.
+- **Zwei Pfade sind über Umgebungsvariablen überschreibbar**, damit beide
+  Prüfungen auch ohne Installation im Standardpfad laufen (etwa auf einem
+  Linux-Server ohne root):
+  - `IMPULSE_CORE_JAR` → `core.jar` für `test/run.sh`. Die einzelne Datei
+    genügt, ein vollständiges Processing ist dafür nicht nötig:
+    `curl -o ~/lib/core.jar https://repo1.maven.org/maven2/org/processing/core/3.3.7/core-3.3.7.jar`
+  - `IMPULSE_PROCESSING_JAVA` → Wurzel der Processing-Installation für
+    `test/build.sh`. Der Klassenpfad deckt das macOS-Bundle-Layout und das
+    Linux/Windows-Layout (`lib/`) ab; der Linux-Weg ist allerdings **nicht
+    erprobt**.
 
 ## Was niemals gestartet wird
 
