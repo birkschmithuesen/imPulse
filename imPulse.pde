@@ -61,7 +61,15 @@ float ledPitchM = stripeLengthM / numLedsPerStripe;   // 0.0166667 m
 
 // Draufsicht-Flaeche im Positionsmodus. 525:300 entspricht 14:8 genau, es
 // gibt also keine Verzerrung; ein Pixel sind 2,67 cm.
-int paneX = 0, paneY = 0, paneW = 525, paneH = 300;
+// Der Rand von 10px ist Absicht: sitzt die Flaeche in der Fensterecke, landet
+// schon ein Klick, der bloss das Fenster in den Vordergrund holen soll, in ihr
+// drin - und mousePressed() -> positionClick() -> setCurrent() ueberschreibt
+// den Anker des aktuellen Eintrags ohne Rueckfrage. Auf der Platte geht dabei
+// nichts verloren (erst S schreibt), aber es ist eine still falsche Zahl.
+// Nebeneffekt: der linke Lautsprecher-Marker wird nicht mehr am Fensterrand
+// abgeschnitten. Zeichnen (drawPositionPane) und Treffertest (paneToWorld)
+// rechnen beide ueber paneX/paneY, es gibt also keine zweite Stelle.
+int paneX = 10, paneY = 10, paneW = 525, paneH = 300;
 
 LedAnchorStore ledAnchorStore;
 LedPositionMap ledPositionMap;
