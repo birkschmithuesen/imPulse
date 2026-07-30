@@ -139,12 +139,18 @@ ADVANCED_GROUP_KEY = "zzz_advanced"
 # damit niemand aus Versehen einen Wert waehlt, der bei 40Hz Framerate /
 # Ambient-Charakter keinen sinnvollen Effekt mehr hat.
 UI_RANGE_OVERRIDES: Dict[str, Tuple[float, float]] = {
-    # ueber 400 ist bei 40Hz Framerate kein wandernder Puls mehr sichtbar,
-    # sondern ein Blitz (Stripe mit 600 LEDs laeuft in <0.4s durch)
-    "/net/impulse/speed": (1, 400),
+    # 2026-07-30, Birk (Nachjustierung nach Live-Test): 400 war noch zu
+    # schnell im Alltag -- 100 deckt den tatsaechlich genutzten Bereich ab.
+    "/net/impulse/speed": (1, 100),
     # ab ~6 kollabiert jede Energie <1 durch wiederholtes Quadrieren
     # (energy *= energy, exponent-mal) praktisch auf 0
     "/net/impulse/energyExponent": (1, 5),
+    # 2026-07-30, Birk: volle Java-Range (0.0001..0.5) macht den Regler am
+    # unteren, tatsaechlich genutzten Ende zu grobstufig -- 0.05 deckt den
+    # Live-Tuning-Bereich ab (per Speed-Kopplung ohnehin an /net/impulse/speed
+    # gebunden, siehe SPEED_COUPLED oben).
+    "/net/impulse/energyDecay": (0.0001, 0.05),
+    "/net/impulse/energyDecayfactor": (0.0001, 0.1),
     # bei 30 (alle Stripes gleichzeitig) wird "Ambient" zum Flaechenblitz,
     # kein Ambient-Charakter mehr
     "/net/randomSpawn/count": (1, 8),

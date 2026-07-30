@@ -224,14 +224,29 @@ class GroupingTest(unittest.TestCase):
         self.assertEqual(keys[-1], ADVANCED_GROUP_KEY)
 
     def test_ui_range_override_narrows_display_range(self):
-        # /net/impulse/speed: Java-Range 1..1500, UI-Override 1..400 (siehe
+        # /net/impulse/speed: Java-Range 1..1500, UI-Override 1..100 (siehe
         # docs/webui-parameter-review-2026-07-30.md Abschnitt 1, Birk-Freigabe
-        # 2026-07-30) -- der Regler zeigt/erlaubt nur die engere Range.
+        # 2026-07-30, nachjustiert auf 100 nach Live-Test) -- der Regler
+        # zeigt/erlaubt nur die engere Range.
         text = "int\t/net/impulse/speed\td\t160\t1\t1500"
         param = parse_settings(text)[0]
         d = param.as_dict()
         self.assertEqual(d["min"], 1)
-        self.assertEqual(d["max"], 400)
+        self.assertEqual(d["max"], 100)
+
+    def test_energy_decay_ui_ranges_are_narrowed(self):
+        # 2026-07-30, Birk: energyDecay/energyDecayfactor auf 0.05/0.1
+        # verengt (volle Java-Range 0.0001..0.5/1.0 war am unteren, tatsaechlich
+        # genutzten Ende zu grobstufig fuer den Slider).
+        text = "\n".join([
+            "float\t/net/impulse/energyDecay\td\t0.01\t0.0001\t0.5",
+            "float\t/net/impulse/energyDecayfactor\td\t0.02\t0.0001\t1.0",
+        ])
+        params = {p.address: p for p in parse_settings(text)}
+        decay = params["/net/impulse/energyDecay"].as_dict()
+        factor = params["/net/impulse/energyDecayfactor"].as_dict()
+        self.assertEqual(decay["max"], 0.05)
+        self.assertEqual(factor["max"], 0.1)
 
     def test_ui_range_override_never_exceeds_actual_range(self):
         # Ein aelterer/kleinerer Dump koennte eine engere Java-Range als der
