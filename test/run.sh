@@ -28,7 +28,7 @@ javac -nowarn -cp "$CORE" -d build $SOURCES test/*.java
 # stillschweigend als "alles bestanden" durchgehen, ohne ueberhaupt etwas
 # geprueft zu haben.
 if [ "$#" -eq 0 ]; then
-  set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest NodeSelectionTest LedAnchorStoreTest LedPositionMapTest
+  set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest NodeSelectionTest LedAnchorStoreTest LedPositionMapTest LedPositionCalibrationTest
 fi
 
 status=0
