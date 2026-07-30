@@ -146,10 +146,10 @@ UI_RANGE_OVERRIDES: Dict[str, Tuple[float, float]] = {
     # (energy *= energy, exponent-mal) praktisch auf 0
     "/net/impulse/energyExponent": (1, 5),
     # 2026-07-30, Birk: volle Java-Range (0.0001..0.5) macht den Regler am
-    # unteren, tatsaechlich genutzten Ende zu grobstufig -- 0.05 deckt den
+    # unteren, tatsaechlich genutzten Ende zu grobstufig -- 0.01 deckt den
     # Live-Tuning-Bereich ab (per Speed-Kopplung ohnehin an /net/impulse/speed
-    # gebunden, siehe SPEED_COUPLED oben).
-    "/net/impulse/energyDecay": (0.0001, 0.05),
+    # gebunden, siehe SPEED_COUPLED oben). Nachjustiert von 0.05 auf 0.01.
+    "/net/impulse/energyDecay": (0.0001, 0.01),
     "/net/impulse/energyDecayfactor": (0.0001, 0.1),
     # bei 30 (alle Stripes gleichzeitig) wird "Ambient" zum Flaechenblitz,
     # kein Ambient-Charakter mehr

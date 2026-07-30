@@ -235,9 +235,10 @@ class GroupingTest(unittest.TestCase):
         self.assertEqual(d["max"], 100)
 
     def test_energy_decay_ui_ranges_are_narrowed(self):
-        # 2026-07-30, Birk: energyDecay/energyDecayfactor auf 0.05/0.1
+        # 2026-07-30, Birk: energyDecay/energyDecayfactor auf 0.01/0.1
         # verengt (volle Java-Range 0.0001..0.5/1.0 war am unteren, tatsaechlich
-        # genutzten Ende zu grobstufig fuer den Slider).
+        # genutzten Ende zu grobstufig fuer den Slider; energyDecay nachtraeglich
+        # von 0.05 auf 0.01 weiter verengt).
         text = "\n".join([
             "float\t/net/impulse/energyDecay\td\t0.01\t0.0001\t0.5",
             "float\t/net/impulse/energyDecayfactor\td\t0.02\t0.0001\t1.0",
@@ -245,7 +246,7 @@ class GroupingTest(unittest.TestCase):
         params = {p.address: p for p in parse_settings(text)}
         decay = params["/net/impulse/energyDecay"].as_dict()
         factor = params["/net/impulse/energyDecayfactor"].as_dict()
-        self.assertEqual(decay["max"], 0.05)
+        self.assertEqual(decay["max"], 0.01)
         self.assertEqual(factor["max"], 0.1)
 
     def test_ui_range_override_never_exceeds_actual_range(self):
