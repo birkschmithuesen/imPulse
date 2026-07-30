@@ -38,7 +38,19 @@ javac -nowarn -cp "$CORE" -d build $SOURCES test/*.java
 # stillschweigend als "alles bestanden" durchgehen, ohne ueberhaupt etwas
 # geprueft zu haben.
 if [ "$#" -eq 0 ]; then
-  set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest NodeSelectionTest LedAnchorStoreTest LedPositionMapTest LedPositionCalibrationTest
+  # Die vier Kernsuiten sind immer da. Alle weiteren werden nur aufgenommen,
+  # wenn ihre Quelldatei vorhanden ist, und ein Fehlen wird gemeldet statt
+  # stillschweigend uebergangen: NodeSelectionTest etwa liegt zeitweise nur
+  # als unversionierte Arbeitskopie vor und fehlt auf einem frischen Klon.
+  set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest
+  for optional in NodeSelectionTest LedAnchorStoreTest LedPositionMapTest \
+                  LedPositionCalibrationTest ImpulseOscThrottleTest; do
+    if [ -f "test/$optional.java" ]; then
+      set -- "$@" "$optional"
+    else
+      echo "Hinweis: test/$optional.java fehlt, Suite uebersprungen" >&2
+    fi
+  done
 fi
 
 status=0
