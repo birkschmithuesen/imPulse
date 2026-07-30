@@ -40,7 +40,7 @@ interface PresetTarget {
 }
 
 // Was beim Anwenden eines Presets auffiel. Bewusst gesammelt statt je Zeile
-// gemeldet: bei 49 Adressen waere Zeile-fuer-Zeile-Ausgabe unlesbar.
+// gemeldet: bei 48 Adressen waere Zeile-fuer-Zeile-Ausgabe unlesbar.
 class PresetApplyReport {
 
   final List<String> unknown = new ArrayList<String>();

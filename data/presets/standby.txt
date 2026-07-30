@@ -7,12 +7,11 @@ float	/net/impulse/color/g	space for descripiton	1.0	0.0	1.0
 float	/net/impulse/color/gamma	space for descripiton	0.0	0.1	5.0
 float	/net/impulse/color/r	space for descripiton	1.0	0.0	1.0
 int	/net/impulse/color/useRemoteCol	space for descripiton	1	0	1
-float	/net/impulse/energyDecay	space for descripiton	0.001	1.0E-4	0.5
-float	/net/impulse/energyDecayfactor	space for descripiton	0.02	1.0E-4	1.0
 int	/net/impulse/energyExponent	space for descripiton	2	1	10
 float	/net/impulse/fadeOut/b	space for descripiton	0.56	0.0	1.0
 float	/net/impulse/fadeOut/g	space for descripiton	0.96	0.0	1.0
 float	/net/impulse/fadeOut/r	space for descripiton	0.97	0.0	1.0
+float	/net/impulse/lifetime	space for descripiton	0.02	1.0E-4	1.0
 float	/net/impulse/nodeDeadTime	space for descripiton	5.0	0.0	10.0
 int	/net/impulse/speed	space for descripiton	16	1	1500
 int	/net/randomSpawn/count	space for descripiton	1	1	30

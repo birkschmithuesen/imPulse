@@ -115,12 +115,11 @@ fuer genau diese Adressen einspringt (byte-identisch fuer alle uebrigen, siehe
 
 ## Speed-Kopplung
 
-Aendert man `/net/impulse/speed`, skaliert das UI vier weitere Parameter mit:
+Aendert man `/net/impulse/speed`, skaliert das UI drei weitere Parameter mit:
 
 | Parameter                        | Referenz bei Speed 160 | Skalierung    |
 |----------------------------------|------------------------|---------------|
-| `/net/impulse/energyDecay`       | 0.01                   | proportional  |
-| `/net/impulse/energyDecayfactor` | 0.2                    | proportional  |
+| `/net/impulse/lifetime`          | 0.2                    | proportional  |
 | `/net/impulse/nodeDeadTime`      | 1.0                    | invers        |
 | `/net/randomSpawn/interval`      | 3.0                    | invers        |
 
@@ -137,8 +136,11 @@ Browser).
 
 > Hinweis: Der Referenzpunkt oben stammt aus dem Brief bzw. `tune_speed.py`.
 > Die Konstruktor-Defaults in `LedNetworkTransportEffect.java` stehen aktuell
-> auf einem anderen Arbeitspunkt (Speed 16, `energyDecay` 0.001,
-> `energyDecayfactor` 0.02, `nodeDeadTime` 5.0, `randomSpawn/interval` 30.0).
+> auf einem anderen Arbeitspunkt (Speed 16, `lifetime` 0.02,
+> `nodeDeadTime` 5.0, `randomSpawn/interval` 30.0).
+> `/net/impulse/lifetime` hiess bis 2026-07-31 `/net/impulse/energyDecayfactor`;
+> das damalige zweite `/net/impulse/energyDecay` war im Sketch wirkungslos und
+> ist ersatzlos entfallen.
 > Wer stattdessen diesen Arbeitspunkt koppeln will, aendert nur den Block
 > `SPEED_REFERENCE` / `SPEED_COUPLED` oben in `server.py`.
 

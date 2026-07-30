@@ -49,8 +49,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   //settings
   RemoteControlledFloatParameter nodeDeadTime; // Time between two activations of a node
-  RemoteControlledFloatParameter impulseDecay; // loss of energy/second
-  RemoteControlledFloatParameter impulseDecayFactor; // impulseEnergy -= factor*time 
+  // Energiezerfall pro Sekunde, also umgekehrt proportional zur Lebensdauer eines
+  // Impulses: impulseEnergy -= lifetime*time. Trotz des Namens ist der Wert der
+  // Zerfallsfaktor selbst, keine Sekundenangabe - klein = langlebig.
+  RemoteControlledFloatParameter impulseLifetime;
   RemoteControlledIntParameter impulseEnergyExponent; // Exponent applied to input volume provided by /tube/trigger
   RemoteControlledIntParameter impulseSpeed; // speed (leds/second)
 
@@ -94,12 +96,11 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // urspruengliche Auslieferungswert, alle davon abhaengigen Zeit-Parameter
     // proportional mitskaliert (siehe scripts/tune_speed.py in der Skill
     // devops/klangnetz-remote-control fuer die Herleitung). Bei Aenderung von
-    // impulseSpeed IMMER auch diese vier mitziehen, sonst reissen die Impulse
+    // impulseSpeed IMMER auch diese drei mitziehen, sonst reissen die Impulse
     // (zu kurze Lebensdauer) oder das Netz verstopft (zu haeufige Kreuzungs-
     // Feuerung / Ambient-Spawns).
     nodeDeadTime= new RemoteControlledFloatParameter("/net/impulse/nodeDeadTime", 5f, 0.0f, 10);
-    impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.001f, 0.0001f, 0.5f);
-    impulseDecayFactor= new RemoteControlledFloatParameter("/net/impulse/energyDecayfactor", 0.02f, 0.0001f, 1f);
+    impulseLifetime= new RemoteControlledFloatParameter("/net/impulse/lifetime", 0.02f, 0.0001f, 1f);
     impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 16, 1, 1500);
     impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
 
@@ -253,7 +254,6 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     float timeStep=(float) (currentTime-lastCyclePos);
     lastCyclePos=currentTime;
     float speed=impulseSpeed.getValue();
-    float energyLoss=impulseDecay.getValue();
 
     spawnRandomImpulses(currentTime);
 
@@ -265,7 +265,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // let each activation travel a bit in it's direction
       curActivation.ledIdxPos+=curActivation.speed*timeStep;
       // loose energy
-      curActivation.energy -= timeStep*impulseDecayFactor.getValue();
+      curActivation.energy -= timeStep*impulseLifetime.getValue();
       // if the activation hasn't fallen off the end of the stripe...
       int activationLedIdx=curActivation.getLedIndex(); // global led position
       int direction;// needed to reuse loop for positive and negative speeds
@@ -279,14 +279,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           if ( !activationIsValid(activationLedIdx, curActivation)) {
             break;
           }
-          if (activationEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime, energyLoss)) {
+          if (activationEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime)) {
             break;
           }
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
           newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy, curActivation.id));
         }
       }
-      if (activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss))) {
+      if (activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime))) {
         newActivations.add(curActivation);
       }
     }
@@ -327,7 +327,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       curActivation.energy>0;
   }
 
-  private boolean activationEncounteredNode(Integer activationLedIdx, TravellingActivation curActivation, LinkedList<TravellingActivation> newActivations, double currentTime, float energyLoss) {
+  private boolean activationEncounteredNode(Integer activationLedIdx, TravellingActivation curActivation, LinkedList<TravellingActivation> newActivations, double currentTime) {
     int nLeds=ledNetInfo.length;
     // should the activation survive this round?
     //if activation hits a stripe crossing, create a new activation for each of the branches
@@ -339,7 +339,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         //send osc Notification
         sendOscMessage(hitNode, curActivation);
         float nActivations=hitNode.ledIndices.size();
-        //float childEnergy=curActivation.energy/nActivations/2.0f-energyLoss;
+        //energieerhaltende Variante, bewusst nicht aktiv (siehe CLAUDE.md):
+        //float childEnergy=curActivation.energy/nActivations/2.0f;
         //curActivation.setEnergy(childEnergy);
         float childEnergy=curActivation.energy;
         for (Integer nodeLedIdx : hitNode.ledIndices) {

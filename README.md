@@ -53,7 +53,7 @@ defensive fallback.
 
 ## parameters
 * /net/impulse/speed
-* /net/impulse/energyDecay
+* /net/impulse/lifetime
 * /net/impulse/nodeDeadTime
 * /nodes/times/fire
 * /nodes/times/recover

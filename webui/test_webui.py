@@ -28,8 +28,7 @@ from server import (ADVANCED_ADDRESSES, ADVANCED_GROUP_KEY, Parameter, Parameter
 # wissenschaftliche Notation, Farbtripel, Adressen ohne fuehrenden Slash.
 SAMPLE = "\n".join([
     "int\t/net/impulse/speed\tspace for descripiton\t160\t1\t1500",
-    "float\t/net/impulse/energyDecay\tspace for descripiton\t0.01\t1.0E-4\t0.5",
-    "float\t/net/impulse/energyDecayfactor\tspace for descripiton\t0.2\t1.0E-4\t1.0",
+    "float\t/net/impulse/lifetime\tspace for descripiton\t0.2\t1.0E-4\t1.0",
     "float\t/net/impulse/nodeDeadTime\tspace for descripiton\t1.0\t0.0\t10.0",
     "float\t/net/randomSpawn/interval\tspace for descripiton\t3.0\t0.05\t40.0",
     "int\t/net/randomSpawn/enabled\tspace for descripiton\t1\t0\t1",
@@ -49,14 +48,14 @@ def by_address(parameters):
 class ParseTest(unittest.TestCase):
     def test_reads_all_lines(self):
         params = parse_settings(SAMPLE)
-        self.assertEqual(len(params), 12)
+        self.assertEqual(len(params), 11)
 
     def test_fields(self):
-        param = by_address(parse_settings(SAMPLE))["/net/impulse/energyDecay"]
+        param = by_address(parse_settings(SAMPLE))["/net/impulse/lifetime"]
         self.assertEqual(param.type, "float")
-        self.assertAlmostEqual(param.value, 0.01)
+        self.assertAlmostEqual(param.value, 0.2)
         self.assertAlmostEqual(param.minimum, 1.0e-4)  # wissenschaftliche Notation
-        self.assertAlmostEqual(param.maximum, 0.5)
+        self.assertAlmostEqual(param.maximum, 1.0)
 
     def test_int_type(self):
         param = by_address(parse_settings(SAMPLE))["/net/impulse/speed"]
@@ -65,14 +64,14 @@ class ParseTest(unittest.TestCase):
 
     def test_crlf_and_blank_lines(self):
         text = SAMPLE.replace("\n", "\r\n") + "\r\n   \r\n"
-        self.assertEqual(len(parse_settings(text)), 12)
+        self.assertEqual(len(parse_settings(text)), 11)
 
     def test_broken_lines_are_skipped_not_fatal(self):
         text = ("kaputt\n"
                 "float\t/a/b\td\tnichtszahl\t0\t1\n"
                 "quatsch\t/c/d\td\t1\t0\t1\n"
                 + SAMPLE)
-        self.assertEqual(len(parse_settings(text)), 12)
+        self.assertEqual(len(parse_settings(text)), 11)
 
     def test_duplicate_address_wins_first(self):
         text = SAMPLE + "float\tMaster/trace\tzweitfassung\t0.5\t0.0\t1.0\n"
@@ -237,20 +236,13 @@ class GroupingTest(unittest.TestCase):
         self.assertEqual(d["min"], 1)
         self.assertEqual(d["max"], 100)
 
-    def test_energy_decay_ui_ranges_are_narrowed(self):
-        # 2026-07-30, Birk: energyDecay/energyDecayfactor auf 0.01/0.1
-        # verengt (volle Java-Range 0.0001..0.5/1.0 war am unteren, tatsaechlich
-        # genutzten Ende zu grobstufig fuer den Slider; energyDecay nachtraeglich
-        # von 0.05 auf 0.01 weiter verengt).
-        text = "\n".join([
-            "float\t/net/impulse/energyDecay\td\t0.01\t0.0001\t0.5",
-            "float\t/net/impulse/energyDecayfactor\td\t0.02\t0.0001\t1.0",
-        ])
-        params = {p.address: p for p in parse_settings(text)}
-        decay = params["/net/impulse/energyDecay"].as_dict()
-        factor = params["/net/impulse/energyDecayfactor"].as_dict()
-        self.assertEqual(decay["max"], 0.01)
-        self.assertEqual(factor["max"], 0.1)
+    def test_lifetime_ui_range_is_narrowed(self):
+        # 2026-07-30, Birk: Energiezerfall auf 0.1 verengt (volle Java-Range
+        # 0.0001..1.0 war am unteren, tatsaechlich genutzten Ende zu grobstufig
+        # fuer den Slider). Adresse seit 2026-07-31 /net/impulse/lifetime.
+        text = "float\t/net/impulse/lifetime\td\t0.02\t0.0001\t1.0"
+        param = parse_settings(text)[0]
+        self.assertEqual(param.as_dict()["max"], 0.1)
 
     def test_ui_range_override_never_exceeds_actual_range(self):
         # Ein aelterer/kleinerer Dump koennte eine engere Java-Range als der
@@ -288,33 +280,29 @@ class SpeedCouplingTest(unittest.TestCase):
     def test_reference_speed_reproduces_reference_values(self):
         values, skipped = self.applied(160)
         self.assertEqual(skipped, [])
-        self.assertAlmostEqual(values["/net/impulse/energyDecay"], 0.01)
-        self.assertAlmostEqual(values["/net/impulse/energyDecayfactor"], 0.2)
+        self.assertAlmostEqual(values["/net/impulse/lifetime"], 0.2)
         self.assertAlmostEqual(values["/net/impulse/nodeDeadTime"], 1.0)
         self.assertAlmostEqual(values["/net/randomSpawn/interval"], 3.0)
 
     def test_double_speed(self):
         values, _ = self.applied(320)
-        self.assertAlmostEqual(values["/net/impulse/energyDecay"], 0.02)
-        self.assertAlmostEqual(values["/net/impulse/energyDecayfactor"], 0.4)
+        self.assertAlmostEqual(values["/net/impulse/lifetime"], 0.4)
         self.assertAlmostEqual(values["/net/impulse/nodeDeadTime"], 0.5)
         self.assertAlmostEqual(values["/net/randomSpawn/interval"], 1.5)
 
     def test_half_speed(self):
         values, _ = self.applied(80)
-        self.assertAlmostEqual(values["/net/impulse/energyDecay"], 0.005)
-        self.assertAlmostEqual(values["/net/impulse/energyDecayfactor"], 0.1)
+        self.assertAlmostEqual(values["/net/impulse/lifetime"], 0.1)
         self.assertAlmostEqual(values["/net/impulse/nodeDeadTime"], 2.0)
         self.assertAlmostEqual(values["/net/randomSpawn/interval"], 6.0)
 
     def test_results_are_clamped_to_the_files_ranges(self):
-        # Speed 1 = Faktor 1/160: energyDecay liefe unter das Minimum,
-        # nodeDeadTime und interval weit ueber ihr Maximum.
+        # Speed 1 = Faktor 1/160: nodeDeadTime und interval laufen weit ueber
+        # ihr Maximum.
         values, _ = self.applied(1)
-        self.assertAlmostEqual(values["/net/impulse/energyDecay"], 1.0e-4)
-        # energyDecayfactor: 0.2 * (1/160) = 0.00125, liegt noch innerhalb
-        # ihres eigenen Bereichs [1e-4, 1.0] -- keine Klemmung noetig.
-        self.assertAlmostEqual(values["/net/impulse/energyDecayfactor"], 0.00125)
+        # lifetime: 0.2 * (1/160) = 0.00125, liegt noch innerhalb ihres
+        # eigenen Bereichs [1e-4, 1.0] -- keine Klemmung noetig.
+        self.assertAlmostEqual(values["/net/impulse/lifetime"], 0.00125)
         self.assertAlmostEqual(values["/net/impulse/nodeDeadTime"], 10.0)
         self.assertAlmostEqual(values["/net/randomSpawn/interval"], 40.0)
 
@@ -340,9 +328,10 @@ class SpeedCouplingTest(unittest.TestCase):
 
 class OscEncodingTest(unittest.TestCase):
     def test_float_message_layout(self):
-        packet = build_osc_message("/net/impulse/energyDecay", 0.25)
+        # Adresslaenge 24 = Vielfaches von 4, also ein volles Null-Wort Padding
+        packet = build_osc_message("/net/impulse/color/gamma", 0.25)
         self.assertEqual(len(packet) % 4, 0)
-        self.assertTrue(packet.startswith(b"/net/impulse/energyDecay\x00\x00\x00\x00"))
+        self.assertTrue(packet.startswith(b"/net/impulse/color/gamma\x00\x00\x00\x00"))
         self.assertIn(b",f\x00\x00", packet)
         self.assertEqual(struct.unpack(">f", packet[-4:])[0], 0.25)
 

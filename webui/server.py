@@ -62,12 +62,16 @@ PRESET_SAVE_POLL_S = 0.05
 # impulseSpeed = 160 gehoeren die untenstehenden Werte zusammen. Aendert Birk
 # die Geschwindigkeit, wird
 #     faktor = neuer_speed / SPEED_REFERENCE
-# gebildet und die gekoppelten Parameter proportional (energyDecay*) bzw.
+# gebildet und die gekoppelten Parameter proportional (lifetime) bzw.
 # invers (nodeDeadTime, randomSpawn/interval) mitskaliert.
 #
+# /net/impulse/lifetime hiess bis 2026-07-31 /net/impulse/energyDecayfactor;
+# das damalige zweite /net/impulse/energyDecay war im Sketch wirkungslos und
+# ist ersatzlos entfallen.
+#
 # Achtung: die Konstruktor-Defaults in LedNetworkTransportEffect.java stehen
-# aktuell auf einem anderen Arbeitspunkt (speed 16, energyDecay 0.001,
-# energyDecayfactor 0.02, nodeDeadTime 5.0, randomSpawn/interval 30.0). Die
+# aktuell auf einem anderen Arbeitspunkt (speed 16, lifetime 0.02,
+# nodeDeadTime 5.0, randomSpawn/interval 30.0). Die
 # Kopplung bezieht sich bewusst auf den hier notierten Referenzpunkt -- wer
 # stattdessen den Sketch-Arbeitspunkt koppeln will, aendert nur diesen Block.
 # ---------------------------------------------------------------------------
@@ -77,8 +81,7 @@ SPEED_REFERENCE = 160.0
 
 # address -> (Referenzwert bei SPEED_REFERENCE, "proportional" | "invers")
 SPEED_COUPLED: Dict[str, Tuple[float, str]] = {
-    "/net/impulse/energyDecay": (0.01, "proportional"),
-    "/net/impulse/energyDecayfactor": (0.2, "proportional"),
+    "/net/impulse/lifetime": (0.2, "proportional"),
     "/net/impulse/nodeDeadTime": (1.0, "invers"),
     "/net/randomSpawn/interval": (3.0, "invers"),
 }
@@ -107,7 +110,7 @@ GROUP_ORDER = [
 # und in eine eigene Gruppe verschoben werden -- unabhaengig von der
 # generischen Praefix-Regel. Bisher nur fuer die Trennung Impuls/Impuls-Farbe
 # gebraucht: /net/impulse/color/* und /net/impulse/fadeOut/* landen sonst in
-# derselben Gruppe wie speed/nodeDeadTime/energyDecay (reine Adress-Praefix-
+# derselben Gruppe wie speed/nodeDeadTime/lifetime (reine Adress-Praefix-
 # Gruppierung wuerde alles unter /net/impulse zusammenwerfen). Reihenfolge
 # wichtig: laengster/spezifischster Praefix zuerst, damit z.B.
 # "/net/impulse/color/gamma" nicht faelschlich unter einem kuerzeren
@@ -156,12 +159,11 @@ UI_RANGE_OVERRIDES: Dict[str, Tuple[float, float]] = {
     # ab ~6 kollabiert jede Energie <1 durch wiederholtes Quadrieren
     # (energy *= energy, exponent-mal) praktisch auf 0
     "/net/impulse/energyExponent": (1, 5),
-    # 2026-07-30, Birk: volle Java-Range (0.0001..0.5) macht den Regler am
-    # unteren, tatsaechlich genutzten Ende zu grobstufig -- 0.01 deckt den
+    # 2026-07-30, Birk: volle Java-Range (0.0001..1.0) macht den Regler am
+    # unteren, tatsaechlich genutzten Ende zu grobstufig -- 0.1 deckt den
     # Live-Tuning-Bereich ab (per Speed-Kopplung ohnehin an /net/impulse/speed
-    # gebunden, siehe SPEED_COUPLED oben). Nachjustiert von 0.05 auf 0.01.
-    "/net/impulse/energyDecay": (0.0001, 0.01),
-    "/net/impulse/energyDecayfactor": (0.0001, 0.1),
+    # gebunden, siehe SPEED_COUPLED oben).
+    "/net/impulse/lifetime": (0.0001, 0.1),
     # bei 30 (alle Stripes gleichzeitig) wird "Ambient" zum Flaechenblitz,
     # kein Ambient-Charakter mehr
     "/net/randomSpawn/count": (1, 8),

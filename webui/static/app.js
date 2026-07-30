@@ -45,7 +45,7 @@ function decimalsFor(value) {
 }
 
 /* Nachkommastellen so waehlen, dass auch die Bereichsgrenzen noch lesbar sind:
- * /net/impulse/energyDecay reicht von 0.0001 bis 0.5, mit den zwei Stellen der
+ * /net/impulse/lifetime reicht von 0.0001 bis 1.0, mit den zwei Stellen der
  * Schrittweite waere die Untergrenze schlicht "0.000". */
 function decimalsForParam(param) {
   return Math.max(decimalsFor(param.step), decimalsFor(param.min),

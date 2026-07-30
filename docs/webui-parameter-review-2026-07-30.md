@@ -5,6 +5,14 @@ reine Repo-Arbeit. Ranges wurden aus der Code-Semantik hergeleitet (Overflow-/
 Divide-by-Zero-/physikalisch-sinnlose Grenzen), NICHT visuell getestet. Vor
 Deploy: Birk-Review + Live-Verifikation nach Show-Ende.
 
+> **Nachtrag 2026-07-31:** Die unten genannte Adresse
+> `/net/impulse/energyDecayfactor` heisst seit dem Aufräumen des
+> Energiezerfalls `/net/impulse/lifetime` (nur umbenannt, Formel und Range
+> unverändert). `/net/impulse/energyDecay` gibt es nicht mehr — der Parameter
+> war im Sketch wirkungslos (nur in auskommentiertem Code benutzt) und wurde
+> ersatzlos entfernt; die Tabellenzeile unten beschreibt den Stand vom
+> 2026-07-30.
+
 ## 1. Range-Vorschläge (bestehende ~50 Parameter)
 
 Legende: ✅ = Range passt so, kein Handlungsbedarf · ⚠️ = Vorschlag zur engeren
