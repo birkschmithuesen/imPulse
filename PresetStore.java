@@ -1,6 +1,11 @@
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 // Format- und Dateischicht der Presets. Bewusst ohne Processing-, oscP5- und
@@ -94,5 +99,127 @@ class PresetStore {
     boolean valid = isValidName(name);
     message = keep;
     return valid;
+  }
+
+  private File fileFor(String name) {
+    return new File(directory, name + ".txt");
+  }
+
+  // Liest alle Eintraege einer Preset-Datei. null heisst Fehler, der Grund
+  // steht in lastMessage(). Die Spalten Beschreibung, min und max werden
+  // mitgefuehrt, beim Anwenden aber ignoriert - dort gelten die Grenzen aus
+  // dem laufenden Code, damit aeltere Presets nach einer Bereichsaenderung
+  // korrekt bleiben.
+  List<String[]> read(String name) {
+    if (!isValidName(name)) {
+      return null;
+    }
+    File file = fileFor(name);
+    if (!file.isFile()) {
+      message = "Preset nicht gefunden: " + file.getPath();
+      return null;
+    }
+    List<String[]> entries = new ArrayList<String[]>();
+    BufferedReader reader = null;
+    try {
+      reader = new BufferedReader(new FileReader(file));
+      String line;
+      int lineNumber = 0;
+      while ((line = reader.readLine()) != null) {
+        lineNumber++;
+        if (line.trim().length() == 0) {
+          continue;
+        }
+        // -1 haelt leere Spalten in der Mitte, etwa eine leere Beschreibung
+        String[] columns = line.split("\t", -1);
+        if (columns.length < COLUMNS) {
+          message = "Zeile " + lineNumber + " in " + file.getName() + " hat "
+              + columns.length + " statt " + COLUMNS + " Spalten";
+          return null;
+        }
+        String[] entry = new String[COLUMNS];
+        for (int i = 0; i < COLUMNS; i++) {
+          entry[i] = columns[i];
+        }
+        entries.add(entry);
+      }
+    } catch (IOException e) {
+      message = "Preset nicht lesbar: " + e;
+      return null;
+    } finally {
+      if (reader != null) {
+        try {
+          reader.close();
+        } catch (IOException ignored) {
+          // beim Lesen unerheblich
+        }
+      }
+    }
+    message = entries.size() + " Zeilen aus " + file.getName() + " gelesen";
+    return entries;
+  }
+
+  // Schreibt die Eintraege atomar: erst in eine Temp-Datei, dann Rename.
+  // Kein Anhaengen - mehrfaches Speichern verdoppelt nichts. Sortiert wird
+  // nach Adresse, weil die Registry ein HashSet ist: ohne Sortierung sieht
+  // jedes Speichern im git diff wie eine komplette Umschreibung aus.
+  boolean write(String name, List<String[]> entries) {
+    if (!isValidName(name)) {
+      return false;
+    }
+    if (entries == null) {
+      message = "Keine Eintraege zum Speichern";
+      return false;
+    }
+    if (!directory.isDirectory() && !directory.mkdirs()) {
+      message = "Preset-Ordner nicht anlegbar: " + directory.getPath();
+      return false;
+    }
+    List<String[]> sorted = new ArrayList<String[]>(entries);
+    Collections.sort(sorted, new Comparator<String[]>() {
+      public int compare(String[] a, String[] b) {
+        return a[COL_ADDRESS].compareTo(b[COL_ADDRESS]);
+      }
+    });
+    File target = fileFor(name);
+    File temp = new File(directory, name + ".txt.tmp");
+    PrintWriter writer = null;
+    try {
+      writer = new PrintWriter(temp, "UTF-8");
+      for (int i = 0; i < sorted.size(); i++) {
+        String[] entry = sorted.get(i);
+        StringBuilder line = new StringBuilder();
+        for (int c = 0; c < COLUMNS; c++) {
+          if (c > 0) {
+            line.append('\t');
+          }
+          line.append(c < entry.length ? entry[c] : "");
+        }
+        // Bewusst '\n' statt println: das Format soll auf Windows und macOS
+        // byte-gleich sein, damit git diff nicht ganze Dateien zeigt.
+        writer.print(line.toString());
+        writer.print('\n');
+      }
+      writer.flush();
+    } catch (IOException e) {
+      message = "Preset nicht schreibbar: " + e;
+      return false;
+    } finally {
+      if (writer != null) {
+        writer.close();
+      }
+    }
+    // renameTo ist auf Windows nur auf ein nicht existierendes Ziel
+    // verlaesslich, deshalb vorher loeschen.
+    if (target.exists() && !target.delete()) {
+      message = "Altes Preset nicht ersetzbar: " + target.getPath();
+      return false;
+    }
+    if (!temp.renameTo(target)) {
+      message = "Umbenennen fehlgeschlagen: " + temp.getPath();
+      return false;
+    }
+    message = sorted.size() + " Zeilen nach " + target.getName() + " geschrieben";
+    return true;
   }
 }
