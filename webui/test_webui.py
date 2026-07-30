@@ -510,6 +510,49 @@ class PresetApplyTest(unittest.TestCase):
         self.assertEqual(result["unknown"], [])
 
 
+class PresetSaveWaitTest(unittest.TestCase):
+    """Warten auf die Datei, die imPulse nach /preset/save schreibt."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.path = os.path.join(self.dir, "neu.txt")
+
+    def test_returns_false_when_nothing_appears(self):
+        # der haeufigste Fehlerfall: Web-UI laeuft, imPulse nicht
+        self.assertFalse(server.wait_for_preset_file(self.path, None,
+                                                     timeout=0.1, step=0.01))
+
+    def test_returns_true_when_file_appears(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        self.assertTrue(server.wait_for_preset_file(self.path, None,
+                                                    timeout=0.1, step=0.01))
+
+    def test_unchanged_mtime_counts_as_not_written(self):
+        # sonst waere das Ueberschreiben nicht von "nichts passiert" zu
+        # unterscheiden
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        mtime = os.path.getmtime(self.path)
+        self.assertFalse(server.wait_for_preset_file(self.path, mtime,
+                                                     timeout=0.1, step=0.01))
+
+    def test_changed_mtime_counts_as_written(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        mtime = os.path.getmtime(self.path)
+        os.utime(self.path, (mtime + 5, mtime + 5))
+        self.assertTrue(server.wait_for_preset_file(self.path, mtime,
+                                                    timeout=0.1, step=0.01))
+
+    def test_default_directory_sits_next_to_settings(self):
+        settings = os.path.join("a", "data", "remoteSettings.txt")
+        self.assertEqual(
+            server.default_presets_path(settings),
+            os.path.join(os.path.abspath(os.path.join("a", "data")), "presets"))
+
+
 class RealSettingsFileTest(unittest.TestCase):
     """Gegenprobe an der echten data/remoteSettings.txt im Repo."""
 

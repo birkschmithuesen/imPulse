@@ -22,6 +22,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,6 +44,16 @@ DEFAULT_OSC_HOST = "127.0.0.1"
 DEFAULT_OSC_PORT = 8001
 DEFAULT_HTTP_HOST = "0.0.0.0"
 DEFAULT_HTTP_PORT = 8080
+
+# data/presets liegt neben data/remoteSettings.txt; ohne --presets wird der
+# Ordner daraus abgeleitet.
+DEFAULT_PRESETS_DIRNAME = "presets"
+
+# /preset/save ist asynchron -- imPulse schreibt die Datei erst im naechsten
+# draw()-Durchlauf (40 Hz, also ueblicherweise nach ~25 ms). So lange wartet
+# der Speichern-Endpoint darauf, dass die Datei erscheint.
+PRESET_SAVE_TIMEOUT_S = 1.0
+PRESET_SAVE_POLL_S = 0.05
 
 # ---------------------------------------------------------------------------
 # Speed-Kopplung
@@ -438,6 +449,35 @@ def list_presets(directory: str) -> Tuple[List[str], Optional[str]]:
     return names, None
 
 
+def default_presets_path(settings_path: str) -> str:
+    """Preset-Ordner neben der Parameterdatei: <dir von settings>/presets."""
+    return os.path.join(os.path.dirname(os.path.abspath(settings_path)),
+                        DEFAULT_PRESETS_DIRNAME)
+
+
+def wait_for_preset_file(path: str, previous_mtime: Optional[float],
+                         timeout: float = PRESET_SAVE_TIMEOUT_S,
+                         step: float = PRESET_SAVE_POLL_S) -> bool:
+    """Wartet darauf, dass imPulse die Preset-Datei geschrieben hat.
+
+    Verglichen wird die mtime, nicht nur die Existenz -- sonst waere das
+    Ueberschreiben eines vorhandenen Presets nicht von "nichts passiert" zu
+    unterscheiden. Laeuft der Sketch nicht, laeuft die Frist ab und der
+    Aufrufer kann das ehrlich melden, statt Erfolg zu behaupten.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            current = os.path.getmtime(path)
+            if previous_mtime is None or current != previous_mtime:
+                return True
+        except OSError:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(step)
+
+
 def group_key(address: str) -> str:
     """Gruppenschluessel aus dem Adress-Praefix.
 
@@ -713,7 +753,8 @@ def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Para
 # ---------------------------------------------------------------------------
 
 
-def create_app(settings_path: str, osc_host: str, osc_port: int):
+def create_app(settings_path: str, osc_host: str, osc_port: int,
+               presets_path: str):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
@@ -732,6 +773,14 @@ def create_app(settings_path: str, osc_host: str, osc_port: int):
         store.store(param.address, coerced)
         return Applied(param.address, coerced, payload)
 
+    def preset_file(name: str) -> str:
+        return os.path.join(presets_path, name + ".txt")
+
+    def preset_list_payload() -> Dict[str, Any]:
+        names, error = list_presets(presets_path)
+        return {"ok": True, "presets": names, "dir": presets_path,
+                "error": error}
+
     @app.route("/")
     def index() -> str:
         store.refresh()
@@ -749,6 +798,7 @@ def create_app(settings_path: str, osc_host: str, osc_port: int):
                         for a, (r, m) in SPEED_COUPLED.items()
                     ],
                 },
+                "presets": preset_list_payload(),
             }),
         )
 
@@ -803,6 +853,61 @@ def create_app(settings_path: str, osc_host: str, osc_port: int):
             "skipped": skipped,
         })
 
+    @app.route("/api/presets")
+    def api_presets():
+        return jsonify(preset_list_payload())
+
+    @app.route("/api/preset/load", methods=["POST"])
+    def api_preset_load():
+        body = request.get_json(silent=True) or {}
+        name = body.get("name")
+        problem = valid_preset_name(name)
+        if problem is not None:
+            return jsonify({"ok": False, "error": problem}), 400
+        path = preset_file(name)
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError as exc:
+            return jsonify({"ok": False,
+                            "error": "Preset nicht lesbar: %s" % exc}), 404
+        entries = parse_settings(text)
+        if not entries:
+            return jsonify({"ok": False,
+                            "error": "Preset %s enthaelt keine gueltige Zeile"
+                                     % name}), 400
+        # Erst senden, dann die Anzeige nachziehen: das Anwenden macht imPulse
+        # selbst, hier werden nur die Regler nachgefuehrt.
+        sender.send("/preset/load", name)
+        result = apply_preset_entries(store, entries)
+        result.update({"ok": True, "name": name})
+        return jsonify(result)
+
+    @app.route("/api/preset/save", methods=["POST"])
+    def api_preset_save():
+        body = request.get_json(silent=True) or {}
+        name = body.get("name")
+        problem = valid_preset_name(name)
+        if problem is not None:
+            return jsonify({"ok": False, "error": problem}), 400
+        path = preset_file(name)
+        try:
+            previous = os.path.getmtime(path)
+            existed = True
+        except OSError:
+            previous = None
+            existed = False
+        sender.send("/preset/save", name)
+        if not wait_for_preset_file(path, previous):
+            return jsonify({
+                "ok": False,
+                "error": "imPulse hat %s.txt nicht geschrieben -- laeuft der "
+                         "Sketch?" % name,
+            }), 504
+        payload = preset_list_payload()
+        payload.update({"name": name, "overwritten": existed})
+        return jsonify(payload)
+
     return app
 
 
@@ -812,6 +917,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--settings",
                         default=os.environ.get("IMPULSE_SETTINGS", DEFAULT_SETTINGS_PATH),
                         help="Pfad zu remoteSettings.txt (Vorgabe: %(default)s)")
+    parser.add_argument("--presets",
+                        default=os.environ.get("IMPULSE_PRESETS"),
+                        help="Ordner mit den Preset-Dateien "
+                             "(Vorgabe: presets/ neben --settings)")
     parser.add_argument("--osc-host",
                         default=os.environ.get("IMPULSE_OSC_HOST", DEFAULT_OSC_HOST),
                         help="Ziel-Host fuer OSC (Vorgabe: %(default)s)")
@@ -829,9 +938,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     settings_path = os.path.abspath(args.settings)
-    app = create_app(settings_path, args.osc_host, args.osc_port)
+    presets_path = (os.path.abspath(args.presets) if args.presets
+                    else default_presets_path(settings_path))
+    app = create_app(settings_path, args.osc_host, args.osc_port, presets_path)
 
     print("[webui] remoteSettings: %s" % settings_path)
+    print("[webui] Presets:        %s" % presets_path)
     print("[webui] OSC-Ziel:       %s:%d" % (args.osc_host, args.osc_port))
     print("[webui] HTTP:           http://%s:%d" % (args.host, args.port))
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
