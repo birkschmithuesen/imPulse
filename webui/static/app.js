@@ -350,6 +350,58 @@ function buildParam(param, value) {
   return handle.element;
 }
 
+/* Trigger: kein Regler, keine Zustandsanzeige (der Server haelt hier ohnehin
+ * keinen sinnvollen "aktuellen Wert"), ein Button pro moeglichem Zielwert
+ * waere bei 30+ Stripes zu viel -- stattdessen ein Zahlenfeld + "Ausloesen"-
+ * Knopf, der genau einmal sendet statt bei jeder Reglerbewegung. */
+function buildTrigger(param) {
+  const wrap = document.createElement('div');
+  wrap.className = 'param trigger';
+
+  const head = document.createElement('div');
+  head.className = 'param-head';
+  const name = document.createElement('span');
+  name.className = 'param-name';
+  name.title = param.address + (param.description &&
+    param.description !== 'space for descripiton' ? ' – ' + param.description : '');
+  const parts = splitAddress(param.address);
+  const prefix = document.createElement('span');
+  prefix.className = 'prefix';
+  prefix.textContent = parts.prefix;
+  name.appendChild(prefix);
+  name.appendChild(document.createTextNode(parts.leaf));
+  const range = document.createElement('span');
+  range.className = 'param-range';
+  range.textContent = `Trigger, int ${param.min} … ${param.max}`;
+  head.appendChild(name);
+  head.appendChild(range);
+  wrap.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'param-body';
+  const number = document.createElement('input');
+  number.type = 'number';
+  number.min = param.min;
+  number.max = param.max;
+  number.step = '1';
+  number.value = param.min;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Ausloesen';
+  button.addEventListener('click', () => {
+    let value = Math.round(Number(number.value));
+    if (!isFinite(value)) { value = param.min; }
+    value = Math.min(param.max, Math.max(param.min, value));
+    number.value = value;
+    postUpdates([{ address: param.address, value: value }]);
+  });
+  body.appendChild(number);
+  body.appendChild(button);
+  wrap.appendChild(body);
+
+  return wrap;
+}
+
 function syncColorCard(card) {
   const h = controls.get(card.components.hue.address).get();
   const s = controls.get(card.components.sat.address).get();
@@ -431,13 +483,19 @@ function render(data) {
   groupsEl.innerHTML = '';
 
   (data.groups || []).forEach((group) => {
-    const section = document.createElement('section');
-    const title = document.createElement('h2');
+    // Advanced-Gruppe (Setup-/Sicherheitsparameter) per Default eingeklappt,
+    // damit sie im Alltag nicht zwischen Farbe und Speed steht -- siehe
+    // docs/webui-parameter-review-2026-07-30.md Abschnitt 1.
+    const isAdvanced = group.title === 'Advanced';
+    const section = document.createElement(isAdvanced ? 'details' : 'section');
+    const title = document.createElement(isAdvanced ? 'summary' : 'h2');
     title.textContent = group.title;
     section.appendChild(title);
     group.controls.forEach((control) => {
       if (control.kind === 'color') {
         section.appendChild(buildColorCard(control, data.values));
+      } else if (control.kind === 'trigger') {
+        section.appendChild(buildTrigger(control));
       } else {
         section.appendChild(buildParam(control, data.values[control.address]));
       }

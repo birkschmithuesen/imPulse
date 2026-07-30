@@ -16,7 +16,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import server  # noqa: E402
-from server import (Parameter, ParameterStore, build_groups, build_osc_message,  # noqa: E402
+from server import (ADVANCED_ADDRESSES, ADVANCED_GROUP_KEY, Parameter, ParameterStore,  # noqa: E402
+                    TRIGGER_ADDRESSES, build_groups, build_osc_message,
                     coupled_values, group_key, parse_settings)
 
 
@@ -168,6 +169,41 @@ class GroupingTest(unittest.TestCase):
                 else:
                     seen.add(control["address"])
         self.assertEqual(seen, {p.address for p in params})
+
+    def test_trigger_addresses_get_trigger_widget_not_slider(self):
+        text = "\n".join([
+            "int\t/net/activateNode\tsactivateNode\t0\t0\t84",
+            "int\t/net/activateStripe\tactivateStripe\t0\t0\t29",
+        ])
+        groups = {g["key"]: g for g in build_groups(parse_settings(text))}
+        controls = groups["net"]["controls"]
+        self.assertEqual({c["address"] for c in controls}, TRIGGER_ADDRESSES)
+        for control in controls:
+            self.assertEqual(control["kind"], "trigger")
+
+    def test_advanced_addresses_land_in_their_own_group(self):
+        text = "\n".join([
+            "int\t/net/impulse/energyExponent\td\t2\t1\t10",
+            "int\t/net/impulse/oscMaxCount\td\t32\t0\t256",
+            "int\t/net/impulse/speed\td\t160\t1\t1500",
+        ])
+        groups = {g["key"]: g for g in build_groups(parse_settings(text))}
+        self.assertIn(ADVANCED_GROUP_KEY, groups)
+        advanced_addrs = {c["address"] for c in groups[ADVANCED_GROUP_KEY]["controls"]}
+        self.assertEqual(advanced_addrs, ADVANCED_ADDRESSES & {
+            "/net/impulse/energyExponent", "/net/impulse/oscMaxCount",
+        })
+        self.assertEqual(groups[ADVANCED_GROUP_KEY]["title"], "Advanced")
+        # speed bleibt in seiner regulaeren Gruppe, wandert nicht mit
+        self.assertNotIn("/net/impulse/speed", advanced_addrs)
+
+    def test_advanced_group_sorts_after_regular_groups(self):
+        text = "\n".join([
+            "int\t/net/impulse/energyExponent\td\t2\t1\t10",
+            "float\tMaster/trace\td\t0.0\t0.0\t1.0",
+        ])
+        keys = [g["key"] for g in build_groups(parse_settings(text))]
+        self.assertEqual(keys[-1], ADVANCED_GROUP_KEY)
 
 
 class SpeedCouplingTest(unittest.TestCase):

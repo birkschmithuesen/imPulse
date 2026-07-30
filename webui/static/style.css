@@ -97,6 +97,33 @@ section > h2 {
   border-bottom: 1px solid var(--line);
 }
 
+/* Advanced-Gruppe: <details>/<summary> statt <section>/<h2>, damit sie per
+   Default eingeklappt startet (siehe app.js render()). */
+details {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+details > summary {
+  margin: 0;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.85rem;
+  font-family: ui-monospace, "Consolas", monospace;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--panel-hi);
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  list-style: none;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: '▸ '; }
+details[open] > summary::before { content: '▾ '; }
+details[open] > summary { border-bottom: 1px solid var(--line); }
+
+.param.trigger .param-body button { flex: 0 0 auto; }
+
 .param {
   padding: 0.55rem 0.8rem;
   border-bottom: 1px solid #23272f;
