@@ -303,8 +303,12 @@ public class LedPositionCalibrationTest {
     Check.eq("bei der Kreuzung", 10, cx.ledsOfEntry(cx.entryIndex())[0]);
     Check.that("Kreuzung gesetzt", cx.setCurrent(0f, 0f));
     Check.that("beide LEDs gesetzt", stX.has(10) && stX.has(30));
+    // mapDirty vor dem BACKSPACE erst sauber machen, sonst ist die Pruefung
+    // unten trivial wahr (mapDirty startet ohnehin true).
+    cx.reapply();
     Check.that("BACKSPACE auf der Kreuzung", cx.clearCurrent());
     Check.that("beide LEDs geloescht", !stX.has(10) && !stX.has(30));
+    Check.that("clearCurrent markiert die Map als schmutzig", cx.mapNeedsApply());
 
     // ---- Feinjustierung und Schrittweite ----
     Check.near("Startschrittweite", 0.05, cc.step(), 1e-6);
@@ -330,14 +334,8 @@ public class LedPositionCalibrationTest {
     cn.next();
     cn.next();
     Check.that("dritter Eintrag ist offen", !cn.entryIsSet(cn.entryIndex()));
-    boolean nudgedOpen = cn.nudge(1, 0);
-    if (nudgedOpen) {
-      Check.that("Pfeiltaste auf einem offenen Eintrag setzt ihn",
-          cn.entryIsSet(cn.entryIndex()));
-    } else {
-      Check.that("ohne Vorschlag lehnt die Pfeiltaste ab und begruendet",
-          cn.lastMessage().length() > 0);
-    }
+    Check.that("Pfeiltaste auf einem offenen Eintrag setzt ihn",
+        cn.nudge(1, 0) && cn.entryIsSet(cn.entryIndex()));
 
     // ---- L: zweimal druecken, mit Fenster ----
     LedAnchorStore stL = store();
@@ -381,6 +379,7 @@ public class LedPositionCalibrationTest {
     LedPositionCalibration ch = build(cs2, stH);
     String rep2 = ch.coverageReport();
     Check.that("Bericht nennt undefinierte LEDs", rep2.indexOf("ohne Position") >= 0);
+    Check.that("coverageReport macht die Map wieder sauber", !ch.mapNeedsApply());
 
     String hud = ch.hudText();
     Check.that("HUD nennt die Eintragszahl",
@@ -421,7 +420,7 @@ public class LedPositionCalibrationTest {
     Check.that("Punkt setzen", cr.setCurrent(2f, 2f));
     cr.reapply();
     Check.that("die Map kennt die Position jetzt", mR.isDefined(0));
-    Check.near("und der Knoten seine", 2.0, nR.get(0).posX, 1.0);
+    Check.near("und der Knoten seine", 2.0, nR.get(0).posX, 1e-3);
     Check.that("nach reapply ist nichts mehr offen anzuwenden", !cr.mapNeedsApply());
     Check.that("ein neuer Klick macht die Map wieder schmutzig",
         cr.setCurrent(2.5f, 2.5f) && cr.mapNeedsApply());

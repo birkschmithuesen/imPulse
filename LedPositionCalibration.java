@@ -325,13 +325,18 @@ class LedPositionCalibration {
       message = "Keine Eintraege";
       return false;
     }
-    boolean any = false;
+    // Eigene Meldung aus der Anzahl geloeschter Anker bauen, statt die des
+    // letzten remove()-Aufrufs zu uebernehmen: bei einer halb gesetzten
+    // Kreuzung (ein Anker vorhanden, der andere nicht) waere die letzte
+    // Meldung eine Ablehnung, obwohl die Methode true zurueckgibt.
+    int removed = 0;
     for (int led : entries.get(current)) {
       if (store.remove(led)) {
-        any = true;
+        removed++;
       }
     }
-    message = any ? store.lastMessage() : "Dieser Eintrag hat keinen Anker";
+    boolean any = removed > 0;
+    message = any ? removed + " Anker geloescht" : "Dieser Eintrag hat keinen Anker";
     if (any) {
       mapDirty = true;
     }

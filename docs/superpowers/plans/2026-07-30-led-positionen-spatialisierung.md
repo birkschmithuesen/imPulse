@@ -2475,14 +2475,8 @@ In `test/LedPositionCalibrationTest.java` vor `System.exit(...)` einfügen:
     cn.next();
     cn.next();
     Check.that("dritter Eintrag ist offen", !cn.entryIsSet(cn.entryIndex()));
-    boolean nudgedOpen = cn.nudge(1, 0);
-    if (nudgedOpen) {
-      Check.that("Pfeiltaste auf einem offenen Eintrag setzt ihn",
-          cn.entryIsSet(cn.entryIndex()));
-    } else {
-      Check.that("ohne Vorschlag lehnt die Pfeiltaste ab und begruendet",
-          cn.lastMessage().length() > 0);
-    }
+    Check.that("Pfeiltaste auf einem offenen Eintrag setzt ihn",
+        cn.nudge(1, 0) && cn.entryIsSet(cn.entryIndex()));
 
     // ---- L: zweimal druecken, mit Fenster ----
     LedAnchorStore stL = store();
