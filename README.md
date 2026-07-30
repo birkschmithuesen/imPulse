@@ -36,8 +36,20 @@ The byte order within those 4 bytes is R, G, B, 0 - byte 0 drives red, byte 1 gr
 
 An **ArtSync** packet (OpSync) is sent after each controller's universes and is mandatory, not optional - without it the firmware would display each universe as soon as it arrives, tearing the image across outputs. Sending happens on its own 40 Hz thread with triple buffering (build/ready/send buffers), so `draw()` never blocks waiting on the network. `describeMapping()` prints the full controller/universe/stripe table to the console at startup, useful for checking against the controllers' web interface before anything is connected.
 
-## master level - a safety limit, not a creative control
-`/master/level` sets a hardware safety ceiling on everything sent to the LEDs - show, test patterns and calibration alike. Two independent clamps apply: the OSC parameter itself defaults to 0.1 and is constrained to **0..0.3** (`new RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 0.3f)` in `imPulse.pde`), so any fader move or OSC message is already limited before it reaches `ArtNetOutput`. `ArtNetOutput.setMasterLevel()` doesn't know about that 0.3 ceiling - it independently clamps whatever value it's given to **0..1**, as a defensive fallback in case it's ever called with a raw value from elsewhere. The 0.3 ceiling on the OSC parameter is the actual hardware limit: at full white, 10 m stripes already show a voltage drop according to the strip's datasheet, so full brightness must not be reachable at all, neither from the remote fader nor from a stray OSC message.
+## master level - a safety limit, now show-side, testbilder still fixed
+
+`/master/level` is the show fader, freely adjustable **0..1** since 2026-07-30
+(Birk: the installation never drives the stripes to full white during a show).
+The hardware risk - full white on a 10 m stripe already showing voltage drop
+per the strip's datasheet - only ever applied to the calibration test
+patterns (`TestPatterns` 3/5 send literal `(1,1,1)`), not to the show content.
+Those test patterns therefore run on their own fixed ceiling,
+`CALIBRATION_MASTER_LEVEL = 0.1f` in `imPulse.pde`, applied whenever
+`calibrationMode` is active - completely independent of the `/master/level`
+fader, and not reachable via OSC (a plain constant, same reasoning as
+`test/PatternProbe.java`'s `MASTER_LEVEL`). `ArtNetOutput.setMasterLevel()`
+still independently clamps whatever value it's given to **0..1** as a
+defensive fallback.
 
 ## parameters
 * /net/impulse/speed
@@ -45,7 +57,7 @@ An **ArtSync** packet (OpSync) is sent after each controller's universes and is 
 * /net/impulse/nodeDeadTime
 * /nodes/times/fire
 * /nodes/times/recover
-* /master/level (see "master level" above)
+* /master/level (see "master level" above - show fader, 0..1)
 
 ## libraries to be imported into Processing
 * [oscP5](http://www.sojamo.de/libraries/oscP5/) (also provides `netP5`)

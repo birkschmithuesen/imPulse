@@ -109,9 +109,23 @@ Beide Pfade sind in `setup()`/`draw()` per Kommentar umschaltbar:
 
 `dispose()` in `imPulse.pde` wird von Processing beim Beenden aufgerufen: veröffentlicht einen komplett schwarzen Frame, wartet kurz, damit der Sender-Thread ihn noch verschickt, und ruft danach `artNetOutput.stop()`. Ohne das blieben die Stripes im letzten gesendeten Bild stehen, weil die Empfänger-Firmware nicht von selbst blankt.
 
-### Master-Pegel als Sicherheitsanforderung
+### Master-Pegel: Show-Fader (0..1) vs. Testbild-Fixpegel
 
-`masterLevel` (`/master/level`, `RemoteControlledFloatParameter`) begrenzt jeden ausgehenden Farbwert, nach Show, Testbildern und Kalibrierung gleichermassen. Zwei unabhängige Klemmungen wirken hier zusammen: der OSC-Parameter selbst ist mit Auslieferungswert **0.1** und Bereich **0..0.3** angelegt (`new RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 0.3f)` in `imPulse.pde`) — jeder Regler- oder OSC-Wert wird schon dort auf 0..0.3 constraint, bevor er `ArtNetOutput.setMasterLevel()` erreicht. `setMasterLevel()` selbst kennt diese 0.3-Grenze nicht, sondern klemmt unabhängig davon defensiv auf **0..1** (siehe `test/ArtNetOutputTest.java`) — ein zweites Sicherheitsnetz, falls `setMasterLevel()` je von anderer Stelle mit einem rohen Wert aufgerufen wird. Die eigentliche Hardwaregrenze ist die 0.3 des OSC-Parameters, keine Geschmacksfrage: laut Handbuch der Stripes ist bei 10-m-Längen schon bei Weiss mit Spannungsabfall zu rechnen, voller Pegel (1.0) darf am Regler oder über eine verirrte OSC-Nachricht gar nicht erst erreichbar sein.
+`masterLevel` (`/master/level`, `RemoteControlledFloatParameter`) ist seit
+2026-07-30 der **Show-Fader**, Bereich **0..1** (`new
+RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 1f)` in
+`imPulse.pde`) — die Installation fährt die Stripes im Betrieb bewusst nie auf
+Vollweiss, das Hardware-Risiko (Spannungsabfall bei Weiss auf 10 m Länge laut
+Handbuch der Stripes) betraf nur die Kalibrier-Testbilder, nicht den
+Show-Content. `TestPatterns` 3/5 senden bewusst `(1,1,1)` (Vollweiss) — dafür
+gibt es seither einen eigenen, vom Fader unabhängigen Fixpegel
+`CALIBRATION_MASTER_LEVEL = 0.1f` (Konstante in `imPulse.pde`, nicht per OSC
+erreichbar, gleiche Begründung wie `test/PatternProbe.java`s `MASTER_LEVEL`),
+angewandt in `draw()` via `calibrationMode ? CALIBRATION_MASTER_LEVEL :
+masterLevel.getValue()`. `setMasterLevel()` selbst klemmt weiterhin defensiv
+auf **0..1** (siehe `test/ArtNetOutputTest.java`) — ein zweites Sicherheitsnetz
+für den Fall, dass es je von anderer Stelle mit einem rohen Wert aufgerufen
+wird.
 
 ### Node-Kalibrierung
 
