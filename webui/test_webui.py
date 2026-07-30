@@ -122,9 +122,13 @@ class NormalizeTest(unittest.TestCase):
 
 class GroupingTest(unittest.TestCase):
     def test_group_keys(self):
-        self.assertEqual(group_key("/net/impulse/color/gamma"), "net/impulse")
-        self.assertEqual(group_key("/net/impulse/fadeOut/r"), "net/impulse")
         self.assertEqual(group_key("/net/impulse/speed"), "net/impulse")
+        self.assertEqual(group_key("/net/impulse/nodeDeadTime"), "net/impulse")
+        # Farbe + FadeOut werden bewusst aus /net/impulse herausgezogen in
+        # eine eigene Gruppe (Impuls-Bewegung/-Zeit vs. Impuls-Farbe, siehe
+        # docs/webui-parameter-review-2026-07-30.md Abschnitt 2)
+        self.assertEqual(group_key("/net/impulse/color/gamma"), "net/impulse/color")
+        self.assertEqual(group_key("/net/impulse/fadeOut/r"), "net/impulse/color")
         self.assertEqual(group_key("/net/randomSpawn/interval"), "net/randomSpawn")
         self.assertEqual(group_key("/net/activateNode"), "net")
         self.assertEqual(group_key("/nodes/colors/outer/fired/Hue"), "nodes/colors")
@@ -133,6 +137,20 @@ class GroupingTest(unittest.TestCase):
         # rein numerische Segmente fallen raus, sonst haette jeder Mixer-Kanal
         # eine eigene Gruppe
         self.assertEqual(group_key("Master/0/opacity/0.Impulse"), "Master/opacity")
+
+    def test_impulse_color_group_has_its_own_human_readable_title(self):
+        text = "\n".join([
+            "float\t/net/impulse/color/r\td\t1.0\t0\t1",
+            "float\t/net/impulse/fadeOut/r\td\t0.97\t0\t1",
+            "int\t/net/impulse/speed\td\t160\t1\t1500",
+        ])
+        groups = {g["key"]: g for g in build_groups(parse_settings(text))}
+        self.assertIn("net/impulse/color", groups)
+        self.assertEqual(groups["net/impulse/color"]["title"], "Impuls-Farbe")
+        color_addrs = {c["address"] for c in groups["net/impulse/color"]["controls"]}
+        self.assertEqual(color_addrs, {"/net/impulse/color/r", "/net/impulse/fadeOut/r"})
+        # speed bleibt in der Bewegungs-Gruppe, nicht in Impuls-Farbe
+        self.assertNotIn("/net/impulse/speed", color_addrs)
 
     def test_color_triple_becomes_one_control(self):
         groups = {g["key"]: g for g in build_groups(parse_settings(SAMPLE))}
@@ -204,6 +222,36 @@ class GroupingTest(unittest.TestCase):
         ])
         keys = [g["key"] for g in build_groups(parse_settings(text))]
         self.assertEqual(keys[-1], ADVANCED_GROUP_KEY)
+
+    def test_ui_range_override_narrows_display_range(self):
+        # /net/impulse/speed: Java-Range 1..1500, UI-Override 1..400 (siehe
+        # docs/webui-parameter-review-2026-07-30.md Abschnitt 1, Birk-Freigabe
+        # 2026-07-30) -- der Regler zeigt/erlaubt nur die engere Range.
+        text = "int\t/net/impulse/speed\td\t160\t1\t1500"
+        param = parse_settings(text)[0]
+        d = param.as_dict()
+        self.assertEqual(d["min"], 1)
+        self.assertEqual(d["max"], 400)
+
+    def test_ui_range_override_never_exceeds_actual_range(self):
+        # Ein aelterer/kleinerer Dump koennte eine engere Java-Range als der
+        # Override haben -- das Sicherheitsnetz in ui_range() muss dann auf
+        # die tatsaechliche Range zurueckfallen, nicht eine ungueltige weite
+        # Anzeige-Range liefern.
+        text = "int\t/net/impulse/speed\td\t50\t1\t100"
+        param = parse_settings(text)[0]
+        d = param.as_dict()
+        self.assertEqual(d["min"], 1)
+        self.assertEqual(d["max"], 100)
+
+    def test_ui_range_override_does_not_affect_actual_clamping(self):
+        # coerce()/normalize() (das, was tatsaechlich gesendet wird) bleibt
+        # auf der vollen Java-Range -- ein Wert ueber der UI-Override-Range
+        # aber innerhalb der echten Range darf weiterhin gesetzt werden
+        # (z.B. wenn der Server-seitige Zustand ihn schon so hatte).
+        text = "int\t/net/impulse/speed\td\t160\t1\t1500"
+        param = parse_settings(text)[0]
+        self.assertEqual(param.coerce(800), 800)
 
 
 class SpeedCouplingTest(unittest.TestCase):
