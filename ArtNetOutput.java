@@ -40,7 +40,7 @@ class ArtNetOutput {
   final int numLedsPerStripe;
   final int universesPerOutput;
 
-  private float masterLevel = 0.1f;   // Sicherheitsventil, siehe setMasterLevel
+  private float masterLevel = 1.0f;   // Working-State-Default (Birk, 2026-07-30) - vormals 0.1f Sicherheitsventil
   private int sequence = 1;
 
   ArtNetOutput(int[] octets, int numLedsPerStripe) {

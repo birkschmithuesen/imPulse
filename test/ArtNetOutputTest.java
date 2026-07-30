@@ -6,16 +6,16 @@ public class ArtNetOutputTest {
   public static void main(String[] args) {
     ArtNetOutput out = new ArtNetOutput(OCTETS, LEDS_PER_STRIPE);
 
-    // ---- Sicherheitsanforderung: Auslieferungspegel und Klemmung ----
-    // Master-Pegel ist die einzige Sicherheitsanforderung des Branches -
-    // ein frisch angelegtes ArtNetOutput darf niemals mit vollem Pegel starten,
-    // und setMasterLevel darf niemals einen Wert ausserhalb 0..1 durchlassen.
-    Check.that("Auslieferungspegel ist 0.1", Math.abs(out.getMasterLevel() - 0.1f) < 0.0001f);
+    // ---- Auslieferungspegel: Working-State-Default (Birk, 2026-07-30) ----
+    // Master-Pegel startet mit vollem Pegel (Working State fuer den Live-
+    // Betrieb) - setMasterLevel klemmt weiterhin niemals einen Wert
+    // ausserhalb 0..1 durch.
+    Check.that("Auslieferungspegel ist 1.0", Math.abs(out.getMasterLevel() - 1.0f) < 0.0001f);
     out.setMasterLevel(-5f);
     Check.that("setMasterLevel klemmt negative Werte auf 0", out.getMasterLevel() == 0f);
     out.setMasterLevel(5f);
     Check.that("setMasterLevel klemmt Werte ueber 1 auf 1", out.getMasterLevel() == 1f);
-    out.setMasterLevel(0.1f); // zurueck auf den Auslieferungswert fuer die folgenden Pruefungen
+    out.setMasterLevel(1.0f); // zurueck auf den Auslieferungswert fuer die folgenden Pruefungen
 
     Check.eq("Anzahl Stripes", 30, out.numStripes());
     Check.eq("Universen je Output", 5, out.universesPerOutput());

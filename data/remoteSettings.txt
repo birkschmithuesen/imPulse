@@ -1,5 +1,5 @@
 float	/net/randomSpawn/interval	space for descripiton	30.0	0.05	40.0
-float	/master/level	space for descripiton	0.1	0.0	1.0
+float	/master/level	space for descripiton	1.0	0.0	1.0
 int	/net/randomSpawn/enabled	space for descripiton	1	0	1
 int	/nodes/radius/waiting	space for descripiton	3	0	10
 float	/nodes/fadeOutGamma	space for descripiton	2.0	0.1	10.0
