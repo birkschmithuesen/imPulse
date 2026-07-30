@@ -43,6 +43,52 @@ Vollstaendige Range-/Sections-Analyse aller OSC-Parameter:
 Jede Aenderung geht **sofort** raus (erste Bewegung direkt, danach hoechstens
 alle 150 ms eine Nachricht, der letzte Wert in jedem Fall) — kein Speichern-Knopf.
 
+## Presets
+
+Ganz oben, ueber den Reglern, sitzt die Sektion **Presets**: ein Dropdown mit
+allen vorhandenen Presets plus **Laden**, darunter ein Textfeld plus
+**Speichern**.
+
+Ein Preset ist ein kompletter Wertesatz aller fernsteuerbaren Parameter, abgelegt
+als `data/presets/<name>.txt` — **im selben Format wie `remoteSettings.txt`**.
+Geschrieben wird der Ordner ausschliesslich von imPulse (`PresetStore.java`);
+das Web-UI **liest** ihn nur.
+
+- **Liste**: kommt vom Dateisystem, nicht per OSC. Der Server laeuft auf
+  derselben Maschine wie imPulse und sieht den Ordner direkt — ein OSC-
+  Rueckkanal waere neu zu bauen (die einzige Ausgangsadresse des Sketches ist
+  Port 8002, also SuperCollider). Aktualisiert wird beim Seitenaufruf und nach
+  jedem Speichern.
+- **Laden** schickt `/preset/load <name>` und zieht zusaetzlich die Regler nach:
+  der Server liest dieselbe Datei mit demselben Parser wie `remoteSettings.txt`
+  und schickt die Werte in der Antwort zurueck. Die Regler werden still gesetzt,
+  loesen also kein zweites OSC aus — das Anwenden macht imPulse selbst.
+  Geklemmt wird dabei auf die Grenzen aus `remoteSettings.txt`, nicht auf die
+  aus der Preset-Datei (dieselbe Regel wie `PresetStore.applyPreset()`).
+- **Speichern** schickt `/preset/save <name>` und wartet bis zu **1 Sekunde**
+  darauf, dass die Datei erscheint — der Sketch schreibt sie erst im naechsten
+  `draw()`-Durchlauf. Bleibt sie aus, kommt eine klare Fehlermeldung
+  („laeuft der Sketch?") statt eines stillen Erfolgs. Ein vorhandenes Preset
+  wird **ohne Rueckfrage ueberschrieben**; die Statuszeile sagt es hinterher.
+- **Namen**: nur `a-z`, `0-9`, Unterstrich und Bindestrich, 1 bis 64 Zeichen —
+  wortgleich zu `PresetStore.isValidName()` in Java. Das UI und der Server
+  pruefen das vorab, die Autoritaet bleibt Java (dort geht es um
+  Pfad-Traversal). Grossbuchstaben sind ausgeschlossen, weil `Standby` und
+  `standby` auf Windows dieselbe Datei waeren.
+
+Zwei Dinge meldet die Statuszeile beim Laden, statt sie zu verschlucken:
+Adressen aus dem Preset, die `remoteSettings.txt` gar nicht kennt (Preset und
+Dump aus verschiedenen Codestaenden), und Werte ausserhalb der im UI verengten
+Range (siehe `UI_RANGE_OVERRIDES`) — dort klemmt der Regler sichtbar und soll
+nicht behaupten, der Sketch fahre den angezeigten Wert.
+
+**Kein Loeschen**: ein Preset wird man los, indem man die Datei auf dem Laptop
+von Hand loescht. Bewusst nicht im UI, weil sonst das Web-UI in einen Ordner
+schreiben wuerde, der imPulse gehoert.
+
+Der Knopf **Neu laden** oben rechts hat damit nichts zu tun — der liest
+`remoteSettings.txt` neu ein, also die Parameter-*Definitionen*.
+
 ## Normalisierung (der Fallstrick)
 
 `RemoteControlledFloatParameter.digestMessage` mappt eingehende Floats selbst:
@@ -128,6 +174,7 @@ Parameterdatei mitgeben.
 | Option / Umgebungsvariable                | Vorgabe                     |
 |-------------------------------------------|-----------------------------|
 | `--settings` / `IMPULSE_SETTINGS`         | `<repo>/data/remoteSettings.txt` |
+| `--presets` / `IMPULSE_PRESETS`           | `presets/` neben `--settings`    |
 | `--osc-host` / `IMPULSE_OSC_HOST`         | `127.0.0.1`                 |
 | `--osc-port` / `IMPULSE_OSC_PORT`         | `8001`                      |
 | `--host` / `IMPULSE_WEBUI_HOST`           | `0.0.0.0`                   |
@@ -184,7 +231,15 @@ nicht laufen bzw. mit `--host 127.0.0.1` gestartet werden.
 `test_webui.py` prueft das, was schiefgehen kann, ohne Flask, ohne python-osc
 und ohne laufende Installation: Parsen von `remoteSettings.txt`,
 Normalisierung Float/Int, Gruppierung inkl. Farbtripel, die Speed-Kopplung
-samt Klemmung und den OSC-Encoder byteweise.
+samt Klemmung und den OSC-Encoder byteweise (inklusive String-Argument fuer
+die Preset-Kommandos).
+
+Dazu die Preset-Logik: die Namensregel als Spiegel von
+`PresetStore.isValidName()`, das Auflisten des Ordners (Sortierung, `.txt` ab,
+ungueltige Namen uebergangen), die Uebernahme einer Preset-Datei in die
+Regleranzeige (Klemmung auf die `remoteSettings.txt`-Range, unbekannte
+Adressen, Werte ausserhalb der UI-Range) und das Warten auf die von imPulse
+geschriebene Datei.
 
 ```bash
 python3 webui/test_webui.py
