@@ -54,7 +54,12 @@ for j in "$PJ"/*.jar "$PJ"/lib/*.jar "$PJ"/core/library/*.jar "$PJ"/modes/java/m
   [ -f "$j" ] && CP="$CP:$j"
 done
 
-WORK="${TMPDIR:-/tmp}impulse-build-check.$$"
+# Der abschliessende Schraegstrich wird selbst gesetzt statt aus TMPDIR
+# angenommen: auf macOS endet $TMPDIR mit /, unter Linux nicht. Ohne das
+# Abschneiden ergab "${TMPDIR}impulse-build-check.$$" dort ein Verzeichnis
+# NEBEN TMPDIR (/home/x/.hermes/tmpimpulse-build-check.123) statt darin.
+TMPROOT="${TMPDIR:-/tmp}"
+WORK="${TMPROOT%/}/impulse-build-check.$$"
 # Commander bricht ab, wenn --output schon existiert ("The output folder
 # already exists"), also nur WORK anlegen und OUT von Processing erzeugen
 # lassen.
