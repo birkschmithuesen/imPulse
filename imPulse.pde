@@ -64,6 +64,15 @@ int counter=0;
 NodeCalibration nodeCalibration;
 boolean calibrationMode = false;
 
+// Sicherheitsventil ausschliesslich fuer die Testbilder (TestPatterns 1-5,
+// siehe drawPattern()/calibrationMode) - unabhaengig vom Show-Fader
+// masterLevel, der seit 2026-07-30 bis 1.0 gehen darf. TestPatterns 3/5
+// senden bewusst Vollweiss (1,1,1); bei 10-m-Stripe-Laenge ist das laut
+// Handbuch schon ein Spannungsabfall-Risiko. Bewusst eine Konstante statt
+// eines OSC-Parameters, damit sie sich nicht versehentlich hochschrauben
+// laesst (gleiche Begruendung wie test/PatternProbe.java MASTER_LEVEL).
+static final float CALIBRATION_MASTER_LEVEL = 0.1f;
+
 
 void setup() {
   // Fensterhoehe: die Vorschau braucht numStripes*10 Pixel (image() weiter
@@ -89,11 +98,13 @@ void setup() {
 
   artNetOutput = new ArtNetOutput(controllerOctets, numLedsPerStripe); // used to send data to leds
   System.out.print(artNetOutput.describeMapping());
-  // Obergrenze 0.3 ist eine Hardwaregrenze, keine Geschmacksfrage: laut
-  // Handbuch der Stripes ist bei 10-m-Laengen schon bei Weiss mit
-  // Spannungsabfall zu rechnen - voller Pegel (1.0) darf am Regler gar nicht
-  // erst erreichbar sein.
-  masterLevel = new RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 0.3f);
+  // 2026-07-30, Birk: Obergrenze auf 0..1 freigegeben - die Show fährt die
+  // Stripes bewusst nie auf Vollweiss, das Hardware-Risiko (Spannungsabfall
+  // bei Weiss auf 10 m Laenge) betraf nur die Testbilder (TestPatterns 3/5
+  // senden (1,1,1)). Die Testbilder haben deshalb jetzt einen eigenen, vom
+  // Fader unabhaengigen Fixpegel CALIBRATION_MASTER_LEVEL statt masterLevel
+  // zu nutzen - der Fader selbst darf nun bis 1.0 gehen.
+  masterLevel = new RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 1f);
   artNetOutput.start();
 
   // use the canvas to create the visuals to send over syphon
@@ -155,7 +166,10 @@ void draw() {
   //server.sendTexture(canvas); //use this on Windows
   //server.sendImage(canvas); //use this on MacOS
   //send data directly to ArtNet Interface withoput MadMapper in between
-  artNetOutput.setMasterLevel(masterLevel.getValue());
+  // Testbilder (calibrationMode) laufen auf einem eigenen Fixpegel statt dem
+  // Show-Fader: TestPatterns 3/5 senden Vollweiss (1,1,1), das darf nicht mit
+  // masterLevel bis 1.0 rausgehen (Spannungsabfall-Risiko bei Weiss auf 10 m).
+  artNetOutput.setMasterLevel(calibrationMode ? CALIBRATION_MASTER_LEVEL : masterLevel.getValue());
   artNetOutput.publish(ledColors);
 }
 
