@@ -91,6 +91,25 @@ STEP_LADDER = [1.0, 0.5, 0.1, 0.05, 0.01, 0.005, 0.001, 0.0005, 0.0001]
 
 COLOR_COMPONENTS = ("Hue", "Sat", "Bright")
 
+# Trigger-Adressen: keine Regler, sondern Einmal-Aktionen (Direkt-Trigger
+# eines Nodes/Stripes). writeToStream() in LedNetworkTransportEffect.java
+# schreibt sie wie normale Int-Parameter in remoteSettings.txt, das UI
+# zeigte sie bisher deshalb als Slider -- das verwirrt, weil ein "Wert
+# halten" hier keinen Sinn ergibt (siehe docs/webui-parameter-review-2026-07-30.md
+# Abschnitt 1). Bekommen ein eigenes Button-Widget statt eines Reglers.
+TRIGGER_ADDRESSES = {"/net/activateNode", "/net/activateStripe"}
+
+# Setup-/Sicherheits-Parameter: gestalterisch selten angefasst (Rechnerlast-
+# Schutz, Trigger-Empfindlichkeits-Exponent), sollen nicht zwischen Farbe und
+# Speed im Haupt-UI stehen. Werden unabhaengig von ihrem Adress-Praefix in
+# eine eigene, eingeklappte "Advanced"-Gruppe am Ende sortiert. Siehe
+# docs/webui-parameter-review-2026-07-30.md Abschnitt 1.
+ADVANCED_ADDRESSES = {
+    "/net/impulse/oscMaxCount",
+    "/net/impulse/energyExponent",
+}
+ADVANCED_GROUP_KEY = "zzz_advanced"
+
 
 # ---------------------------------------------------------------------------
 # OSC-Versand
@@ -283,7 +302,13 @@ def group_key(address: str) -> str:
     unterhalb von ``/net/randomSpawn`` in einer anderen. Rein numerische
     Segmente (``Master/0/opacity/...``) fallen raus, sonst bekaeme jeder
     Mixer-Kanal seine eigene Gruppe.
+
+    Setup-/Sicherheits-Parameter (ADVANCED_ADDRESSES) werden unabhaengig von
+    ihrem eigentlichen Praefix in eine eigene, ans Ende sortierte Gruppe
+    verschoben -- siehe docs/webui-parameter-review-2026-07-30.md Abschnitt 1.
     """
+    if address in ADVANCED_ADDRESSES:
+        return ADVANCED_GROUP_KEY
     segments = [s for s in address.split("/") if s]
     if len(segments) <= 1:
         return segments[0] if segments else "sonstige"
@@ -339,12 +364,24 @@ def build_groups(parameters: List[Parameter]) -> List[Dict[str, Any]]:
                 },
             })
         for param in members:
-            if param.address not in consumed:
+            if param.address in consumed:
+                continue
+            if param.address in TRIGGER_ADDRESSES:
+                controls.append({
+                    "kind": "trigger",
+                    "type": param.type,
+                    "address": param.address,
+                    "description": param.description,
+                    "min": param.minimum,
+                    "max": param.maximum,
+                })
+            else:
                 controls.append(param.as_dict())
 
         groups.append({
             "key": key,
-            "title": key if key.startswith("Master") else "/" + key,
+            "title": "Advanced" if key == ADVANCED_GROUP_KEY
+                else (key if key.startswith("Master") else "/" + key),
             "controls": controls,
         })
     return groups
