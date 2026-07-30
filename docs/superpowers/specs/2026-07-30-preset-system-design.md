@@ -305,7 +305,7 @@ Leitgedanke: ein defektes Preset darf die Show nicht anhalten.
 | Registrierte Adresse fehlt in der Datei | Parameter bleibt unangetastet, ebenfalls gesammelt gemeldet. |
 | Wert nicht parsbar | Zeile übersprungen, gemeldet. |
 | Wert außerhalb der Code-Grenzen | Geklemmt, gemeldet. |
-| Scheduler an, keine Preset-Dateien | Einmalige Meldung, danach still. |
+| Scheduler an, keine Preset-Dateien | Eine Meldung je Intervall, nicht je Frame. Bewusst nicht nur einmalig: eine Fehlkonfiguration soll sichtbar bleiben, ohne die Konsole mit 40 Zeilen pro Sekunde zu fluten. |
 | sclang läuft nicht | Weiterleitung geht ins Leere, Visual-Show unbeeinflusst. |
 
 ## Startbestand
