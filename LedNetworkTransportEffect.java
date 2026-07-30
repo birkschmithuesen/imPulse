@@ -29,6 +29,15 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   LinkedList<TravellingActivation> activations = new LinkedList<TravellingActivation>();
 
+  // Fortlaufende ID je Impuls, fuer den Positionsstrom /net/impulse. Steht in
+  // der aeusseren Klasse, weil eine innere Klasse in Java 8 keine
+  // nichtkonstanten statischen Felder haben darf.
+  //
+  // Ein Ueberlauf nach 2^31 Impulsen ist hingenommen: bei 1000 neuen Impulsen
+  // je Sekunde nach etwa 25 Tagen Dauerbetrieb, und eine Kollision verwirrt
+  // kurz eine Drohne auf der Klangseite.
+  private int nextImpulseId = 0;
+
   //osc out
   OscP5 oscP5;
   NetAddress remoteLocation;
@@ -185,10 +194,17 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   //represents one travelling activation
   public class TravellingActivation {
     TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_) {
+      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++);
+    }
+
+    // Mit ausdruecklicher ID - nur fuer den Filler, der die ID seines
+    // Elternimpulses uebernimmt statt eine neue zu verbrauchen.
+    TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_, int id_) {
       ledIdxPos=ledIdxPos_;
       stripeIdx=stripeIdx_;
       speed=speed_;
       energy=energy_;
+      id=id_;
     }
 
     int getLedIndex() {
@@ -198,13 +214,15 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     int stripeIdx; // stripe the activation was created on
     float speed; // [leds/second] also encodes direction in sign
     float energy; // some measure of strength
+    final int id; // fortlaufend, fuer /net/impulse
     void setEnergy(float _energy){energy=_energy;}
   }
 
   //represents fillers needed when high travelling speeds lead to skipping some leds in each frame
   public class TravellingActivationFiller extends TravellingActivation {
-    TravellingActivationFiller(float ledIdxPos_, int stripeIdx_, float speed_, float energy_) {
-      super(ledIdxPos_, stripeIdx_, speed_, energy_);
+    TravellingActivationFiller(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
+        int parentId_) {
+      super(ledIdxPos_, stripeIdx_, speed_, energy_, parentId_);
     }
   }
 
@@ -251,7 +269,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
             break;
           }
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
-          newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy));
+          newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy, curActivation.id));
         }
       }
       if (activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss))) {
@@ -344,9 +362,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     OscMessage myMessage = new OscMessage("/net/hitNode");
     myMessage.add(hitNode.id);
     myMessage.add(curActivation.energy);
-    //myMessage.add(hitNode.position.x);
-    //myMessage.add(hitNode.position.y);
-    //myMessage.add(hitNode.position.z);
+    // Draufsicht-Position des Knotens in Metern, Ursprung Netzmitte. Kein z -
+    // das Netz haengt ueber Kopf, vier Lautsprecher in einer Ebene koennen die
+    // Hoehe nicht darstellen.
+    //
+    // Rueckwaertskompatibel: ein Klang-Sketch, der nur msg[1] und msg[2]
+    // liest, ignoriert die zwei zusaetzlichen Argumente.
+    myMessage.add(hitNode.posX);
+    myMessage.add(hitNode.posY);
     oscP5.send(myMessage, remoteLocation);
   }
 
