@@ -9,6 +9,11 @@ public class ImpulseOscThrottleTest {
     Check.that("auch spaeter nicht", !t.due(200.0, 0f));
     Check.that("negative Rate ebenfalls nicht", !t.due(300.0, -5f));
 
+    // NaN-Rate darf nicht durchrutschen und jeden Aufruf faellig melden
+    ImpulseOscThrottle tn = new ImpulseOscThrottle();
+    Check.that("NaN-Rate sendet nicht", !tn.due(100.0, Float.NaN));
+    Check.that("und auch beim naechsten Aufruf nicht", !tn.due(200.0, Float.NaN));
+
     // Der erste Aufruf mit einer Rate ist faellig
     ImpulseOscThrottle t2 = new ImpulseOscThrottle();
     Check.that("erster Aufruf ist faellig", t2.due(100.0, 10f));
@@ -79,9 +84,18 @@ public class ImpulseOscThrottleTest {
 
     // Negative Energien kommen zuletzt, stuerzen aber nicht ab
     float[] neg = { -1f, 0.5f };
-    int[] negSel = neg.length > 0 ? sel.select(neg, 2) : new int[0];
+    int[] negSel = sel.select(neg, 2);
     Check.eq("positive Energie zuerst", 1, negSel[0]);
     Check.eq("negative danach", 0, negSel[1]);
+
+    // select() liest nur - das Feld des Aufrufers bleibt unveraendert
+    float[] untouched = { 0.4f, 0.1f, 0.9f, 0.2f };
+    float[] untouchedCopy = untouched.clone();
+    sel.select(untouched, 2);
+    for (int i = 0; i < untouched.length; i++) {
+      Check.near("select() veraendert das Eingabearray nicht an Index " + i,
+          untouchedCopy[i], untouched[i], 0.0);
+    }
 
     System.exit(Check.report("ImpulseOscThrottleTest"));
   }

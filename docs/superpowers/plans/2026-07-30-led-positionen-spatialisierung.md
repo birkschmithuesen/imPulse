@@ -3380,9 +3380,18 @@ public class ImpulseOscThrottleTest {
 
     // Negative Energien kommen zuletzt, stuerzen aber nicht ab
     float[] neg = { -1f, 0.5f };
-    int[] negSel = neg.length > 0 ? sel.select(neg, 2) : new int[0];
+    int[] negSel = sel.select(neg, 2);
     Check.eq("positive Energie zuerst", 1, negSel[0]);
     Check.eq("negative danach", 0, negSel[1]);
+
+    // select() liest nur - das Feld des Aufrufers bleibt unveraendert
+    float[] untouched = { 0.4f, 0.1f, 0.9f, 0.2f };
+    float[] untouchedCopy = untouched.clone();
+    sel.select(untouched, 2);
+    for (int i = 0; i < untouched.length; i++) {
+      Check.near("select() veraendert das Eingabearray nicht an Index " + i,
+          untouchedCopy[i], untouched[i], 0.0);
+    }
 
     System.exit(Check.report("ImpulseOscThrottleTest"));
   }
