@@ -88,9 +88,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     fadeOutG= new RemoteControlledFloatParameter("/net/impulse/fadeOut/g", 0.96f, 0f, 1f); // color of travelling impulse
     fadeOutB= new RemoteControlledFloatParameter("/net/impulse/fadeOut/b", 0.56f, 0f, 1f); // color of travelling impulse
 
-    // Start-Default bewusst aus (0) - ein neues ambientes Verhalten soll nicht ungefragt bei
-    // jedem Sketch-Start live gehen, sondern erst wenn der Operator es per OSC einschaltet
-    randomSpawnEnabled= new RemoteControlledIntParameter("/net/randomSpawn/enabled", 0, 0, 1);
+    // Start-Default an (1) - Klangnetz ist eine nicht-interaktive Installation, Auto-Spawn
+    // ist der Normalzustand und muss auch nach einem Processing-Neustart sofort laufen
+    // (Birk, 2026-07-30). Ueber OSC weiterhin jederzeit live abschaltbar.
+    randomSpawnEnabled= new RemoteControlledIntParameter("/net/randomSpawn/enabled", 1, 0, 1);
     randomSpawnCount= new RemoteControlledIntParameter("/net/randomSpawn/count", 1, 1, nStripes);
     randomSpawnInterval= new RemoteControlledFloatParameter("/net/randomSpawn/interval", 3f, 0.05f, 10f);
     randomSpawnEnergy= new RemoteControlledFloatParameter("/net/randomSpawn/energy", 0.6f, 0f, 1f);
