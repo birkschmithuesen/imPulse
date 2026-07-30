@@ -33,6 +33,13 @@
 // und nicht als eigene Top-Level-Blöcke: sie laufen headless nicht von
 // selbst los und sind trotzdem mit einem Aufruf startbar.
 //
+// Die Messsitzung für die ungemessenen Werte weiter unten ist dagegen
+// eine INTERAKTIVE: ~testChannels.(), ~testAzimuth.() und ~testSweep.()
+// werden von Hand aufgerufen, also aus der SuperCollider-IDE oder aus
+// einer sclang-REPL. Im headless-Betrieb (`sclang -D`) gibt es keine
+// Eingabezeile, aus der man sie aufrufen könnte — dort läuft die Datei
+// nur als Empfänger.
+//
 // =====================================================================
 // !!!  ZWEI WERTE IN DIESER DATEI SIND UNGEMESSEN  !!!
 // =====================================================================
@@ -42,33 +49,106 @@
 // Werte lassen sich nicht am Schreibtisch feststellen, sondern nur vor
 // Ort, und sie stehen beide oben im Konfigurationsteil:
 //
-//   ~azimuthSign         — zählt der Azimut von PanB2 positiv nach
-//                          rechts oder nach links?
-//   ~decoderOrientation  — welcher Wert stellt bei DecodeB2 einen
-//                          Lautsprecher genau nach vorn, und in welcher
-//                          Reihenfolge liegen die vier Kanäle?
+//   ~azimuthSign    — zählt der Azimut von PanB2 positiv nach rechts
+//                     oder nach links?
+//   ~azimuthOffset  — um wieviel muss das ganze Klangbild gedreht
+//                     werden, damit „vorn" auch AUS der vorderen Box
+//                     kommt und nicht zwischen zwei Boxen sitzt?
 //
-// Die Hilfedateien von PanB2 und DecodeB2 machen dazu eine Aussage (sie
-// steht als Erwartung bei den beiden Variablen), aber das ist eine
-// HERLEITUNG, keine Messung. In CLAUDE.md steht für die ArtNet-Bytefolge
-// derselbe Fall: zwei unabhängige Ableitungen aus der Dokumentation kamen
-// zum falschen Ergebnis, erst die Messung am Aufbau hat es geklärt —
-// „Massgeblich ist die Messung, nicht die Herleitung."
+// (~decoderOrientation ist KEIN dritter solcher Wert mehr — siehe die
+// Messung gleich darunter. Er ist auf SC 3.11.2 nachweislich wirkungslos
+// und steht nur noch als Rückfallwert in der Datei.)
+//
+// ---- GEMESSEN 2026-07-30: DecodeB2 ignoriert sein orientation --------
+//
+// Aufbau: scsynth im NRT-Modus (`Score.recordNRT`, kein Audiogerät, kein
+// Netz), SC 3.11.2, konstantes Eingangssignal DC.ar(1), Rendern nach
+// Datei, Abgreifen eines Samples je Messfenster.
+//
+// Ergebnis: das orientation-Argument von DecodeB2 hat KEINE beobachtbare
+// Wirkung. DecodeB2.ar(4, w, x, y, orientation) liefert bei Azimut 0 für
+// orientation = 0, 0.25, 0.5 und 1.0 bytegleich
+//     [0.8536, 0.8536, 0.1464, 0.1464]
+// — und zwar sowohl, wenn der Wert als Konstante im Graphen steht, als
+// auch, wenn er als Synth-Control gesetzt wird.
+//
+// Gegenprobe im GLEICHEN Messaufbau, damit „kein Unterschied" nicht mit
+// „misst gar nichts" verwechselt wird: PanAz reagiert sofort auf sein
+// orientation. PanAz.ar(4, DC.ar(1), 0, 1, 2, orientation) liefert
+//     orientation = 0    ->  [1.0, 0.0, 0.0, 0.0008]
+//     orientation = 0.5  ->  [0.7076, 0.7066, 0.0, 0.0]
+//
+// Daraus folgt die feste Lautsprecheranordnung von DecodeB2 (ebenfalls
+// gemessen, durch Abfahren des Azimuts):
+//     Azimut -0.25 -> [1.0, 0.5, 0.0, 0.5]     Kanal 0 liegt bei -45°
+//     Azimut +0.25 -> [0.5, 1.0, 0.5, 0.0]     Kanal 1 liegt bei +45°
+//     Azimut +0.75 -> [0.0, 0.5, 1.0, 0.5]     Kanal 2 liegt bei +135°
+//     Azimut -0.75 -> [0.5, 0.0, 0.5, 1.0]     Kanal 3 liegt bei -135°
+// Die Boxen des Decoders stehen also bei ±45° und ±135° Halbzyklen — die
+// FRONT halbiert eine Seite des Quadrats, sie trifft keine Box.
+//
+// AUF DEM SHOW-RECHNER NEU ZU BESTÄTIGEN: diese Messung stammt von
+// SC 3.11.2 auf einem ANDEREN Rechner (Entwicklungsmaschine, Linux).
+// Bevor man sich vor Ort darauf verlässt, mit derselben Gegenprobe
+// wiederholen — eine andere SuperCollider-Version kann das Argument
+// sehr wohl auswerten, dann sieht die Lage anders aus.
+//
+// ---- Was das für diese Installation bedeutet -------------------------
+//
+// Unsere Boxen stehen auf den SEITENMITTEN: vorn, rechts, hinten, links.
+// Gegen einen Decoder mit Boxen bei ±45°/±135° sitzt damit jede Quelle
+// um 45° daneben — ein Ton, der „vorn" gemeint ist, kommt zu gleichen
+// Teilen aus der vorderen und der rechten Box. Umstecken hilft dagegen
+// NICHT: eine Drehung um 45° ist keine Vertauschung von Kanälen, kein
+// Kabelwechsel bildet sie ab.
+//
+// Deshalb wird gedreht, wo es nachweislich wirkt: im ENCODER.
+// ~azimuthOffset wird in ~toBformat auf den Azimut addiert, bevor PanB2
+// ihn zu sehen bekommt. (PanB2 wickelt den Azimut selbst um ±1 herum —
+// im selben Lauf gemessen: Azimut 1.25 liefert dasselbe wie -0.75. Ein
+// zusätzliches wrap ist also unnötig.)
+//
+// Dass das wirkt, ist ebenfalls gemessen (gleicher NRT-Aufbau, ganze
+// Encoder-Zeile nachgebaut, Quelle bei (0, +4) m — also „vorn"):
+//     ~azimuthOffset =  0     ->  [0.675, 0.675, 0.325, 0.325]
+//                                 zu gleichen Teilen auf Kanal 0 und 1,
+//                                 genau der beschriebene 45°-Fehler
+//     ~azimuthOffset = -0.25  ->  [0.748, 0.5,   0.252, 0.5  ]  Gipfel Kanal 0
+//     ~azimuthOffset = +0.25  ->  [0.5,   0.748, 0.5,   0.252]  Gipfel Kanal 1
+// Dass „vorn" auch bei richtigem Offset noch auf die Nachbarkanäle
+// streut, ist kein Fehler: direct = 4/8.062 ≈ 0.50, vorn und hinten sind
+// absichtlich nur halb gerichtet (siehe die Anmerkung bei ~testAzimuth).
+//
+// ---- Warum die zwei übrigen Werte trotzdem ungemessen bleiben --------
+//
+// Die Hilfedateien von PanB2 und DecodeB2 machen zu Vorzeichen und
+// Nullpunkt eine Aussage (sie steht als Erwartung bei den Variablen),
+// aber das ist eine HERLEITUNG, keine Messung. In CLAUDE.md steht für die
+// ArtNet-Bytefolge derselbe Fall: zwei unabhängige Ableitungen aus der
+// Dokumentation kamen zum falschen Ergebnis, erst die Messung am Aufbau
+// hat es geklärt — „Massgeblich ist die Messung, nicht die Herleitung."
 //
 // Ein falsches Azimut-Vorzeichen spiegelt das ganze Klangbild links/
-// rechts, ohne dass irgendetwas schiefgeht oder eine Meldung erscheint.
-// Das fällt erfahrungsgemäss erst zur Eröffnung auf.
+// rechts, ein falscher ~azimuthOffset dreht es. Beides geht ohne Fehler
+// und ohne Meldung durch und fällt erfahrungsgemäss erst zur Eröffnung
+// auf.
 //
 // ZU TUN, BEVOR DIE INSTALLATION ZUM ERSTEN MAL SPIELT — Reihenfolge
-// einhalten, Ablauf im Detail bei den Funktionen ganz unten:
+// einhalten, Ablauf im Detail bei den Funktionen ganz unten. Die ganze
+// Sitzung läuft interaktiv (IDE oder sclang-REPL), nicht headless:
 //
 //   1. Diese Datei auswerten (Server bootet mit vier Ausgangskanälen).
 //   2. ~testChannels.()  — welche Box klingt bei Kanal 0, 1, 2, 3?
-//   3. ~testAzimuth.()   — kommt „rechts" auch von rechts?
-//   4. ~testSweep.()     — wandert der Klang vorn → rechts → hinten → links?
-//   5. Ergebnis in ~azimuthSign / ~decoderOrientation eintragen, Datei
-//      neu auswerten, 3. und 4. gegenprüfen.
-//   6. Die zwei Zeilen „UNGEMESSEN" durch das Messergebnis MIT DATUM
+//   3. ~testAzimuth.()   — sitzt jeder Ton IN der genannten Box?
+//   4. Sitzen alle vier Töne ZWISCHEN zwei Boxen: ~azimuthOffset auf
+//      +0.25 bzw. -0.25 setzen (welches von beiden, entscheidet 3. —
+//      siehe die Anleitung bei ~testAzimuth), Datei neu auswerten,
+//      3. wiederholen.
+//   5. ~testSweep.()     — wandert der Klang vorn → rechts → hinten → links?
+//      Wandert er andersherum, ~azimuthSign = -1 und zurück zu 3.
+//   6. Ergebnis in ~azimuthSign / ~azimuthOffset eintragen, Datei neu
+//      auswerten, 3. und 5. gegenprüfen.
+//   7. Die zwei Zeilen „UNGEMESSEN" durch das Messergebnis MIT DATUM
 //      ersetzen, damit der nächste nicht wieder von vorn anfängt.
 // =====================================================================
 
@@ -104,6 +184,8 @@ s.options.numOutputBusChannels = 4;
 // ---- Die zwei ungemessenen Werte -------------------------------------
 // Siehe den Warnblock am Kopf der Datei. Beide stehen hier bewusst
 // nebeneinander, damit die Messung an genau einer Stelle eingetragen wird.
+// (~decoderOrientation weiter unten gehört NICHT mehr dazu: gemessen
+// wirkungslos, siehe Kopf der Datei.)
 
 // UNGEMESSEN (Stand 2026-07-30). Vorzeichen des Azimut von PanB2.
 //   +1 = ein Klang bei x > 0 kommt von rechts   (Erwartung laut Hilfedatei
@@ -115,16 +197,38 @@ s.options.numOutputBusChannels = 4;
 // erreicht ihn nicht.
 ~azimuthSign = 1;
 
-// UNGEMESSEN (Stand 2026-07-30). orientation-Argument von DecodeB2.
-//   Erwartung laut Hilfedatei von DecodeB2: 0, wenn ein Lautsprecher genau
-//   vorn steht („front is a vertex of the polygon"), 0.5, wenn die Front
-//   eine Seite halbiert. Unsere Boxen stehen auf den Seitenmitten des
-//   Rechtecks, also mit einer Box genau vorn — das spricht für 0. Der
-//   Klassen-Default von DecodeB2 ist dagegen 0.5, ein Vertippen fiele hier
-//   also nicht auf.
-// Prüfen mit ~testChannels.() und ~testAzimuth.(). Zur Laufzeit umstellbar
-// mit ~setOrientation.(0.5) — das legt den Decoder-Synth neu an, weil nicht
-// gesichert ist, dass DecodeB2 sein orientation nach dem Start noch liest.
+// UNGEMESSEN (Stand 2026-07-30). Drehung des ganzen Klangbildes, in
+// HALBZYKLEN, addiert in ~toBformat auf den Azimut vor PanB2.
+//   Nötig, weil DecodeB2 seine vier Boxen fest bei ±45°/±135° annimmt
+//   (GEMESSEN 2026-07-30, siehe Kopf der Datei) und sich das über sein
+//   orientation-Argument nicht verstellen lässt. Unsere Boxen stehen aber
+//   auf den Seitenmitten. Also dreht der Encoder.
+//   Kandidaten — welcher stimmt, entscheidet erst das Ohr vor Ort:
+//      0     — falls sich die Boxen doch auf ±45°/±135° stellen lassen
+//              oder eine spätere SC-Version das orientation auswertet
+//     -0.25  — „vorn" landet auf Decoder-Kanal 0, dann weiter über
+//              Kanal 1 (rechts), 2 (hinten), 3 (links)
+//     +0.25  — „vorn" landet auf Decoder-Kanal 1, die Zuordnung ist um
+//              einen Kanal weitergedreht
+//   Welche der beiden 45°-Drehungen die richtige ist, hängt daran, welche
+//   physische Box an welchem Hardware-Kanal hängt — deshalb erst
+//   ~testChannels.(), dann ~testAzimuth.().
+// Prüfen mit ~testAzimuth.() und ~testSweep.(). Nach dem Ändern MUSS die
+// Datei komplett neu ausgewertet werden, aus demselben Grund wie bei
+// ~azimuthSign: der Wert steht fest im SynthDef-Graphen.
+~azimuthOffset = 0;
+
+// GEMESSEN 2026-07-30 (scsynth NRT, SC 3.11.2, Entwicklungsrechner):
+// das orientation-Argument von DecodeB2 ist WIRKUNGSLOS — der Ausgang ist
+// für 0, 0.25, 0.5 und 1.0 bytegleich, als Graphkonstante wie als
+// Synth-Control. Gegenprobe im selben Aufbau: PanAz reagiert sofort.
+// Ausführlich mit Zahlen im Kopf der Datei.
+// Der Wert bleibt hier nur als Rückfallwert stehen, falls eine andere
+// SuperCollider-Version das Argument doch auswertet; die Drehung des
+// Klangbildes macht ~azimuthOffset oben. AUF DEM SHOW-RECHNER IST DIE
+// MESSUNG ZU WIEDERHOLEN, bevor man sich dort darauf verlässt — sie
+// stammt von einer anderen Maschine und einer möglicherweise anderen
+// SC-Version.
 ~decoderOrientation = 0;
 
 // Pentatonische Tonleiter (Dur-Pentatonik, Halbtonabstände von der Grundnote)
@@ -180,6 +284,12 @@ s.waitForBoot({
     //   y.atan2(x). Vorzeichen und Nullpunkt sind ungemessen, siehe
     //   ~azimuthSign oben.
     //
+    //   ~azimuthOffset dreht das ganze Klangbild, hier und nur hier. Die
+    //   Drehung gehört in den ENCODER, weil das orientation-Argument des
+    //   Decoders gemessen wirkungslos ist (siehe Kopf der Datei). Kein
+    //   wrap nötig: PanB2 wickelt den Azimut selbst um ±1 herum, ebenfalls
+    //   gemessen.
+    //
     //   direct = Richtwirkung. Bei erster Ordnung IST die Richtwirkung das
     //   Verhältnis der X/Y-Anteile zum W-Anteil, eine Multiplikation genügt
     //   also. Bei direct = 0 bleibt nur der omnidirektionale Anteil und der
@@ -191,7 +301,7 @@ s.waitForBoot({
     //   sein als einer in der Mitte, die Lautstärke kommt allein aus energy.
     ~toBformat = { |sig, px, py|
         var azimuth, radius, direct, bf;
-        azimuth = (px * ~azimuthSign).atan2(py) / pi;
+        azimuth = ((px * ~azimuthSign).atan2(py) / pi) + ~azimuthOffset;
         radius  = px.hypot(py);
         direct  = (radius / ~maxRadiusM).clip(0, 1);
         bf = PanB2.ar(sig, azimuth, 1);
@@ -238,34 +348,52 @@ s.waitForBoot({
     // ein schlichter Startpunkt und ausdrücklich zum Ersetzen gedacht — die
     // Mechanik drumherum ist der Teil, der stimmen muss.
     SynthDef(\impulseDrone, { |freq = 220, amp = 0.08, out = 0, x = 0, y = 0, gate = 1|
-        var sig, env, xl, yl;
+        var sig, env, xl, yl, ampl;
         // Lag VOR der Umrechnung: ein springender Positionswert darf nicht
         // als Klick durchschlagen. Bei 10 Hz Melderate glättet 0.1 s die
         // Sprünge zwischen zwei Meldungen.
         xl = Lag.kr(x, 0.1);
         yl = Lag.kr(y, 0.1);
+        // amp braucht dieselbe Glättung und aus demselben Grund: die
+        // Energie eines Impulses ändert sich von Meldung zu Meldung, und
+        // ein Sprung der Lautstärke auf einem gehaltenen Ton knackt genauso
+        // wie ein Sprung der Position. Gleiche Zeit wie oben, damit
+        // Lautstärke und Ort nicht auseinanderlaufen.
+        ampl = Lag.kr(amp, 0.1);
         env = EnvGen.kr(Env.asr(0.05, 1, 0.3, \sin), gate, doneAction: 2);
         sig = LFTri.ar(freq) * 0.5 + SinOsc.ar(freq * 2.01, 0, 0.2);
         sig = LPF.ar(sig, freq * 6);
-        sig = sig * amp * env;
+        sig = sig * ampl * env;
         Out.ar(out, ~toBformat.(sig, xl, yl));
     }).add;
 
     // ---- SynthDef: der eine Decoder ----------------------------------
-    // Genau EIN Decoder am Ende der Kette. Der Default von orientation hier
-    // ist nur ein Rückfallwert; der gültige Wert kommt aus ~decoderOrientation
-    // und ist ungemessen (siehe Kopf der Datei).
+    // Genau EIN Decoder am Ende der Kette. Das orientation-Argument ist auf
+    // SC 3.11.2 gemessen WIRKUNGSLOS (siehe Kopf der Datei) — es bleibt
+    // verdrahtet, damit sich die Messung vor Ort mit ~setOrientation.() in
+    // einem Aufruf nachhören lässt. Gedreht wird das Klangbild woanders,
+    // nämlich mit ~azimuthOffset im Encoder.
     SynthDef(\b2Decoder, { |in = 0, orientation = 0, amp = 1|
         var bf, sig;
         bf  = In.ar(in, 3);
         sig = DecodeB2.ar(4, bf[0], bf[1], bf[2], orientation) * amp;
-        // Schutznetz gegen hartes digitales Clipping. Rechnung: eine Glocke
-        // erreicht im Anschlag amp * Summe(partialAmps) = 0.5 * 2.13 ≈ 1.07,
-        // und bis zu ~droneLimit = 32 Drohnen à höchstens
-        // 2 * ~droneAmpScale = 0.12 laufen gleichzeitig. Die Summe kann also
-        // 1.0 überschreiten — sie tut es nur bei zufälliger Gleichphasigkeit,
-        // weil die Stimmen auf verschiedenen Tonhöhen liegen, aber „selten"
-        // ist kein Schutz. Unterhalb von 0.95 ist der Limiter untätig.
+        // Schutznetz gegen hartes digitales Clipping. Rechnung: für eine
+        // einzelne Glocke ist amp * Summe(partialAmps) = 0.5 * 2.13 ≈ 1.07
+        // die OBERE SCHRANKE — erreicht wird sie nie, weil die fünf
+        // Teiltöne auf nicht ganzzahligen Verhältnissen liegen und nie
+        // gleichzeitig im Scheitel stehen. GEMESSEN 2026-07-30 (scsynth
+        // NRT, SC 3.11.2, Signalkette dieser SynthDef mono nachgebaut,
+        // Scheitel über die ersten 0.5 s, alle 15 verwendeten Tonhöhen):
+        // der tatsächliche Scheitel liegt bei amp = 0.5 zwischen 0.85 und
+        // 0.87, Grösstwert 0.864 bei 880 Hz.
+        // Dazu kommen bis zu ~droneLimit = 32 Drohnen à höchstens
+        // 2 * ~droneAmpScale = 0.12. Die Summe kann also 1.0 überschreiten
+        // — sie tut es nur bei zufälliger Gleichphasigkeit, weil die
+        // Stimmen auf verschiedenen Tonhöhen liegen, aber „selten" ist kein
+        // Schutz. Eine einzelne Glocke bleibt mit 0.86 unter der Schwelle,
+        // der Limiter ist im Normalfall also untätig und hörbar nur, wenn
+        // wirklich viel gleichzeitig klingt. Unterhalb von 0.95 greift er
+        // nicht ein.
         // Er wirkt je Kanal getrennt (Multichannel-Expansion): setzt er ein,
         // kann das Klangbild kurz wandern. Das ist der Preis dafür, dass ein
         // gekoppelter Vierkanal-Limiter kein Kern-UGen ist, und immer noch
@@ -298,6 +426,16 @@ s.waitForBoot({
     // .set: DecodeB2 rechnet die Lautsprecherwinkel möglicherweise beim Start
     // des Synths aus, und ob ein .set sie noch erreicht, ist ungeprüft. Neu
     // anlegen wirkt in jedem Fall.
+    //
+    // ACHTUNG: auf SC 3.11.2 ändert das GAR NICHTS — gemessen, siehe Kopf
+    // der Datei; auch das Neuanlegen half dort nicht, weil schon die
+    // Graphkonstante keine Wirkung hatte. Diese Funktion ist deshalb KEIN
+    // Werkzeug mehr, um eine 45°-Drehung zu beheben (das macht
+    // ~azimuthOffset). Sie ist genau noch für eines gut: die Messung auf
+    // dem Show-Rechner nachzuhören. Ändert sich beim Aufruf hörbar etwas,
+    // dann wertet die dortige SuperCollider-Version das Argument doch aus
+    // und die Messung von 2026-07-30 gilt dort nicht — das wäre ein Befund,
+    // der in diese Datei gehört.
     ~setOrientation = { |o|
         ~decoderOrientation = o;
         ~decoderSyn.free;
@@ -453,11 +591,27 @@ s.waitForBoot({
     //    vorn und hinten stimmen  ->  Azimut ist gespiegelt:
     //    ~azimuthSign = -1 setzen und die Datei neu auswerten.
     //  * jeder der vier Töne sitzt ZWISCHEN zwei Boxen, um 45° verdreht
-    //    ->  orientation stimmt nicht: ~setOrientation.(0.5) und den Test
-    //    wiederholen. Passt es dann, ~decoderOrientation oben auf 0.5.
+    //    ->  das ist der ERWARTETE Ausgangszustand bei ~azimuthOffset = 0,
+    //    kein Defekt: DecodeB2 stellt seine Boxen fest auf ±45°/±135°,
+    //    unsere stehen auf den Seitenmitten (gemessen, siehe Kopf der
+    //    Datei). Abhilfe ist ~azimuthOffset, NICHT ~setOrientation — das
+    //    ist auf SC 3.11.2 wirkungslos. Welche der beiden 45°-Drehungen es
+    //    braucht, sagt der Test selbst:
+    //      - „vorn" sitzt zwischen der vorderen und der RECHTEN Box
+    //        (also im Uhrzeigersinn zu weit)  ->  ~azimuthOffset = -0.25
+    //      - „vorn" sitzt zwischen der vorderen und der LINKEN Box
+    //        (gegen den Uhrzeigersinn zu weit)  ->  ~azimuthOffset = +0.25
+    //    Danach die Datei NEU AUSWERTEN (der Wert steht fest im Graphen,
+    //    ein .set erreicht ihn nicht) und diesen Test wiederholen: jetzt
+    //    muss jeder Ton IN der genannten Box stehen.
+    //    Bei ~azimuthOffset = 0 klingen alle vier Töne gleich diffus; bei
+    //    richtig gesetztem Offset klingen sie deutlich punktförmiger — das
+    //    ist neben der Richtung das zweite Merkmal, an dem man es hört.
     //  * die Richtungen sind um 90° oder 180° verdreht, aber nicht
-    //    gespiegelt  ->  das ist die Verkabelung, nicht die Rechnung:
-    //    mit dem Ergebnis von 1. die Boxen umstecken.
+    //    gespiegelt und nicht um 45° verschoben  ->  das ist die
+    //    Verkabelung, nicht die Rechnung: mit dem Ergebnis von 1. die
+    //    Boxen umstecken. (Eine 45°-Drehung dagegen bekommt man durch
+    //    Umstecken NIE weg — dafür ist ~azimuthOffset da.)
     //
     // Zu erwarten und KEIN Fehler: „vorn" und „hinten" klingen diffuser als
     // „rechts" und „links". Die Boxen stehen bei (0, ±4) und (±7, 0), und
@@ -474,8 +628,8 @@ s.waitForBoot({
                     \out, ~bformatBus.index], ~voices);
                 1.5.wait;
             });
-            ("== Azimuttest fertig (azimuthSign = %, orientation = %) ==".format(
-                ~azimuthSign, ~decoderOrientation)).postln;
+            ("== Azimuttest fertig (azimuthSign = %, azimuthOffset = %) ==".format(
+                ~azimuthSign, ~azimuthOffset)).postln;
         }).play;
     };
 
@@ -499,7 +653,16 @@ s.waitForBoot({
     // hört man auch dann noch eindeutig, wenn eine einzelne Position sich
     // schlecht orten lässt.
     ~testSweep = {
-        Routine({
+        // Vorgänger abräumen, BEVOR ein neuer Umlauf startet. Der Testsynth
+        // steht bewusst nicht in ~drones, der Reaper sieht ihn also nie —
+        // wird die Routine unterbrochen oder diese Funktion ein zweites Mal
+        // aufgerufen, bliebe der alte Synth sonst bis zum nächsten s.freeAll
+        // auf voller Lautstärke hängen. Erst die alte Routine anhalten (sonst
+        // schreibt sie weiter auf einen freigegebenen Node und der Server
+        // meldet in einer Tour „Node not found"), dann den Synth ins Release.
+        ~sweepRoutine !? { |r| r.stop };
+        ~sweepSyn     !? { |old| old.set(\gate, 0) };
+        ~sweepRoutine = Routine({
             var steps = 64, dur = 8.0, syn;
             var marks = [0, 16, 32, 48], names = ["vorn", "rechts", "hinten", "links"];
             "== Umlauftest: erwartet vorn -> rechts -> hinten -> links ==".postln;
@@ -507,6 +670,7 @@ s.waitForBoot({
                 \freq, 220, \amp, 0.15, \x, 0, \y, ~maxRadiusM,
                 \out, ~bformatBus.index
             ], ~voices);
+            ~sweepSyn = syn;
             steps.do({ |i|
                 var a = i / steps * 2pi;
                 var idx = marks.indexOf(i);
@@ -515,13 +679,18 @@ s.waitForBoot({
                 (dur / steps).wait;
             });
             syn.set(\gate, 0);
-            ("== Umlauftest fertig (azimuthSign = %) ==".format(~azimuthSign)).postln;
+            ~sweepSyn = nil;
+            ~sweepRoutine = nil;
+            ("== Umlauftest fertig (azimuthSign = %, azimuthOffset = %) ==".format(
+                ~azimuthSign, ~azimuthOffset)).postln;
         }).play;
     };
 
     "KlangNetz: Server gebootet (% Ausgangskanäle), hoere auf /net/hitNode und /net/impulse, Port % - bereit.".format(
         s.options.numOutputBusChannels, ~oscListenPort).postln;
-    "ACHTUNG: ~azimuthSign und ~decoderOrientation sind UNGEMESSEN. Vor der ersten Vorstellung ~testChannels.(), ~testAzimuth.(), ~testSweep.() durchlaufen - siehe Kopf der Datei.".postln;
+    ("ACHTUNG: ~azimuthSign (= %) und ~azimuthOffset (= %) sind UNGEMESSEN. Vor der ersten Vorstellung ~testChannels.(), ~testAzimuth.(), ~testSweep.() durchlaufen - interaktiv in der IDE oder einer sclang-REPL, siehe Kopf der Datei.".format(
+        ~azimuthSign, ~azimuthOffset)).postln;
+    "HINWEIS: ~decoderOrientation ist auf SC 3.11.2 GEMESSEN wirkungslos (NRT-Messung 2026-07-30, Gegenprobe mit PanAz). Gedreht wird mit ~azimuthOffset im Encoder. Auf dem Show-Rechner ist die Messung zu wiederholen.".postln;
 });
 )
 
@@ -533,8 +702,9 @@ s.waitForBoot({
 
 // ---- Messung der zwei ungemessenen Werte -------------------------------
 // Der Reihe nach auswerten, Ergebnis oben in ~azimuthSign und
-// ~decoderOrientation eintragen. Ausführlich kommentiert bei den Funktionen
-// oben im Block.
+// ~azimuthOffset eintragen. Ausführlich kommentiert bei den Funktionen
+// oben im Block. Braucht eine INTERAKTIVE Sitzung (IDE oder sclang-REPL) —
+// headless unter `sclang -D` gibt es nichts, woraus man das aufruft.
 // (
 // ~testChannels.();
 // )
@@ -544,6 +714,11 @@ s.waitForBoot({
 // (
 // ~testSweep.();
 // )
+// Nur noch als Gegenprobe der NRT-Messung auf dem Show-Rechner: ändert der
+// folgende Aufruf HÖRBAR etwas, wertet die dortige SuperCollider-Version das
+// orientation-Argument von DecodeB2 doch aus und die Messung von 2026-07-30
+// gilt dort nicht. Zum Beheben einer 45°-Drehung taugt er NICHT — dafür ist
+// ~azimuthOffset da.
 // (
 // ~setOrientation.(0.5);
 // )
