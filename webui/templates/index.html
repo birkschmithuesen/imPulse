@@ -23,6 +23,21 @@
 
   <p class="status" id="status" role="status">&nbsp;</p>
 
+  <section class="presets" id="presets">
+    <h2>Presets</h2>
+    <div class="preset-rows">
+      <div class="preset-row">
+        <select id="presetSelect" aria-label="Preset auswaehlen"></select>
+        <button type="button" id="presetLoad" title="Gewaehltes Preset laden (/preset/load)">Laden</button>
+      </div>
+      <div class="preset-row">
+        <input type="text" id="presetName" placeholder="neuer-preset-name" maxlength="64"
+               autocomplete="off" spellcheck="false" aria-label="Name fuer das neue Preset">
+        <button type="button" id="presetSave" title="Aktuelle Werte unter diesem Namen speichern (/preset/save)">Speichern</button>
+      </div>
+    </div>
+  </section>
+
   <main id="groups"></main>
 
   <script type="application/json" id="bootstrap">{{ bootstrap|safe }}</script>

@@ -21,6 +21,10 @@ const statusEl = document.getElementById('status');
 const metaEl = document.getElementById('meta');
 const couplingEl = document.getElementById('coupling');
 const reloadEl = document.getElementById('reload');
+const presetSelectEl = document.getElementById('presetSelect');
+const presetLoadEl = document.getElementById('presetLoad');
+const presetNameEl = document.getElementById('presetName');
+const presetSaveEl = document.getElementById('presetSave');
 
 let bootstrap = {};
 try {
@@ -528,6 +532,144 @@ async function reload() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Presets
+//
+// Die Liste kommt vom Dateisystem des Servers (er laeuft auf derselben
+// Maschine wie imPulse), die Kommandos gehen als OSC-String raus. Nach dem
+// Laden schickt der Server die Preset-Werte zurueck, damit die Regler
+// mitziehen -- still gesetzt, also ohne dabei ein zweites OSC auszuloesen.
+// ---------------------------------------------------------------------------
+
+/* Wortgleicher Spiegel von valid_preset_name() in server.py und
+ * PresetStore.isValidName() in Java. Java bleibt die Autoritaet (dort geht es
+ * um Pfad-Traversal); hier nur darum, eine ungueltige Eingabe gar nicht erst
+ * rauszuschicken. */
+function presetNameProblem(name) {
+  if (!name) { return 'Bitte einen Namen eingeben'; }
+  if (name.length > 64) { return 'Hoechstens 64 Zeichen'; }
+  if (!/^[a-z0-9_-]+$/.test(name)) {
+    return 'Erlaubt sind nur a-z, 0-9, Unterstrich und Bindestrich';
+  }
+  return null;
+}
+
+function fillPresets(payload) {
+  const names = (payload && payload.presets) || [];
+  const previous = presetSelectEl.value;
+  presetSelectEl.innerHTML = '';
+  names.forEach((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    presetSelectEl.appendChild(option);
+  });
+  if (!names.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'keine Presets';
+    presetSelectEl.appendChild(option);
+  }
+  presetSelectEl.disabled = !names.length;
+  presetLoadEl.disabled = !names.length;
+  if (names.indexOf(previous) >= 0) { presetSelectEl.value = previous; }
+  if (payload && payload.error) { setStatus(payload.error, 'warn'); }
+}
+
+async function refreshPresets() {
+  try {
+    const response = await fetch('/api/presets');
+    fillPresets(await response.json());
+  } catch (err) {
+    setStatus('Preset-Liste nicht abrufbar: ' + err, 'err');
+  }
+}
+
+async function loadPreset() {
+  const name = presetSelectEl.value;
+  if (!name) { return; }
+  presetLoadEl.disabled = true;
+  try {
+    const response = await fetch('/api/preset/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      setStatus('Laden fehlgeschlagen: ' + (data.error || 'HTTP ' + response.status), 'err');
+      // 404 heisst: die Datei ist weg, jemand hat sie von Hand geloescht
+      if (response.status === 404) { refreshPresets(); }
+      return;
+    }
+
+    let touched = 0;
+    Object.keys(data.values || {}).forEach((address) => {
+      const control = controls.get(address);
+      if (!control) { return; }
+      control.set(data.values[address], true);
+      control.flash();
+      touched += 1;
+    });
+    colorCards.forEach(syncColorCard);
+
+    let text = `Preset "${name}" geladen – ${touched} Regler nachgezogen`;
+    let level = 'ok';
+    if (data.outOfRange && data.outOfRange.length) {
+      text += ' | ausserhalb der UI-Range: ' + data.outOfRange
+        .map((e) => `${e.address} = ${e.value} (Regler zeigt ${e.shown})`).join(', ');
+      level = 'warn';
+    }
+    if (data.unknown && data.unknown.length) {
+      text += ' | nicht in remoteSettings.txt: ' + data.unknown.join(', ');
+      level = 'warn';
+    }
+    setStatus(text, level);
+  } catch (err) {
+    setStatus('Laden fehlgeschlagen: ' + err, 'err');
+  } finally {
+    presetLoadEl.disabled = presetSelectEl.disabled;
+  }
+}
+
+async function savePreset() {
+  const name = presetNameEl.value.trim();
+  const problem = presetNameProblem(name);
+  if (problem) {
+    setStatus(problem, 'err');
+    presetNameEl.focus();
+    return;
+  }
+  presetSaveEl.disabled = true;
+  setStatus(`Speichere "${name}" …`);
+  try {
+    const response = await fetch('/api/preset/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      setStatus('Speichern fehlgeschlagen: ' + (data.error || 'HTTP ' + response.status), 'err');
+      return;
+    }
+    fillPresets(data);
+    presetSelectEl.value = name;
+    presetNameEl.value = '';
+    setStatus(`Preset "${name}" ${data.overwritten ? 'ueberschrieben' : 'gespeichert'}`, 'ok');
+  } catch (err) {
+    setStatus('Speichern fehlgeschlagen: ' + err, 'err');
+  } finally {
+    presetSaveEl.disabled = false;
+  }
+}
+
+presetLoadEl.addEventListener('click', loadPreset);
+presetSaveEl.addEventListener('click', savePreset);
+presetNameEl.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') { savePreset(); }
+});
+
 const coupling = bootstrap.coupling || { speedAddress: '/net/impulse/speed', targets: [] };
 
 couplingEl.checked = localStorage.getItem(COUPLING_STORAGE_KEY) === '1';
@@ -541,4 +683,5 @@ couplingEl.addEventListener('change', () => {
 
 reloadEl.addEventListener('click', reload);
 
+fillPresets(bootstrap.presets);
 render(bootstrap);
