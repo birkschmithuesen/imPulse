@@ -10,7 +10,7 @@ Signalkette: `Max/MSP --OSC:8001--> Processing --Syphon--> MadMapper --ArtNet-->
 
 ## Ausführen
 
-Kein Build-System für den Sketch selbst — reines Processing-Projekt. Für die netz- und processingunabhängigen Teile (`ArtNetOutput`, `NodeCrossingStore`, `LedStripeNetworks`, `TestPatterns`) gibt es aber eine eigene Testsuite, siehe „Tests" unten.
+Kein Build-System für den Sketch selbst — reines Processing-Projekt. Für die netz- und processingunabhängigen Teile (`ArtNetOutput`, `NodeCrossingStore`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`) gibt es aber eine eigene Testsuite, siehe „Tests" unten.
 
 - **IDE**: `imPulse.pde` in Processing 3 öffnen, Play. Der Sketch-Ordner **muss** `imPulse` heissen (Processing-Konvention: Ordnername == Name der Haupt-`.pde`).
 - **CLI**: `processing-java --sketch=/Users/macbook/Projekte/_gitHub/imPulse --run`
@@ -25,13 +25,17 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle fünf Suiten:
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle neun Suiten — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
 - `NodeCrossingStoreTest` — Validierung, Undo, Laden/Speichern der Kreuzungsdatei, inklusive `clearAll()` und `removeAt()` (auch die Verschiebung von `loadedCount`, wenn ein geladener Eintrag gelöscht wird)
 - `ApplyCrossingsTest` — `LedInNetInfo.applyCrossings` baut die Node-Zuordnung korrekt neu auf, auch beim wiederholten Aufruf mit weniger Kreuzungen
 - `NodeSelectionTest` — der Auswahlzeiger der Kalibrierung: Blättern, Aufheben am Anfang, Klemmen bei schrumpfender Liste
+- `LedAnchorStoreTest` — Anker setzen und löschen, Bereichs- und Grundflächenprüfung, Verteilung einer Position auf alle LEDs einer Kreuzung, die Bogenlängen-Warnung, Laden/Speichern von `data/ledPositions.txt`
+- `LedPositionMapTest` — Interpolation zwischen zwei Ankern, Fortsetzung des Vektors darüber hinaus, Klemmung auf die Grundfläche, `coverageReport`
+- `LedPositionCalibrationTest` — Arbeitsliste, Zeiger, Umrechnung Pixel↔Meter, Vorschlag, Feinjustierung, `L`-Zeitfenster, Rückmeldung im Netz
+- `ImpulseOscThrottleTest` — Sendetakt (inklusive `rateHz = 0` und NaN) und die Auswahl der energiereichsten Impulse samt Tie-Break
 
 Daneben liegen im selben Ordner drei Sonden, die **echte Hardware ansprechen** und deshalb nicht Teil der Default-Suite sind: `TimingProbe` (misst den 40-Hz-Sendetakt am echten Netz), `PollProbe` (fragt die Controller per ArtPoll nach ihrem Befinden ab) und `PatternProbe` (speist die fünf Testbilder direkt über `ArtNetOutput` ein, ohne Processing-Laufzeit). Diese drei gezielt einzeln aufrufen, z. B. `test/run.sh TimingProbe`, niemals ungefragt gegen die Installation.
 
@@ -53,6 +57,7 @@ Bestehende Effekte:
 - `LedNetworkTransportEffect` — die wandernden Impulse (Kern der Installation)
 - `LedNetworkNodeEffects` — Darstellung der Nodes (Zustände: firing → inactive → waiting, mit Pulsmodulation)
 - `NodeCalibration` — **Kalibrier-Modus**, kein gestalterischer Effekt (siehe unten). Implementiert zwar `runnableLedEffect`, ist aber **nicht** über `mixer.addEffect(...)` registriert; `draw()` in `imPulse.pde` ruft `nodeCalibration.drawMe()` stattdessen direkt auf, wenn `calibrationMode` an ist, und ersetzt damit komplett die Mixer-Ausgabe für diesen Frame.
+- `LedPositionCalibration` — **Positions-Modus**, ebenfalls kein gestalterischer Effekt (siehe „LED-Positionen und Spatialisierung"). Wird genauso direkt aus `draw()` gerufen, wenn `positionMode` an ist, nennt das Interface aber bewusst gar nicht erst (siehe „Konventionen").
 
 ### OSC-Parametersystem (AbstractParameter.java)
 
@@ -63,7 +68,16 @@ Threading: `oscEvent()` läuft im oscP5-Thread und ruft nur `queueMessage()` (sy
 `data/remoteSettings.txt` wird bei **jedem Start** aus den registrierten Parametern neu geschrieben (`dumpParameterInfo`) und dient als Konfiguration der Remote-Oberfläche. Ein neuer `RemoteControlled*Parameter` taucht dort automatisch auf.
 
 Eingehende OSC-Adressen: `/tube/trigger` (int Stripe, 1-basiert; optional float Energie), `/net/activateNode` (int), `/net/activateStripe` (int) sowie alle in `remoteSettings.txt` gelisteten Parameteradressen.
-Ausgehend: `/net/hitNode` (int nodeId, float energy) an Port 8002.
+
+Ausgehend an Port 8002 (`oscOutput` in `imPulse.pde`, Auslieferungsziel `127.0.0.1`), beide aus `LedNetworkTransportEffect.java`:
+
+- `/net/hitNode <nodeId:int> <energy:float> <x:float> <y:float>` — ein Node hat gefeuert. `x`/`y` sind die Draufsicht-Position des Knotens in Metern (`LedNetworkNode.posX/posY`, gesetzt von `applyPositions`), rein **angehängt**: ein Empfänger, der nur die ersten zwei Argumente liest, bleibt unberührt.
+- `/net/impulse <impulseId:int> <x:float> <y:float> <energy:float>` — gedrosselter Positionsstrom der reisenden Impulse (`sendImpulseStream()`, Takt und Auswahl aus `ImpulseOscThrottle`). **Ein Datagramm je Impuls**, kein Anzahl-Feld, kein Bündel, keine Ende-Markierung — die Empfangsseite kann also nicht feststellen, wieviele Meldungen zu einem Takt gehören und braucht einen Timeout. Filler werden ausdrücklich übersprungen (sie tragen die ID ihres Elternimpulses). Es gibt **kein Todes-Signal**: ein Impuls kann aus der Auswahl der energiereichsten fallen, ohne zu sterben, deshalb deckt derselbe Timeout beides ab (`klangnetz_bells.scd`: 0,4 s, geprüft alle 0,1 s, Obergrenze 32 Drohnen).
+
+Die zwei zugehörigen Parameter, beide in `LedNetworkTransportEffect`:
+
+- `/net/impulse/oscRate` (float, Auslieferungswert 10, Bereich 0..40 Hz) — Sendetakt des Positionsstroms. **0 schaltet ihn ab**: kein Objekt, keine Liste, kein Datagramm. Der Not-Aus, wenn Netz oder Klangrechner während der Show nicht mitkommen; `/net/hitNode` läuft davon unberührt weiter. Beim Wiedereinschalten kommt sofort ein Takt (`lastSend` wird auf `-Infinity` zurückgesetzt), nicht erst nach einem Intervall — und es wird nichts nachgeholt: nach einer langen Pause gibt es **einen** Takt, keinen Schwall.
+- `/net/impulse/oscMaxCount` (int, Auslieferungswert 32, Bereich 0..256) — höchstens so viele Impulse je Takt, ausgewählt nach Energie absteigend. 0 sendet ebenfalls nichts, verbraucht aber den Takt und allokiert zwei Arrays — der teurere der beiden Schalter.
 
 ### Web-UI (webui/)
 
@@ -91,8 +105,10 @@ Für die processing-unabhängige Logik (Parser, Normalisierung, Gruppierung, Kop
 
 Jeder Impuls ist eine `TravellingActivation` (Position als float, Stripe, Geschwindigkeit inkl. Vorzeichen = Richtung, Energie). Pro Frame wird der Zeitschritt aus `System.currentTimeMillis()` gebildet — die Simulation hängt an der Wanduhr, nicht am Framecount.
 
+Jede `TravellingActivation` trägt ausserdem eine fortlaufende `id` (`final`, vergeben aus `nextImpulseId++` im äusseren Objekt) — die Kennung, unter der der Impuls im Positionsstrom `/net/impulse` auftaucht. Vergeben wird sie an **genau einer** Stelle, dem delegierenden Konstruktor, damit keine der acht Konstruktionsstellen sie vergessen kann; alle laufen auf dem Animationsthread (`digestMessage` wird nur aus `distributeMessages()` am Anfang von `draw()` gerufen), der Zähler braucht also keine Synchronisierung. Ein Überlauf nach 2^31 Impulsen ist hingenommen.
+
 Zwei Mechanismen, die man beim Ändern kennen muss:
-- **Filler**: Bei hoher Geschwindigkeit überspringt ein Impuls LEDs zwischen zwei Frames. Für die übersprungenen Positionen werden `TravellingActivationFiller` erzeugt, gezeichnet und am Ende desselben Frames wieder entfernt.
+- **Filler**: Bei hoher Geschwindigkeit überspringt ein Impuls LEDs zwischen zwei Frames. Für die übersprungenen Positionen werden `TravellingActivationFiller` erzeugt, gezeichnet und am Ende desselben Frames wieder entfernt. Ein Filler übernimmt die `id` seines Elternimpulses, statt eine neue zu verbrauchen — strukturell erzwungen, weil die Filler-Klasse nur den Konstruktor mit ausdrücklicher ID anbietet. Im Positionsstrom werden Filler zusätzlich explizit übersprungen, sonst sähe die Klangseite einen einzigen Impuls, der im selben Takt zwischen mehreren Positionen hin- und herspringt.
 - **nodeDeadTime**: Ein Node feuert erst wieder nach `/net/impulse/nodeDeadTime` Sekunden. Ohne diese Totzeit würde ein Impuls denselben Node in aufeinanderfolgenden Frames endlos neu triggern.
 
 Bei einem Node-Treffer erhält jeder Zweig aktuell die **volle** Energie des Elternimpulses (`childEnergy = curActivation.energy`) — ein bewusster Quick-Fix, jede Aufspaltung vervielfacht also die Gesamtenergie. Die auskommentierte Zeile darüber zeigt die energieerhaltende Variante.
@@ -100,15 +116,16 @@ Bei einem Node-Treffer erhält jeder Zweig aktuell die **volle** Energie des Elt
 **Ambient/idle Random-Spawns** (`spawnRandomImpulses()`, aufgerufen aus `drawMe()`):
 unabhängig von `/tube/trigger` und Node-Kettenreaktionen spawnt der Effekt in
 regelmäßigen (oder verjitterten) Abständen zufällige Impulse am Anfang
-zufällig gewählter Stripes — Standard-Zustand ist **aus** (`enabled=0`), ein
-Operator schaltet es live per OSC ein. Alle Parameter live tunbar, folgen dem
+zufällig gewählter Stripes — Standard-Zustand ist seit 2026-07-30 **an**
+(`enabled=1`, Klangnetz ist eine nicht-interaktive Installation), ein
+Operator schaltet es live per OSC ab. Alle Parameter live tunbar, folgen dem
 üblichen `RemoteControlled*Parameter`-Muster, tauchen also automatisch in
 `remoteSettings.txt` auf:
 - `/net/randomSpawn/enabled` (int 0/1) — ganz abschaltbar ohne Neustart
 - `/net/randomSpawn/count` (int, 1..nStripes) — Anzahl Stripes pro Spawn-Event (Ziehen ohne Zurücklegen)
-- `/net/randomSpawn/interval` (float, 0.05..10s) — Sekunden zwischen Spawn-Events
-- `/net/randomSpawn/energy` (float, 0..1) — Energie je gespawntem Impuls
-- `/net/randomSpawn/directionBias` (float, 0..1, default 0.5) — Wahrscheinlichkeit für "vorwärts"; rückwärts spawnt bewusst am anderen Stripe-Ende, sonst fällt der Impuls sofort aus den Bounds
+- `/net/randomSpawn/interval` (float, 0.05..40s, default 30) — Sekunden zwischen Spawn-Events
+- `/net/randomSpawn/energy` (float, 0..1, default 0.6) — Energie je gespawntem Impuls
+- `/net/randomSpawn/directionBias` (float, 0..1, default 1) — Wahrscheinlichkeit für "vorwärts"; rückwärts spawnt bewusst am anderen Stripe-Ende, sonst fällt der Impuls sofort aus den Bounds
 - `/net/randomSpawn/jitter` (float, 0..1, default 0) — 0 = exakt periodisch, 1 = Intervall stark verjittert (0..2× `interval`)
 
 Geschwindigkeit kommt bewusst von `impulseSpeed` (kein eigener Speed-Parameter),
@@ -167,11 +184,69 @@ Tastenbelegung (nur wirksam im Kalibriermodus, ausser `c`/`C` selbst):
 
 `data/nodeCrossings_16x720.txt` ist die Topologie der vorigen 16×720-Geometrie (aufgehoben als Beleg, nicht geladen), `data/nodeCrossings_35C3.txt` die der 35C3-Installation davor.
 
+### LED-Positionen und Spatialisierung
+
+**Handlungsanleitung für die Aufnahme steht in `docs/positionen-anleitung.md`** — Vorgehen, Gegenprüfen ohne Neustart, Korrigieren, Fallstricke. Der Abschnitt hier beschreibt das Werkzeug und die Rechnung dahinter.
+
+Jede LED bekommt eine Position in der **Draufsicht**, in Metern. Ursprung ist der Punkt senkrecht unter der Netzmitte, X zeigt nach rechts, Y nach vorn; die Grundfläche ist `footprintX = 14f` × `footprintY = 8f` Meter (Felder in `imPulse.pde`, installationsspezifisch wie `controllerOctets`). Kein z: das Netz hängt über Kopf, vier Lautsprecher in einer Ebene können die Höhe ohnehin nicht darstellen. `stripeLengthM = 10f` (2 × 5 m je Output) ergibt zusammen mit `numLedsPerStripe` den LED-Abstand `ledPitchM`.
+
+**Anker** heisst eine von Hand gesetzte Position. Nur sie steht in der Datei; alles andere wird gerechnet.
+
+`data/ledPositions.txt`: eine Zeile je Anker, `ledIndex x y` — globaler LED-Index, dann zwei Meterwerte mit **Dezimalpunkt** (`String.format` mit `Locale.US`, sonst schriebe eine deutsche Locale ein Komma und machte die Datei unlesbar). `#` leitet einen Kommentar ein, der Kopf wird beim Speichern neu geschrieben. Fehlerhafte Zeilen und Positionen ausserhalb der Grundfläche werden gemeldet und übersprungen, nicht als Absturz weitergereicht — dasselbe Verhalten wie bei `nodeCrossings.txt`.
+
+**Der Schlüssel ist der LED-Index, nicht die Knoten-Nummer.** Damit bleiben alle Positionen gültig, wenn sich die Kreuzungsliste ändert: eine physische LED wandert nicht, wenn eine Kreuzung nachgetragen oder korrigiert wird. Bei Knoten-Nummern würde `NodeCrossingStore.removeAt()` alle folgenden Positionen verschieben. Beide LEDs einer Kreuzung stehen deshalb als zwei Zeilen mit derselben Position in der Datei.
+
+Vier Klassen, alle vier **ohne Processing-, oscP5- und netP5-Abhängigkeit** und damit über `test/run.sh` prüfbar — dasselbe Muster, aus dem in diesem Projekt schon `ArtNetOutput`, `NodeCrossingStore` und `NodeSelection` herausgezogen sind:
+
+- `LedAnchorStore` — hält die Anker, validiert Bereich und Grundfläche, verteilt eine gesetzte Position auf **alle** LEDs der betroffenen Kreuzung (eine Kreuzung ist ein physischer Punkt, das ist keine Schätzung), liest und schreibt die Datei atomar. Die Kreuzungsliste wird hereingegeben statt gehalten, damit der Store ohne eigene Kenntnis der Topologie auskommt. Statt eines `loadedCount`-Grenzindex hält er eine **Menge** geladener Schlüssel — die Falle aus `NodeCrossingStore.removeAt()` wird so strukturell unmöglich statt behandelt.
+- `LedPositionMap` — rechnet daraus die Position jeder einzelnen LED: zwischen zwei Ankern interpoliert, jenseits des äussersten der Vektor der äussersten **zwei** fortgesetzt (nicht der vom ersten zum letzten), geklemmt auf die Grundfläche. Ein einzelner Anker legt den ganzen Stripe auf diesen Punkt; ohne jeden Anker liefert `positionOf` `false`. `apply()` rechnet einmal alles vor, der heisse Pfad im Transport-Effekt liest nur noch die Arrays. `coverageReport()` nennt undefinierte und nur extrapolierte LEDs sowie die Stripes ohne jeden Anker.
+- `LedPositionCalibration` — das Erfassungswerkzeug: Arbeitsliste, Zeiger, Umrechnung Pixel↔Meter, Befehle, Rückmeldung im Netz. Ein **Eintrag** der Arbeitsliste ist ein physischer Punkt, nicht eine LED: jede Kreuzung ein Eintrag (mit zwei oder mehr LEDs), dazu Anfang und Ende jedes Stripes, sofern die nicht schon zu einer Kreuzung gehören. Sortiert nach kleinstem LED-Index — eine Kreuzung steht damit im Abschnitt des Stripes mit der **niedrigeren** Nummer, im anderen taucht sie nicht noch einmal auf.
+- `ImpulseOscThrottle` — Sendetakt und Auswahl für `/net/impulse`, siehe „OSC-Parametersystem".
+
+Der **Vorschlag**, den das Werkzeug anzeigt, *ist* das Ergebnis von `LedPositionMap.positionOf` — es gibt bewusst keinen zweiten Rechenweg für „geschätzte" Positionen und damit keine zweite Wahrheit, die auseinanderlaufen könnte.
+
+Ein/Aus mit `p`/`P` (`positionMode` in `imPulse.pde`); solange aktiv, ersetzt `ledPositionCalibration.drawMe()` komplett die Mixer-Ausgabe. `p` und `c` **schliessen sich gegenseitig aus** — beide belegen `,` `.` `S` `R` `F` `L`, der zuletzt eingeschaltete gewinnt. Beim Eintritt in den Positionsmodus läuft `reapply()`, weil sich die Kreuzungsliste im Kalibriermodus geändert haben kann. Anders als die Testbilder läuft der Positionsmodus auf dem Show-Fader `masterLevel`, nicht auf `CALIBRATION_MASTER_LEVEL`: das Netz zeigt hier nur schwache Farbflächen und einen blinkenden Punkt, und ein Fader lässt sich per OSC hochziehen, eine Konstante nicht.
+
+Das Fenster zeigt links die **Draufsicht-Fläche** bei `(paneX, paneY, paneW, paneH) = (0, 0, 525, 300)` px — 525:300 entspricht 14:8 genau, es gibt also keine Verzerrung, ein Pixel sind 2,7 cm. Gezeichnet werden 1-m-Raster, die vier Lautsprecher, alle gesetzten Anker, der Verlauf des aktuellen Stripes und der aktuelle Eintrag (gefüllt = gesetzt, hohl = nur Vorschlag). Rechts daneben sitzt die verkleinerte LED-Vorschau, darunter das HUD. Gezeichnet und angeklickt wird über dieselbe Umrechnung (`worldToPane`/`paneToWorld`), Klicks ausserhalb der Fläche werden verworfen.
+
+Tastenbelegung (nur wirksam im Positionsmodus, ausser `p`/`P` selbst):
+- **Maus** (Klick oder Ziehen): Position des aktuellen Eintrags setzen — bei einer Kreuzung beide LEDs auf einmal
+- **ENTER**: den angezeigten Vorschlag als Anker übernehmen
+- **Pfeiltasten**: die angezeigte Position um eine Schrittweite verschieben. Steht der Eintrag noch auf einem Vorschlag, wird er dadurch zum Anker — genau das will man, wenn ein Vorschlag nur ein Stück nachzubessern ist
+- **F**: Schrittweite durchschalten (`STEP_SIZES_M = { 0.01f, 0.05f, 0.25f }`, Start bei 0,05 m)
+- **BACKSPACE**: die Anker **aller** LEDs des aktuellen Eintrags löschen (nicht nur die der ersten, sonst bliebe bei einer Kreuzung die halbe Position stehen). Die Anzeige fällt danach auf den Vorschlag zurück
+- **`,` / `.`**: durch die Arbeitsliste blättern
+- **o**: zum nächsten noch **offenen** Eintrag hinter dem aktuellen springen. Bleibt am Ende stehen und meldet die Gesamtzahl der offenen Einträge
+- **S**: `data/ledPositions.txt` schreiben (atomar über Temp-Datei + Rename, kein Anhängen)
+- **R**: Positionskarte und Knotenpositionen neu rechnen und übernehmen, **und** die Arbeitsliste neu aufbauen (damit im Kalibriermodus aufgenommene Kreuzungen auftauchen). Der Zeiger bleibt dabei auf demselben physischen Punkt — gemerkt werden **alle** LEDs des Eintrags, nicht nur die kleinste, weil eine neu aufgenommene Kreuzung ihn mit einer kleineren zusammenlegen kann
+- **T**: Abdeckungsbericht auf die Konsole und ins HUD
+- **L**: **alle** Anker verwerfen, auch die geladenen — Bestätigung wie in der Node-Kalibrierung: erster Druck kündigt an, ein zweiter zwischen 300 ms und 5 s danach führt aus, jede andere Taste bricht ab
+
+Rückmeldung im Netz (`drawMe()`, spätere Regel überschreibt frühere): jede LED zeigt den Zustand der Karte — **dunkel** = dieser Stripe hat keinen Anker, **rot** = nur extrapoliert, **blau** = zwischen zwei Ankern; der Stripe des aktuellen Eintrags glimmt **grün**; die LEDs des aktuellen Eintrags **blinken weiss** (400 ms an/aus). Die Karte wird nur nach einer Änderung neu gerechnet (`mapDirty`), nicht in jedem Frame.
+
+**`R` in der Node-Kalibrierung zieht die Positionen mit nach.** `LedInNetInfo.applyCrossings` baut die `LedNetworkNode`-Objekte komplett neu auf, die frischen Knoten haben also `posX/posY = 0`. Deshalb ruft `imPulse.pde` direkt danach `ledPositionCalibration.reapply()`. Ohne diese Zeile meldete `/net/hitNode` ab diesem Moment für **jeden** Knoten (0,0) — die Netzmitte, alle Stimmen auf einem Punkt — und zwar ohne Fehler, ohne sichtbares Symptom und bis zum nächsten Neustart. Nicht wegkürzen.
+
+`LedAnchorStore` **warnt**, wenn die Luftlinie zwischen zwei benachbarten Ankern desselben Stripes den Weg entlang des Stripes um mehr als `WARN_SLACK_M = 0.5f` m überschreitet — das ist physikalisch unmöglich und heisst fast immer: falsche Netzseite angeklickt. Es **lehnt nicht ab**, anders als die Kreuzungsvalidierung: die Regel hängt an zwei Annahmen (LED-Abstand, durchgehender Strang), und stimmt eine davon vor Ort nicht, wäre ein hartes Nein ein Werkzeug, das sich mitten in der Arbeit selbst blockiert.
+
+Fehlen beim Start Positionen, meldet `setup()` eine `WARNUNG`-Zeile mit dem Abdeckungsbericht. Die Show läuft dann wie bisher, nur ohne Raumbezug: jede betroffene Koordinate ist (0,0).
+
+#### Klangseite (supercollider/klangnetz_bells.scd)
+
+Vierkanal-Kette: Ambisonics 2D erster Ordnung mit Kern-UGens (`PanB2` als Encoder, **ein** `DecodeB2` am Ende), Glocken an den Knoten (`/net/hitNode`) und leise Drohnen, die den reisenden Impulsen folgen (`/net/impulse`). Lautsprecher auf den **Seitenmitten** (0,+4), (+7,0), (0,−4), (−7,0), nicht in den Ecken.
+
+Zwei Dinge, die man kennen muss, bevor man dort etwas anfasst:
+
+- **`~azimuthSign` und `~azimuthOffset` sind ausdrücklich UNGEMESSEN.** Sie brauchen vier angeschlossene Boxen und ein Paar Ohren; ein falsches Vorzeichen spiegelt das Klangbild, ein falscher Offset dreht es, und beides geht ohne Fehlermeldung durch. Die Datei bringt dafür `~testChannels.()`, `~testAzimuth.()` und `~testSweep.()` mit und beschreibt den Ablauf in ihrem Kopfblock. **Die Installation darf nicht öffnen, bevor diese Messung gemacht und mit Datum eingetragen ist.** Die Messsitzung ist interaktiv (IDE oder `sclang`-REPL) — headless unter `sclang -D` gibt es nichts, woraus man die Funktionen aufruft.
+- **`DecodeB2` ignoriert sein `orientation`-Argument** auf SC 3.11.2. Gemessen am 2026-07-30 (scsynth im NRT-Modus, `DC.ar(1)`): bytegleiche Ausgabe für 0 / 0.25 / 0.5 / 1.0, als Graphkonstante wie als Synth-Control, während `PanAz` im selben Aufbau sofort reagiert. Der Decoder setzt seine Boxen damit fest auf ±45°/±135° — gegen unsere Seitenmitten also 45° daneben, und keine Umverkabelung bildet eine Drehung ab. Deshalb wird im **Encoder** gedreht, über `~azimuthOffset`. Derselbe Fall wie bei der ArtNet-Bytefolge: massgeblich ist die Messung, nicht die Herleitung. Die Messung stammt von einer anderen Maschine und ist auf dem Show-Rechner zu wiederholen (`~setOrientation.()` ist genau dafür noch da, und für nichts anderes mehr).
+
 ## Konventionen und Fallstricke
 
 - **Klassenname ≠ Dateiname**: Alle `.java`-Dateien liegen flach im Sketch-Ordner, Processing kompiliert sie ins Default-Package. Die meisten Klassen sind package-private, mehrere pro Datei (z. B. `LedNetworkNode` + `LedInNetInfo` in `LedStripeNetworks.java`). Beim Suchen nach einer Klasse also nicht auf den Dateinamen verlassen.
 - **Nicht initialisierte `PApplet`-Felder**: `Mixer.papplet`, `TemplateEffect.papplet` usw. werden nie zugewiesen und sind `null`. Über sie werden ausschliesslich *statische* `PApplet`-Helfer aufgerufen (`ceil`, `constrain`, `map`, `str`) — in Java erlaubt. Ein Aufruf einer Instanzmethode über diese Felder wirft sofort eine NPE.
 - **Hardware-Konstanten** (`controllerOctets`, `numLedsPerStripe`, OSC-Ports, Master-Pegel-Obergrenze) stehen als Felder oben in `imPulse.pde` und sind installationsspezifisch — nicht ändern, ohne dass es um eine konkrete Installation geht.
-- **Fenstergrösse in `size()`**: Processing erlaubt dort nur Literale, keine Variablen. Die Höhe muss von Hand zur Stripe-Zahl passen — Vorschau braucht `numStripes*10` Pixel, darunter das mehrzeilige Kalibrier-HUD (siehe Kommentar direkt bei `size(...)` in `imPulse.pde`).
+- **Fenstergrösse in `size()`**: Processing erlaubt dort nur Literale, keine Variablen. Die Höhe muss von Hand zur Stripe-Zahl passen — Vorschau braucht `numStripes*10` Pixel, darunter das mehrzeilige Kalibrier-HUD (siehe Kommentar direkt bei `size(...)` in `imPulse.pde`). Der Kommentar dort rechnet nur mit den vier Zeilen des Kalibrier-HUDs; das Positions-HUD hat fünf und sitzt unter einer 525 × 300 px grossen Draufsicht-Fläche. Wer die Fensterhöhe neu herleitet, muss beides prüfen.
 - **Farbwerte 0..1** durchgängig; Werte > 1 sind erlaubt und werden erst am Output geclampt (`LedColor.clamp()` wird im Mixer bewusst nicht aufgerufen).
+- **`LedPositionCalibration` nennt bewusst kein `implements runnableLedEffect`.** Das Interface steht in `mixer.java`, das über `RemoteControlledFloatParameter` an `oscP5` hängt — eine Klasse, die es nennt, lässt sich von `test/run.sh` nicht mehr übersetzen. `imPulse.pde` ruft `drawMe()` ohnehin direkt auf und geht nie über den Mixer (genau wie bei `NodeCalibration`); das Interface wäre also nur ein Etikett, das die Prüfbarkeit kostet. Dieselbe Überlegung ist der Grund, warum `ImpulseOscThrottle` eine eigene Klasse ist statt einer Methode in `LedNetworkTransportEffect`.
+- **Keine von der Kreuzungszahl abgeleitete Zahl als Literal** in Code oder Test: `data/nodeCrossings.txt` wächst während der Kalibrierung, jede fest eingetragene Anzahl von Knoten, Einträgen oder Ankern ist also am nächsten Tag falsch. Testaufbauten bauen sich ihre Kreuzungsliste selbst und rechnen ihre Erwartungen daraus.
+- **`RemoteControlledIntParameter` schneidet vor dem Abbilden ab** (`AbstractParameter.java`, vorbestehend): der Float-Zweig von `digestMessage` ruft `.intValue()` **vor** `PApplet.map(...)`. Ein normalisierter Fader, der 0..1 als Float schickt, landet damit für jeden Wert unter 1.0 auf `minValue`. Bei `/net/impulse/oscMaxCount` ist das Ergebnis **Stille, die wie funktionierende Software aussieht**. Wer eine Fernsteuerung anschliesst (`webui/` tut das richtig), muss für Int-Parameter echte Ganzzahlen senden.
 - Bekannte offene Punkte stehen als To-Do-Block am Kopf von `imPulse.pde`.
