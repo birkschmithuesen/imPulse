@@ -205,6 +205,110 @@ class LedAnchorStore {
     message = n + " Positionen verworfen (auch geladene)";
   }
 
+  // Liest die Datei. Fehlerhafte Zeilen werden gemeldet und uebersprungen,
+  // nicht als Absturz beim naechsten Start weitergereicht - dasselbe
+  // Verhalten wie NodeCrossingStore.load().
+  //
+  // Ersetzt den Inhalt, haengt nicht an.
+  void load(String path) {
+    warned = false;
+    anchors.clear();
+    loadedKeys.clear();
+    File f = new File(path);
+    if (!f.exists()) {
+      message = "Keine Datei " + path + ", starte ohne Positionen";
+      return;
+    }
+    int lineNo = 0;
+    int skipped = 0;
+    java.io.BufferedReader reader = null;
+    try {
+      reader = new java.io.BufferedReader(new java.io.FileReader(f));
+      String line = reader.readLine();
+      while (line != null) {
+        lineNo++;
+        int hash = line.indexOf('#');
+        String body = (hash >= 0 ? line.substring(0, hash) : line).trim();
+        if (body.length() > 0) {
+          if (!parseLine(body, lineNo)) {
+            skipped++;
+          }
+        }
+        line = reader.readLine();
+      }
+    } catch (java.io.IOException e) {
+      System.out.println("Positionsdatei konnte nicht gelesen werden: " + e);
+    } finally {
+      if (reader != null) {
+        try { reader.close(); } catch (java.io.IOException e) { }
+      }
+    }
+    loadedKeys.addAll(anchors.keySet());
+    message = anchors.size() + " Positionen geladen"
+        + (skipped > 0 ? ", " + skipped + " Zeilen uebersprungen" : "");
+  }
+
+  private boolean parseLine(String body, int lineNo) {
+    String[] parts = body.split("\\s+");
+    if (parts.length != 3) {
+      System.out.println("Zeile " + lineNo + " uebersprungen: " + parts.length
+          + " Felder statt 3 (erwartet: ledIndex x y)");
+      return false;
+    }
+    int idx;
+    float px;
+    float py;
+    try {
+      idx = Integer.parseInt(parts[0]);
+      px = Float.parseFloat(parts[1]);
+      py = Float.parseFloat(parts[2]);
+    } catch (NumberFormatException e) {
+      System.out.println("Zeile " + lineNo + " uebersprungen: keine Zahl in \""
+          + body + "\"");
+      return false;
+    }
+    if (!inRange(idx)) {
+      System.out.println("Zeile " + lineNo + " uebersprungen: LED-Index " + idx
+          + " liegt ausserhalb von 0.." + (numStripes * numLedsPerStripe - 1));
+      return false;
+    }
+    if (px < -halfX || px > halfX || py < -halfY || py > halfY) {
+      System.out.println("Zeile " + lineNo + " uebersprungen: Position " + px + " / "
+          + py + " liegt ausserhalb der Grundflaeche");
+      return false;
+    }
+    anchors.put(Integer.valueOf(idx), new float[] { px, py });
+    return true;
+  }
+
+  // Schreibt die vollstaendige Liste in eine Nebendatei und benennt sie
+  // anschliessend um. Damit gibt es weder doppelte Eintraege durch Anhaengen
+  // noch einen halb geschriebenen Stand bei Absturz.
+  //
+  // loadedCount bleibt unberuehrt: Speichern soll die Unterscheidung
+  // geladen/neu nicht verwischen, damit man nach dem Speichern weiter
+  // erkennt, was in dieser Sitzung dazugekommen ist.
+  void save(String path) throws java.io.IOException {
+    File target = new File(path);
+    File tmp = new File(path + ".tmp");
+    java.io.PrintWriter writer = new java.io.PrintWriter(tmp, "UTF-8");
+    try {
+      writer.println("# LED-Positionen in der Draufsicht. Eine Zeile je Anker:");
+      writer.println("#   ledIndex  x[m]  y[m]");
+      writer.println("# Grundflaeche " + (2 * halfX) + " x " + (2 * halfY)
+          + " m. Ursprung senkrecht unter der Netzmitte.");
+      writer.println("# X nach rechts. Y nach vorn. Siehe docs/positionen-anleitung.md");
+      for (java.util.Map.Entry<Integer, float[]> e : anchors.entrySet()) {
+        writer.println(e.getKey() + " " + fmt(e.getValue()[0]) + " " + fmt(e.getValue()[1]));
+      }
+    } finally {
+      writer.close();
+    }
+    java.nio.file.Files.move(tmp.toPath(), target.toPath(),
+        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+    message = anchors.size() + " Positionen nach " + target.getName() + " geschrieben";
+  }
+
   // Drei Dezimalstellen mit Punkt, unabhaengig von der Locale des Rechners -
   // String.format wuerde in einer deutschen Locale ein Komma schreiben und
   // die Datei damit unlesbar machen.

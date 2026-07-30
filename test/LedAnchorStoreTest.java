@@ -230,6 +230,99 @@ public class LedAnchorStoreTest {
     Check.that("abgelehnt wegen Grundflaeche", !w9.set(6, 99f, 0f, NO_CROSSINGS));
     Check.that("und die Warnung ist weg", !w9.lastWasWarning());
 
+    // ---- Datei-Rundlauf ----
+    java.io.File dir = java.nio.file.Files.createTempDirectory("ledpos").toFile();
+    java.io.File file = new java.io.File(dir, "ledPositions.txt");
+
+    LedAnchorStore wr = store();
+    wr.set(5, -3.25f, 1.1f, NO_CROSSINGS);
+    wr.set(PER_STRIPE + 3, 2.9f, -0.45f, NO_CROSSINGS);
+    wr.set(2 * PER_STRIPE, 0f, 0f, NO_CROSSINGS);
+    Check.eq("drei Anker vor dem Schreiben", 3, wr.size());
+    wr.save(file.getAbsolutePath());
+    Check.that("die Datei existiert", file.exists());
+    Check.eq("save() laesst loadedCount unveraendert", 0, wr.loadedCount());
+    Check.eq("und sessionCount auch", 3, wr.sessionCount());
+
+    LedAnchorStore rd = store();
+    rd.load(file.getAbsolutePath());
+    Check.eq("drei Anker geladen", 3, rd.size());
+    Check.near("x kam zurueck", -3.25, rd.x(5), 1e-3);
+    Check.near("y kam zurueck", 1.1, rd.y(5), 1e-3);
+    Check.near("negatives y kam zurueck", -0.45, rd.y(PER_STRIPE + 3), 1e-3);
+    Check.eq("alle gelten als geladen", 3, rd.loadedCount());
+    Check.eq("keine Sitzungseintraege", 0, rd.sessionCount());
+    Check.that("wasLoaded ist true", rd.wasLoaded(5));
+
+    // Ein geladener Anker, der ueberschrieben wird, ist danach ein
+    // Sitzungseintrag
+    Check.that("geladenen Anker ueberschreiben", rd.set(5, 1f, 1f, NO_CROSSINGS));
+    Check.eq("einer weniger geladen", 2, rd.loadedCount());
+    Check.eq("einer mehr in der Sitzung", 1, rd.sessionCount());
+
+    // Loeschen eines geladenen Ankers zieht loadedCount mit
+    LedAnchorStore rd2 = store();
+    rd2.load(file.getAbsolutePath());
+    Check.eq("drei geladen", 3, rd2.loadedCount());
+    Check.that("einen geladenen loeschen", rd2.remove(5));
+    Check.eq("loadedCount sinkt mit", 2, rd2.loadedCount());
+    Check.eq("sessionCount bleibt bei null", 0, rd2.sessionCount());
+
+    // ---- Punkt als Dezimaltrennzeichen, unabhaengig von der Locale ----
+    String written = new String(
+        java.nio.file.Files.readAllBytes(file.toPath()), "UTF-8");
+    Check.that("die Datei enthaelt kein Komma", written.indexOf(',') < 0);
+    Check.that("die Datei enthaelt einen Punkt", written.indexOf('.') >= 0);
+
+    // ---- Mehrfaches Speichern verdoppelt nichts ----
+    wr.save(file.getAbsolutePath());
+    wr.save(file.getAbsolutePath());
+    LedAnchorStore rd3 = store();
+    rd3.load(file.getAbsolutePath());
+    Check.eq("nach dreimal speichern immer noch drei Anker", 3, rd3.size());
+
+    // ---- Fehlende Datei ----
+    LedAnchorStore missing = store();
+    missing.load(new java.io.File(dir, "gibtsnicht.txt").getAbsolutePath());
+    Check.eq("fehlende Datei ergibt eine leere Liste", 0, missing.size());
+    Check.that("und eine Meldung", missing.lastMessage().length() > 0);
+
+    // ---- Kaputte Zeilen werden uebersprungen, gute geladen ----
+    java.io.File bad = new java.io.File(dir, "kaputt.txt");
+    java.io.PrintWriter pw = new java.io.PrintWriter(bad, "UTF-8");
+    pw.println("# Kommentarzeile, wird ignoriert");
+    pw.println("");
+    pw.println("   ");
+    pw.println("3 1.500 -2.250");          // gueltig
+    pw.println("nichts 1.0 2.0");          // Index keine Zahl
+    pw.println("4 keinezahl 2.0");          // x keine Zahl
+    pw.println("5 1.0");                    // zu wenig Felder
+    pw.println("6 1.0 2.0 3.0");            // zu viele Felder
+    pw.println("-1 1.0 2.0");               // Index ausserhalb
+    pw.println((STRIPES * PER_STRIPE) + " 1.0 2.0");  // Index ausserhalb
+    pw.println("7 99.0 2.0");               // Position ausserhalb der Grundflaeche
+    pw.println("8 -6.000 3.000");           // gueltig
+    pw.close();
+
+    LedAnchorStore badStore = store();
+    badStore.load(bad.getAbsolutePath());
+    Check.eq("nur die zwei gueltigen Zeilen wurden geladen", 2, badStore.size());
+    Check.that("die erste gueltige Zeile", badStore.has(3));
+    Check.near("mit ihrem x", 1.5, badStore.x(3), 1e-3);
+    Check.near("mit ihrem y", -2.25, badStore.y(3), 1e-3);
+    Check.that("die zweite gueltige Zeile", badStore.has(8));
+    Check.that("die kaputten nicht", !badStore.has(5) && !badStore.has(6));
+    Check.that("und die ausserhalb der Grundflaeche auch nicht", !badStore.has(7));
+    Check.that("die Meldung nennt die uebersprungenen Zeilen",
+        badStore.lastMessage().length() > 0);
+
+    // ---- load() ersetzt, haengt nicht an ----
+    LedAnchorStore twice = store();
+    twice.load(file.getAbsolutePath());
+    int firstLoad = twice.size();
+    twice.load(file.getAbsolutePath());
+    Check.eq("zweites load() ersetzt statt anzuhaengen", firstLoad, twice.size());
+
     System.exit(Check.report("LedAnchorStoreTest"));
   }
 }
