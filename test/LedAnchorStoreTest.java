@@ -269,10 +269,22 @@ public class LedAnchorStoreTest {
     Check.eq("sessionCount bleibt bei null", 0, rd2.sessionCount());
 
     // ---- Punkt als Dezimaltrennzeichen, unabhaengig von der Locale ----
+    // Geprueft werden die DATENZEILEN, nicht der Kopfkommentar: dort steht
+    // deutsche Prosa, die selbstverstaendlich Kommas enthalten darf. Die Falle,
+    // um die es geht, ist String.format ohne Locale.US - das schreibt auf einem
+    // deutsch eingestellten Rechner "-3,250", und Float.parseFloat liest das
+    // beim naechsten Start nicht mehr.
     String written = new String(
         java.nio.file.Files.readAllBytes(file.toPath()), "UTF-8");
-    Check.that("die Datei enthaelt kein Komma", written.indexOf(',') < 0);
-    Check.that("die Datei enthaelt einen Punkt", written.indexOf('.') >= 0);
+    int dataLines = 0;
+    for (String ln : written.split("\n")) {
+      String t = ln.trim();
+      if (t.length() == 0 || t.startsWith("#")) { continue; }
+      dataLines++;
+      Check.that("Datenzeile ohne Komma: \"" + t + "\"", t.indexOf(',') < 0);
+      Check.that("Datenzeile mit Punkt: \"" + t + "\"", t.indexOf('.') >= 0);
+    }
+    Check.eq("drei Datenzeilen geschrieben", 3, dataLines);
 
     // ---- Mehrfaches Speichern verdoppelt nichts ----
     wr.save(file.getAbsolutePath());

@@ -296,8 +296,8 @@ class LedAnchorStore {
       writer.println("# LED-Positionen in der Draufsicht. Eine Zeile je Anker:");
       writer.println("#   ledIndex  x[m]  y[m]");
       writer.println("# Grundflaeche " + (2 * halfX) + " x " + (2 * halfY)
-          + " m. Ursprung senkrecht unter der Netzmitte.");
-      writer.println("# X nach rechts. Y nach vorn. Siehe docs/positionen-anleitung.md");
+          + " m, Ursprung senkrecht unter der Netzmitte,");
+      writer.println("# X nach rechts, Y nach vorn. Siehe docs/positionen-anleitung.md");
       for (java.util.Map.Entry<Integer, float[]> e : anchors.entrySet()) {
         writer.println(e.getKey() + " " + fmt(e.getValue()[0]) + " " + fmt(e.getValue()[1]));
       }
