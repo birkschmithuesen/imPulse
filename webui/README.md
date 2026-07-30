@@ -29,6 +29,16 @@ Datei nach einem imPulse-Neustart sofort neu ein.
   und zeigt zusaetzlich einen Farbwaehler, der alle drei gemeinsam setzt
 - Gruppierung nach Adress-Praefix (alles unter `/net/impulse` zusammen, alles
   unter `/net/randomSpawn` zusammen usw.)
+- Trigger-Parameter (`/net/activateNode`, `/net/activateStripe` — Einmal-
+  Aktionen, keine Regler-Werte) bekommen ein eigenes Widget: Zahlenfeld +
+  **Ausloesen**-Knopf, statt eines Sliders, der einen falschen „gehaltenen
+  Zustand" suggerieren wuerde
+- `oscMaxCount` und `energyExponent` (Setup-/Sicherheitsparameter, keine
+  Alltags-Regler) stehen in einer eigenen, per Default eingeklappten
+  **Advanced**-Sektion, statt zwischen Farbe und Speed
+
+Vollstaendige Range-/Sections-Analyse aller OSC-Parameter:
+`docs/webui-parameter-review-2026-07-30.md`.
 
 Jede Aenderung geht **sofort** raus (erste Bewegung direkt, danach hoechstens
 alle 150 ms eine Nachricht, der letzte Wert in jedem Fall) — kein Speichern-Knopf.
