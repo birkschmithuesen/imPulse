@@ -394,13 +394,23 @@ class LedPositionCalibration {
   }
 
   // Verwerfen ALLER Anker, auch der geladenen. Erster Druck kuendigt an, ein
-  // zweiter zwischen 300 ms und 5 s danach fuehrt aus. Die Untergrenze wehrt
-  // Tastenwiederholung bei gehaltenem L ab; die angekuendigte Bestaetigung
-  // wird dabei NICHT erneuert, sonst haelt ein gedruecktes L das Fenster
-  // endlos offen.
+  // zweiter zwischen 300 ms und 5 s danach fuehrt aus.
+  //
+  // Die Untergrenze allein reicht gegen Tastenwiederholung NICHT: solange ein
+  // zu frueher Druck nur uebersprungen wurde, lief die Uhr seit dem ersten
+  // Druck weiter, und der Ereignisstrom eines gehaltenen L (X11: erste
+  // Wiederholung nach ca. 500 ms, danach alle ca. 30 ms) traf zwangslaeufig
+  // irgendwann das Fenster ab 300 ms - die Wiederholung selbst loeste also die
+  // Bestaetigung aus und eine stundenlange Sitzung war weg. Ein zu frueher
+  // Druck schiebt die Ankuendigung deshalb nach vorn (clearAllArmedAt = jetzt)
+  // statt sie zu ignorieren: bei gehaltenem L bleibt der Abstand damit immer
+  // der Wiederholabstand von ca. 30 ms und erreicht die 300 ms nie. Verworfen
+  // wird die Ankuendigung dabei bewusst nicht - ein absichtlicher zweiter
+  // Druck nach dem Loslassen soll weiter greifen.
   boolean requestClearAll(long nowMillis) {
     long sinceArmed = nowMillis - clearAllArmedAt;
     if (clearAllPending && sinceArmed < CLEAR_ALL_CONFIRM_MIN_MILLIS) {
+      clearAllArmedAt = nowMillis;
       return false;
     }
     if (clearAllPending && sinceArmed <= CLEAR_ALL_CONFIRM_MAX_MILLIS) {

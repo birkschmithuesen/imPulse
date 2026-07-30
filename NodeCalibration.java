@@ -43,9 +43,13 @@ public class NodeCalibration implements runnableLedEffect {
   // fuer den Fall, dass die Kalibrierung aus einer anderen Geometrie stammt.
   // Erfordert eine ausdrueckliche Bestaetigung: erster Druck kuendigt an, ein
   // zweiter Druck zwischen CLEAR_ALL_CONFIRM_MIN_MILLIS und
-  // CLEAR_ALL_CONFIRM_MAX_MILLIS danach fuehrt aus. Die Untergrenze wehrt
-  // Tastenwiederholung ab (ein gehaltenes L darf nicht beide Schritte in
-  // Millisekunden ausloesen). Jede andere Taste - auch Pfeiltasten und das
+  // CLEAR_ALL_CONFIRM_MAX_MILLIS danach fuehrt aus. Ein Druck vor Ablauf der
+  // Untergrenze schiebt die Ankuendigung nach vorn, statt bloss uebersprungen
+  // zu werden - sonst liefe die Uhr seit dem ersten Druck weiter und der
+  // Ereignisstrom eines gehaltenen L (X11: erste Wiederholung nach ca. 500 ms,
+  // danach alle ca. 30 ms) traefe zwangslaeufig irgendwann das Fenster ab
+  // 300 ms, die Wiederholung selbst wuerde also verwerfen.
+  // Jede andere Taste - auch Pfeiltasten und das
   // Umschalten des Kalibriermodus mit C - verwirft die Ankuendigung
   // stillschweigend, siehe handleCommand/handleKeyPressed/handleKeyReleased.
   private static final long CLEAR_ALL_CONFIRM_MIN_MILLIS = 300;
@@ -215,8 +219,12 @@ public class NodeCalibration implements runnableLedEffect {
       long now = System.currentTimeMillis();
       long sinceArmed = now - clearAllArmedAt;
       if (clearAllPending && sinceArmed < CLEAR_ALL_CONFIRM_MIN_MILLIS) {
-        // Tastenwiederholung eines gehaltenen L - weder bestaetigen noch
-        // die Ankuendigung erneuern, einfach ignorieren
+        // Tastenwiederholung eines gehaltenen L: nicht bestaetigen, sondern
+        // die Ankuendigung nach vorn schieben. Solange die Taste gehalten
+        // wird, bleibt der Abstand damit der Wiederholabstand und erreicht die
+        // Untergrenze nie - ohne dieses Nachschieben liefe die Uhr seit dem
+        // ersten Druck weiter und eine der Wiederholungen wuerde verwerfen.
+        clearAllArmedAt = now;
         return true;
       }
       if (clearAllPending && sinceArmed <= CLEAR_ALL_CONFIRM_MAX_MILLIS) {

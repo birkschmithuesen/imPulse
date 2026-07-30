@@ -355,6 +355,24 @@ public class LedPositionCalibrationTest {
     Check.that("zweiter Druck nach 400 ms verwirft", cl.requestClearAll(10400L));
     Check.eq("Liste ist leer", 0, stL.size());
 
+    // Gehaltenes L darf nicht verwerfen. X11 liefert die erste Wiederholung
+    // nach ca. 500 ms und danach alle ca. 30 ms; solange ein zu frueher Druck
+    // bloss uebersprungen wurde, lief die Uhr seit dem ersten Druck weiter und
+    // die Wiederholung bei 300 ms verwarf die ganze Sitzung.
+    LedAnchorStore stL4 = store();
+    LedPositionCalibration cl4 = build(cs2, stL4);
+    Check.that("Punkt setzen", cl4.setCurrent(1f, 1f));
+    long lastRepeat = 0;
+    for (long t = 40000L; t <= 42000L; t += 30L) {
+      Check.that("gehaltenes L verwirft nicht bei t=" + t, !cl4.requestClearAll(t));
+      lastRepeat = t;
+    }
+    Check.eq("nach 2 s gehaltenem L steht der Anker noch", 1, stL4.size());
+    // nach dem Loslassen greift ein absichtlicher zweiter Druck weiter
+    Check.that("absichtlicher Druck nach dem Loslassen verwirft",
+        cl4.requestClearAll(lastRepeat + 400L));
+    Check.eq("danach ist die Liste leer", 0, stL4.size());
+
     // Abbruch durch eine andere Taste
     LedAnchorStore stL2 = store();
     LedPositionCalibration cl2 = build(cs2, stL2);
