@@ -38,6 +38,12 @@ Der Plan hat dazu den Abschnitt „Prüfe die Artefakte, nicht die eingesammelte
 
 `data/nodeCrossings.txt` wächst während der Kalibrierung — am 2026-07-30 zwischen 02:18 und 03:40 von 23 auf 77 Zeilen. Tests arbeiten ausschliesslich mit kleinen synthetischen Geometrien, die sie selbst aufbauen (typisch 4 Stripes à 20 LEDs). Ein Test, der 137 erwartet, ist beim nächsten Druck auf `S` rot, ohne dass jemand einen Fehler gemacht hätte.
 
+### Der Master-Pegel hat sich nach diesem Lauf geändert
+
+Jede Aufgabenbeschreibung dieses Laufs sagte „`masterLevel` nicht anfassen, Auslieferungswert 0.1, **Obergrenze 0.3**". Das gilt so nicht mehr: seit `82487e7` ist `masterLevel` der Show-Fader mit Bereich **0..1**, und das Hardware-Risiko (Spannungsabfall bei Vollweiss auf 10 m Länge) ist dorthin verlagert, wo es tatsächlich entsteht — in die Kalibrier-Testbilder, die bewusst `(1,1,1)` senden und jetzt über den vom Fader unabhängigen Fixpegel `CALIBRATION_MASTER_LEVEL = 0.1f` laufen. `setMasterLevel()` klemmt weiterhin defensiv auf 0..1.
+
+Für Folgesitzungen heisst das unverändert: **nicht anfassen, in keine Richtung.** Es ist eine Entscheidung des Betreibers über seine eigene Hardware. Die Global Constraints im Plan sind entsprechend nachgezogen.
+
 ### Der Branch bewegt sich während der Arbeit
 
 Der Betreiber arbeitet parallel am Aufbau und committet. Während dieses Laufs kamen dazu: ein Random-Impulse-Spawner (`/net/randomSpawn/*`, Startwert inzwischen 1, also im Ruhezustand aktiv), 54 weitere Kreuzungen, ein Merge von `origin`, und mitten in Aufgabe 4 ein `git stash pop`, der `test/run.sh` und die Spec in einen Konfliktzustand mit Konfliktmarkern versetzte — der Testtreiber war damit vorübergehend unbenutzbar.

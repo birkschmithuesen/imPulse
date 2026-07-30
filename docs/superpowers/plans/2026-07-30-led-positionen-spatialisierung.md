@@ -24,7 +24,7 @@ Diese Vorgaben gelten für **jede** Aufgabe, auch wenn sie dort nicht wiederholt
 - **Für diese vier Klassen ist Datei = Klasse.** (Im übrigen Projekt gilt das nicht, siehe `LedStripeNetworks.java`.)
 - **Grüne Prüfung vor jedem Commit:** `test/run.sh && test/build.sh` muss mit Status 0 enden. Beide, nicht nur eines. Siehe „Prüfung" unten und den Projekt-Skill `impulse-verify`.
 - **Niemals die Hardware-Sonden starten.** `test/TimingProbe.java`, `test/PollProbe.java`, `test/PatternProbe.java` sprechen die echte Installation an. Nicht aufrufen, auch nicht „zum Prüfen".
-- **`masterLevel` nicht anfassen.** Auslieferungswert 0.1, Obergrenze 0.3. Das ist eine Sicherheitsanforderung gegen Spannungsabfall auf den 10-m-Stripes, keine Einstellung.
+- **`masterLevel` nicht anfassen.** Seit `82487e7` ist es der Show-Fader mit Bereich **0..1** und Auslieferungswert 0.1; die frühere Obergrenze 0.3 betraf das Hardware-Risiko der Kalibrier-Testbilder, die Vollweiss senden, und dafür gibt es jetzt den vom Fader unabhängigen Fixpegel `CALIBRATION_MASTER_LEVEL = 0.1f`. Beides ist eine Entscheidung des Betreibers über seine eigene Hardware — keine Aufgabe dieses Plans fasst es an, in keine Richtung. Siehe den Abschnitt „Master-Pegel" in `CLAUDE.md`.
 - **Farbwerte sind 0..1** und werden erst am Ausgang geklemmt.
 
 ### Zahlen, wörtlich aus der Spec
