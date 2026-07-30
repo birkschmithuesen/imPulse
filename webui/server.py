@@ -169,13 +169,20 @@ def _osc_string(text: str) -> bytes:
 
 
 def build_osc_message(address: str, value: Any) -> bytes:
-    """Baut ein OSC-Paket mit genau einem Argument (int -> 'i', float -> 'f')."""
+    """Baut ein OSC-Paket mit genau einem Argument.
+
+    int -> 'i', float -> 'f', str -> 's'. Der String-Zweig wird fuer die
+    Preset-Kommandos gebraucht (``/preset/load <name>``), die als einziges
+    Argument einen Namen tragen.
+    """
     if isinstance(value, bool):
         raise TypeError("bool ist kein gueltiges OSC-Argument")
     if isinstance(value, int):
         return _osc_string(address) + _osc_string(",i") + struct.pack(">i", value)
     if isinstance(value, float):
         return _osc_string(address) + _osc_string(",f") + struct.pack(">f", value)
+    if isinstance(value, str):
+        return _osc_string(address) + _osc_string(",s") + _osc_string(value)
     raise TypeError("nicht unterstuetzter OSC-Argumenttyp: %r" % type(value))
 
 

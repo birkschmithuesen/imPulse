@@ -361,6 +361,18 @@ class OscEncodingTest(unittest.TestCase):
         self.assertTrue(packet.startswith(b"/abc\x00\x00\x00\x00"))
         self.assertEqual(len(packet), 8 + 4 + 4)
 
+    def test_string_message_layout(self):
+        packet = build_osc_message("/preset/load", "standby")
+        self.assertEqual(len(packet) % 4, 0)
+        self.assertTrue(packet.startswith(b"/preset/load\x00\x00\x00\x00"))
+        self.assertIn(b",s\x00\x00", packet)
+        self.assertTrue(packet.endswith(b"standby\x00"))
+
+    def test_string_padding_multiple_of_four(self):
+        # "acht" -> 4 Zeichen, also vier Nullbytes, nicht eines
+        packet = build_osc_message("/preset/load", "acht")
+        self.assertTrue(packet.endswith(b"acht\x00\x00\x00\x00"))
+
     def test_bool_is_rejected(self):
         with self.assertRaises(TypeError):
             build_osc_message("/x", True)
@@ -370,7 +382,8 @@ class OscEncodingTest(unittest.TestCase):
             from pythonosc import osc_message_builder
         except ImportError:
             self.skipTest("python-osc nicht installiert")
-        for address, value in (("/a/b", 0.25), ("/a/b", 7), ("/laengere/adresse", 1.5)):
+        for address, value in (("/a/b", 0.25), ("/a/b", 7), ("/laengere/adresse", 1.5),
+                               ("/preset/load", "standby"), ("/preset/save", "acht")):
             builder = osc_message_builder.OscMessageBuilder(address=address)
             builder.add_arg(value)
             self.assertEqual(build_osc_message(address, value),
