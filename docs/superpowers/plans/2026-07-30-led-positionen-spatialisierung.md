@@ -72,6 +72,15 @@ Eine Kreuzung ist **ein** Eintrag mit zwei oder mehr LEDs, ein Stripe-Ende ein E
 
 Sortiert wird nach dem **kleinsten LED-Index** des Eintrags.
 
+### Prüfe die Artefakte, nicht die eingesammelte Sicht darauf
+
+Bei der Umsetzung von Aufgabe 4 sind **zwei Fehler in diesem Plan** aufgefallen, beide vom selben Typ, und beide hätten grüne Tests ohne Aussagekraft ergeben. Sie stehen hier, weil derselbe Fehler in mehreren der folgenden Aufgaben lauert:
+
+1. **Eine Prüfung muss das prüfen, was sie behauptet, nicht das, was leicht greifbar ist.** Der Plan liess „mehrfaches Speichern verdoppelt nichts" gegen `size()` nach dem Wiedereinlesen prüfen. `anchors` ist aber eine `TreeMap`, und `put()` auf denselben Schlüssel kollabiert Duplikate — ein `save()`, das anhängt statt zu ersetzen, wäre unsichtbar geblieben. Richtig ist die **Datenzeilenzahl der Datei**. Gleiches Muster bei „`load()` ersetzt": mit derselben Ankermenge geladen, kann ein fehlendes `anchors.clear()` nicht auffallen — es braucht eine **andere** Ankermenge.
+2. **Eine Prüfung darf nicht an Prosa hängen.** Der Plan liess die geschriebene Datei als Ganzes auf Kommafreiheit prüfen, obwohl der Kopfkommentar deutsche Prosa mit Kommas enthält. Gemeint war die Locale-Falle, also das **Dezimaltrennzeichen in den Datenzeilen**.
+
+Daumenregel für alle folgenden Aufgaben: **frage bei jeder Prüfung, welcher konkrete Regress sie rot machen würde.** Fällt dir keiner ein, prüft sie nichts. Bei Aufgabe 4 wurde das am Ende empirisch gemacht — den Regress herstellen, rot sehen, zurückbauen. Das ist die verlässlichste Form und bei den Aufgaben 5, 6, 8 und 13 jeweils in wenigen Minuten machbar.
+
 ### Prüfung: zwei Befehle, beide verbindlich
 
 ```bash
