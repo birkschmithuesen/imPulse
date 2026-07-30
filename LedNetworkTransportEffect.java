@@ -73,10 +73,17 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     oscP5=_oscP5;
     remoteLocation=_remoteLocation;
 
-    nodeDeadTime= new RemoteControlledFloatParameter("/net/impulse/nodeDeadTime", 1f, 0.0f, 10);
-    impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.01f, 0.0001f, 0.5f);
-    impulseDecayFactor= new RemoteControlledFloatParameter("/net/impulse/energyDecayfactor", 1/5f, 0.0001f, 1f);
-    impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 160, 1, 1500);
+    // 2026-07-30, Birk: Working-State-Defaults - Speed×10 langsamer als der
+    // urspruengliche Auslieferungswert, alle davon abhaengigen Zeit-Parameter
+    // proportional mitskaliert (siehe scripts/tune_speed.py in der Skill
+    // devops/klangnetz-remote-control fuer die Herleitung). Bei Aenderung von
+    // impulseSpeed IMMER auch diese vier mitziehen, sonst reissen die Impulse
+    // (zu kurze Lebensdauer) oder das Netz verstopft (zu haeufige Kreuzungs-
+    // Feuerung / Ambient-Spawns).
+    nodeDeadTime= new RemoteControlledFloatParameter("/net/impulse/nodeDeadTime", 5f, 0.0f, 10);
+    impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.001f, 0.0001f, 0.5f);
+    impulseDecayFactor= new RemoteControlledFloatParameter("/net/impulse/energyDecayfactor", 0.02f, 0.0001f, 1f);
+    impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 16, 1, 1500);
     impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
 
     impulseUseRemoteCol = new RemoteControlledIntParameter("/net/impulse/color/useRemoteCol", 1, 0, 1);
@@ -93,9 +100,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // (Birk, 2026-07-30). Ueber OSC weiterhin jederzeit live abschaltbar.
     randomSpawnEnabled= new RemoteControlledIntParameter("/net/randomSpawn/enabled", 1, 0, 1);
     randomSpawnCount= new RemoteControlledIntParameter("/net/randomSpawn/count", 1, 1, nStripes);
-    randomSpawnInterval= new RemoteControlledFloatParameter("/net/randomSpawn/interval", 3f, 0.05f, 10f);
+    randomSpawnInterval= new RemoteControlledFloatParameter("/net/randomSpawn/interval", 30f, 0.05f, 40f);
     randomSpawnEnergy= new RemoteControlledFloatParameter("/net/randomSpawn/energy", 0.6f, 0f, 1f);
-    randomSpawnDirectionBias= new RemoteControlledFloatParameter("/net/randomSpawn/directionBias", 0.5f, 0f, 1f);
+    // 2026-07-30, Birk: directionBias=1 (immer vorwaerts vom Stripe-Anfang) -
+    // bei 0.5 spawnten die Haelfte der Ambient-Impulse rueckwaerts vom
+    // Stripe-ENDE, was optisch wie eine Aktivierung aus Knotenpunkten heraus
+    // wirkte statt vom Stripe-Anfang. Range bis 1 belassen, da 1 = "immer
+    // vorwaerts" die vom Nutzer gewuenschte Grenze ist.
+    randomSpawnDirectionBias= new RemoteControlledFloatParameter("/net/randomSpawn/directionBias", 1f, 0f, 1f);
     randomSpawnJitter= new RemoteControlledFloatParameter("/net/randomSpawn/jitter", 0f, 0f, 1f);
 
     OscMessageDistributor.registerAdress("/net/activateNode", this);
