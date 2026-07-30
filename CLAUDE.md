@@ -149,6 +149,65 @@ Gespawnte Impulse sind normale `TravellingActivation`-Objekte und laufen
 durch dieselbe Node-Kollisions-/Energie-Decay-/Render-Pipeline wie alle
 anderen Impulse.
 
+### Preset-System (PresetStore.java, PresetScheduler.java, PresetManager.java)
+
+Ein Preset ist ein **kompletter** Wertesatz aller 49 fernsteuerbaren
+Parameter-Adressen, abgelegt als `data/presets/<name>.txt` im **gleichen
+Format wie `remoteSettings.txt`** (sechs Tab-Spalten: typ, adresse,
+beschreibung, wert, min, max). Deshalb liessen sich die beiden
+live verifizierten Szenen-Snapshots aus `scenes/` per Kopie zu Presets machen.
+
+Drei Ladewege:
+1. OSC auf Port 8001: `/preset/load <name>`, `/preset/save <name>`,
+   `/preset/next`. Kein `/preset/list` — `ls data/presets/` beantwortet das
+   von aussen, und ein OSC-Rückkanal wäre neu zu bauen (die einzige
+   Ausgangsadresse ist 8002, also SuperCollider). Meldungen gehen per
+   `println` auf die Konsole.
+2. Beim Start: Sketch-Argument, sonst Umgebungsvariable `IMPULSE_PRESET`.
+   Geladen wird in `setup()` **nach** dem Anlegen der Effekte und **vor** dem
+   Schreiben von `remoteSettings.txt` — diese Datei zeigt danach den wirklich
+   gefahrenen Stand statt der Code-Defaults.
+3. Scheduler: `/preset/scheduler/enabled` (int 0/1, Default **0**) und
+   `/preset/scheduler/interval` (float Sekunden, Default 600). Reihenfolge
+   alphabetisch nach Dateiname, Liste bei jedem Wechsel frisch gelesen.
+   Einschalten springt **nicht** sofort — der Timer läuft ab jetzt.
+
+**Was nicht in ein Preset gehört und warum:**
+- `/net/activateNode` und `/net/activateStripe` sind **Kommandos**, keine
+  Parameter: `LedNetworkTransportEffect` registriert sie selbst als
+  `OscMessageSink` und feuert sofort beim Eintreffen, schreibt sie aber über
+  sein eigenes `writeToStream()` mit in `remoteSettings.txt`. Der Ausschluss
+  ist **strukturell**: nur die drei `RemoteControlled*Parameter`-Klassen
+  implementieren `PresetTarget`. Beim Laden werden die zwei Adressen zusätzlich
+  still übergangen (`PresetStore.SILENTLY_IGNORED`), damit eine handkopierte
+  `remoteSettings.txt` nicht bei jedem Laden zwei Warnungen erzeugt.
+- Die zwei Scheduler-Parameter (`PresetStore.EXCLUDED`) — sie sind Transport,
+  nicht Inhalt. Sonst könnte ein mit `enabled=0` gespeichertes Preset die
+  Installation einfrieren.
+- Die Netz-Topologie (`nodeCrossings.txt`) — das ist Kalibrierung.
+
+**Die Falle, die den Entwurf bestimmt:** eingehende Float-OSC-Werte werden von
+`0..1` auf `min..max` gestreckt (`AbstractParameter.java`, `digestMessage`).
+Ein gespeicherter Absolutwert lässt sich deshalb **nicht** als OSC
+zurückschicken — `/net/impulse/nodeDeadTime` (0..10) landete bei
+gespeichertem `1.0` als `10.0`. Presets gehen stattdessen über
+`PresetTarget.applyPreset(address, value)`, das absolut setzt und auf die
+Grenzen **aus dem Code** klemmt, nicht auf die aus der Datei. Die
+Threading-Regel bleibt gewahrt: der Befehl läuft weiter durch die Queue und
+wird dort nur vermerkt, gelesen und angewendet wird in `draw()`.
+
+**Aufteilung:** `PresetStore` (Format, Datei, Snapshot, Anwenden) und
+`PresetScheduler` (Zeitlogik) sind frei von Processing und OSC und deshalb in
+`test/run.sh` geprüft (`PresetStoreTest`, `PresetSchedulerTest`).
+`PresetManager` kennt oscP5 und darf **nicht** in `test/run.sh` aufgenommen
+werden — die Suite hat nur `core.jar`.
+
+**Sound:** imPulse ist Master. Bei jedem Wechsel geht zusätzlich
+`/sc/preset/load <name>` an `127.0.0.1:8002` — derselbe Port, auf dem
+SuperCollider schon `/net/hitNode` empfängt, nur eine neue Adresse. Es gibt
+genau einen Scheduler, deshalb können Licht und Klang nicht auseinanderlaufen.
+Fire-and-forget: läuft sclang nicht, läuft die Visual-Show weiter.
+
 ### Ausgabepfade
 
 Beide Pfade sind in `setup()`/`draw()` per Kommentar umschaltbar:
@@ -206,4 +265,14 @@ Tastenbelegung (nur wirksam im Kalibriermodus, ausser `c`/`C` selbst):
 - **Hardware-Konstanten** (`controllerOctets`, `numLedsPerStripe`, OSC-Ports, Master-Pegel-Obergrenze) stehen als Felder oben in `imPulse.pde` und sind installationsspezifisch — nicht ändern, ohne dass es um eine konkrete Installation geht.
 - **Fenstergrösse in `size()`**: Processing erlaubt dort nur Literale, keine Variablen. Die Höhe muss von Hand zur Stripe-Zahl passen — Vorschau braucht `numStripes*10` Pixel, darunter das mehrzeilige Kalibrier-HUD (siehe Kommentar direkt bei `size(...)` in `imPulse.pde`).
 - **Farbwerte 0..1** durchgängig; Werte > 1 sind erlaubt und werden erst am Output geclampt (`LedColor.clamp()` wird im Mixer bewusst nicht aufgerufen).
+- **SuperCollider-Presets** liegen in `supercollider/presets/<name>.txt`, im
+  selben Tab-Format wie die visuellen Presets, erweitert um den Typ `ints` für
+  die Tonleiter (kommagetrennt in der Wertspalte). Steuerbar sind
+  `/sc/scale/steps|rootMidi|octaves`, `/sc/amp/min|max` und die zwei globalen
+  Klangregler `/sc/bell/decayScale` (streckt alle Teilton-Decays) und
+  `/sc/bell/tilt` (Exponent auf die Teilton-Amps: >1 dumpfer, <1 brillanter).
+  Die `#[...]`-Teilton-Literale in der SynthDef bleiben stehen — kein Rebuild
+  beim Preset-Wechsel. Alles liegt weiter in **einem** `(...)`-Block: mehrere
+  Top-Level-Blöcke hängen `sclang -D` auf. Für den SC-Teil gibt es **kein**
+  Testgerüst im Repo, dort gilt manuelle Prüfung am Gerät.
 - Bekannte offene Punkte stehen als To-Do-Block am Kopf von `imPulse.pde`.
