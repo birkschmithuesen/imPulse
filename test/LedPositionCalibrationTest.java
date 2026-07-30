@@ -470,9 +470,9 @@ public class LedPositionCalibrationTest {
     Check.that("der Stripe des Eintrags glimmt gruen",
         bufOff[8].y > 0f && bufOff[8].x == 0f && bufOff[8].z == 0f);
 
-    // Stripe 1 hat durch die Kreuzung genau einen Anker (LED 30):
-    // alles ausser LED 30 gilt als extrapoliert -> rot.
-    Check.that("Kreuzungsanker auf Stripe 1 vorhanden", stD.has(30));
+    // Stripe 1 hat durch die Kreuzung genau einen Anker (LED 30, oben schon
+    // geprueft und seither unveraendert): alles ausser LED 30 gilt als
+    // extrapoliert -> rot.
     Check.that("extrapolierte LEDs glimmen rot",
         bufOff[25].x > 0f && bufOff[25].y == 0f && bufOff[25].z == 0f);
     Check.that("der Anker selbst gilt als gestuetzt und glimmt blau",
@@ -499,12 +499,22 @@ public class LedPositionCalibrationTest {
     Check.that("Stripe 1 glimmt auch gruen",
         bufX2[PER_STRIPE + 3].y > 0f && bufX2[PER_STRIPE + 3].x == 0f);
 
-    // Alle Helligkeiten bleiben im Bereich 0..1
+    // Alle Helligkeiten bleiben im Bereich 0..1. drawMe(long) liefert immer
+    // denselben geteilten Puffer zurueck - bufX ist also laengst von bufX2
+    // ueberschrieben. Frisch die An-Phase holen, sonst prueft die Schleife
+    // nur noch Aus-Phase-Werte (0 oder DIM) und kann nie rot werden.
+    LedColor[] bufOn = cd.drawMe(0L);
     float maxComp = 0f;
-    for (int i = 0; i < bufX.length; i++) {
-      maxComp = Math.max(maxComp, Math.max(bufX[i].x, Math.max(bufX[i].y, bufX[i].z)));
+    for (int i = 0; i < bufOn.length; i++) {
+      maxComp = Math.max(maxComp, Math.max(bufOn[i].x, Math.max(bufOn[i].y, bufOn[i].z)));
     }
     Check.that("keine Komponente ueber 1", maxComp <= 1.0f);
+    Check.that("die weisse An-Phase kam tatsaechlich im Puffer an",
+        maxComp >= 1.0f - 1e-6f);
+
+    // ---- drawMe() ohne Argument delegiert an drawMe(System.currentTimeMillis()) ----
+    Check.eq("no-arg drawMe liefert einen vollen Puffer",
+        STRIPES * PER_STRIPE, cd.drawMe().length);
 
     System.exit(Check.report("LedPositionCalibrationTest"));
   }
