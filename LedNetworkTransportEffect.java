@@ -56,6 +56,15 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledIntParameter impulseEnergyExponent; // Exponent applied to input volume provided by /tube/trigger
   RemoteControlledIntParameter impulseSpeed; // speed (leds/second)
 
+  // Streuung der Kindwerte bei einer Aufspaltung an einem Node. Ohne sie
+  // bekommt jedes Kind exakt Speed und Lebensdauer des Elternimpulses, die
+  // Geschwister sterben synchron und wirken identisch.
+  //
+  // Beide Auslieferungswerte 0 - das ist exakt das bisherige Verhalten, ein
+  // Operator dreht sie bewusst hoch. Unabhaengig voneinander einstellbar.
+  RemoteControlledFloatParameter splitSpeedJitter;
+  RemoteControlledFloatParameter splitLifetimeJitter;
+
   // Optionaler Sinus-Randomizer je Parameter (Speed und Lifetime unabhaengig,
   // kein gemeinsamer Takt). Bei enabled=1 UEBERSCHREIBT der Oszillator den
   // manuell gesetzten Wert in jedem Frame:
@@ -125,6 +134,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     impulseLifetime= new RemoteControlledFloatParameter("/net/impulse/lifetime", 0.02f, 0.0001f, 1f);
     impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 16, 1, 1500);
     impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
+    splitSpeedJitter= new RemoteControlledFloatParameter("/net/impulse/splitSpeedJitter", 0f, 0f, 1f);
+    splitLifetimeJitter= new RemoteControlledFloatParameter("/net/impulse/splitLifetimeJitter", 0f, 0f, 1f);
 
     // Randomizer: Auslieferungszustand aus (0), ein Operator schaltet ihn live
     // per OSC/Web-UI ein. Die Defaults spannen einen Bereich um den jeweiligen
@@ -243,17 +254,26 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   //represents one travelling activation
   public class TravellingActivation {
     TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_) {
-      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++);
+      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++, 1f);
+    }
+
+    // Mit ausdruecklichem decayScale - fuer die Kinder einer Aufspaltung, die
+    // ihre Lebensdauer streuen sollen (siehe /net/impulse/splitLifetimeJitter).
+    TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
+        float decayScale_) {
+      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++, decayScale_);
     }
 
     // Mit ausdruecklicher ID - nur fuer den Filler, der die ID seines
     // Elternimpulses uebernimmt statt eine neue zu verbrauchen.
-    TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_, int id_) {
+    TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
+        int id_, float decayScale_) {
       ledIdxPos=ledIdxPos_;
       stripeIdx=stripeIdx_;
       speed=speed_;
       energy=energy_;
       id=id_;
+      decayScale=decayScale_;
     }
 
     int getLedIndex() {
@@ -264,14 +284,24 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     float speed; // [leds/second] also encodes direction in sign
     float energy; // some measure of strength
     final int id; // fortlaufend, fuer /net/impulse
+    // Faktor AUF den globalen impulseLifetime, nicht dessen Ersatz. 1.0 bei
+    // jedem normalen Spawn, gestreut nur bei den Kindern einer Aufspaltung.
+    //
+    // Bewusst ein Multiplikator: mit einem absoluten Zerfallswert je Impuls
+    // wuerde jeder Impuls den Wert seiner Geburt einfrieren. Dann erreichte
+    // der Sinus-Randomizer (/net/impulse/lifetime/randomize/*) nur noch neu
+    // gespawnte Impulse, und ein Operator, der den Lifetime-Regler zieht,
+    // saehe die lebenden Impulse unbeeindruckt weiterlaufen - beides ohne
+    // Fehlermeldung.
+    final float decayScale;
     void setEnergy(float _energy){energy=_energy;}
   }
 
   //represents fillers needed when high travelling speeds lead to skipping some leds in each frame
   public class TravellingActivationFiller extends TravellingActivation {
     TravellingActivationFiller(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
-        int parentId_) {
-      super(ledIdxPos_, stripeIdx_, speed_, energy_, parentId_);
+        int parentId_, float decayScale_) {
+      super(ledIdxPos_, stripeIdx_, speed_, energy_, parentId_, decayScale_);
     }
   }
 
@@ -302,7 +332,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // let each activation travel a bit in it's direction
       curActivation.ledIdxPos+=curActivation.speed*timeStep;
       // loose energy
-      curActivation.energy -= timeStep*impulseLifetime.getValue();
+      curActivation.energy -= timeStep*impulseLifetime.getValue()*curActivation.decayScale;
       // if the activation hasn't fallen off the end of the stripe...
       int activationLedIdx=curActivation.getLedIndex(); // global led position
       int direction;// needed to reuse loop for positive and negative speeds
@@ -320,7 +350,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
             break;
           }
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
-          newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy, curActivation.id));
+          newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy, curActivation.id, curActivation.decayScale));
         }
       }
       if (activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime))) {
@@ -380,6 +410,16 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         //float childEnergy=curActivation.energy/nActivations/2.0f;
         //curActivation.setEnergy(childEnergy);
         float childEnergy=curActivation.energy;
+        // Streuung je Kind, siehe /net/impulse/splitSpeedJitter und
+        // /net/impulse/splitLifetimeJitter. Bei beiden Auslieferungswerten 0
+        // liefert SplitVariance.jitter() den Ausgangswert unveraendert, das
+        // Verhalten ist dann bitgleich dem vorherigen.
+        //
+        // Gezogen wird JE ZWEIG und je Groesse einzeln - ein gemeinsamer
+        // Zufallswert fuer alle Zweige eines Treffers wuerde sie wieder
+        // gleichschalten, also genau das nicht loesen, worum es geht.
+        float speedJitter=splitSpeedJitter.getValue();
+        float lifetimeJitter=splitLifetimeJitter.getValue();
         for (Integer nodeLedIdx : hitNode.ledIndices) {
           LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
 
@@ -394,13 +434,19 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           //  activation spreads in boths directions
           int forwPos=nodeLedIdx +jump;
           if (forwPos>0&&forwPos<nLeds) {
-            newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy));
+            newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex,
+                SplitVariance.jitter(curActivation.speed, speedJitter, Math.random()),
+                childEnergy,
+                SplitVariance.jitter(1f, lifetimeJitter, Math.random())));
           }
           //do not go back the same stripe:
           if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex || activationLedIdx < nodeLedIdx) {//ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
             int backwPos=nodeLedIdx -jump;
             if (backwPos>0&&backwPos<nLeds) {
-              newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
+              newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex,
+                  SplitVariance.jitter(-curActivation.speed, speedJitter, Math.random()),
+                  childEnergy,
+                  SplitVariance.jitter(1f, lifetimeJitter, Math.random())));
             }
           }
         }
