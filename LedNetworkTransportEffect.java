@@ -109,6 +109,34 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledFloatParameter randomSpawnDirectionBias; // /net/randomSpawn/directionBias - Wahrscheinlichkeit fuer "vorwaerts"
   RemoteControlledFloatParameter randomSpawnJitter;     // /net/randomSpawn/jitter - 0=exakt periodisch, 1=stark verjittert
 
+  // Strukturierter Layer neben dem chaotischen randomSpawn: ein BPM-Takt und
+  // sechs Tracks, die von wiederkehrenden Urspruengen spawnen. Beide Layer
+  // laufen unabhaengig und sind gleichzeitig aktivierbar.
+  //
+  // Kein /net/sequencer/activeTracks: zwei Schalter fuer dieselbe Sache
+  // erzeugen einen stillen Fehlerzustand (Operator schaltet Track 4 ein, es
+  // passiert nichts, weil activeTracks=3 ihn abschneidet). enabled je Track
+  // ist ausserdem ausdrucksstaerker - jede Teilmenge statt nur ein Praefix.
+  // Der grobe Not-Aus ist /net/sequencer/enabled.
+  RemoteControlledIntParameter sequencerEnabled;
+  RemoteControlledFloatParameter sequencerBpm;
+  RemoteControlledIntParameter[] trackEnabled = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledIntParameter[] trackNoteValue = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledIntParameter[] trackRepeatCount = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledFloatParameter[] trackEnergy = new RemoteControlledFloatParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledFloatParameter[] trackSwingJitter = new RemoteControlledFloatParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledIntParameter[] trackOriginOverride = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  final MusicalClock musicalClock = new MusicalClock();
+  OriginSequencer originSequencer;
+  // Wiederverwendet statt in jedem Frame neu angelegt - drawMe() laeuft mit
+  // 40 Hz, und ein Frame soll den Speicherbereiniger nicht beschaeftigen.
+  private final TrackConfig[] trackConfigs = new TrackConfig[OriginSequencer.TRACK_COUNT];
+  private final RandomSource mathRandom = new RandomSource() {
+    public double next() {
+      return Math.random();
+    }
+  };
+
   LedNetworkTransportEffect(String _id, int _numLeds, int _nStripes, int _nLedsInStripe,
       LedInNetInfo[] _ledNetInfo, ArrayList <LedNetworkNode> nodes_,
       LedPositionMap _positionMap, OscP5 _oscP5, NetAddress _remoteLocation) {
@@ -172,6 +200,31 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // vorwaerts" die vom Nutzer gewuenschte Grenze ist.
     randomSpawnDirectionBias= new RemoteControlledFloatParameter("/net/randomSpawn/directionBias", 1f, 0f, 1f);
     randomSpawnJitter= new RemoteControlledFloatParameter("/net/randomSpawn/jitter", 0f, 0f, 1f);
+
+    // Sequencer: global aus im Auslieferungszustand. Die Track-Defaults sind
+    // nur der Zustand, den ein Operator vorfindet, wenn er ihn erstmals
+    // einschaltet - deshalb zwei laufende Tracks (Ganze und Halbe, ruhig)
+    // statt sechs.
+    sequencerEnabled= new RemoteControlledIntParameter("/net/sequencer/enabled", 0, 0, 1);
+    sequencerBpm= new RemoteControlledFloatParameter("/net/sequencer/bpm", 60f, 20f, 200f);
+    originSequencer= new OriginSequencer(nStripes);
+    // Ganze, Halbe, Viertel, Achtel, Viertel, Achtel - die ersten zwei an.
+    int[] defaultNoteValues = { 1, 2, 4, 8, 4, 8 };
+    int[] defaultEnabled = { 1, 1, 0, 0, 0, 0 };
+    for (int i=0; i<OriginSequencer.TRACK_COUNT; i++) {
+      String base="/net/sequencer/track"+i+"/";
+      trackEnabled[i]= new RemoteControlledIntParameter(base+"enabled", defaultEnabled[i], 0, 1);
+      // Range 1..16 statt einer Aufzaehlung - RemoteControlledIntParameter
+      // kann keine. OriginSequencer.quantizeNoteValue() rastet beim Lesen auf
+      // 1/2/4/8/16, ein Regler auf 5 verhaelt sich also wie 4.
+      trackNoteValue[i]= new RemoteControlledIntParameter(base+"noteValue", defaultNoteValues[i], 1, 16);
+      trackRepeatCount[i]= new RemoteControlledIntParameter(base+"repeatCount", 3, 1, 8);
+      trackEnergy[i]= new RemoteControlledFloatParameter(base+"energy", 0.6f, 0f, 1f);
+      trackSwingJitter[i]= new RemoteControlledFloatParameter(base+"swingJitter", 0f, 0f, 1f);
+      // -1 = zufaelliger Ursprung (Normalfall), sonst fixer Stripe.
+      trackOriginOverride[i]= new RemoteControlledIntParameter(base+"originStripeOverride", -1, -1, nStripes-1);
+      trackConfigs[i]= new TrackConfig();
+    }
 
     // 0 schaltet den Strom ab - der Notausgang, wenn Netz oder Klangrechner
     // waehrend der Show nicht mitkommen. /net/hitNode laeuft davon unberuehrt
@@ -323,6 +376,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     float speed=impulseSpeed.getValue();
 
     spawnRandomImpulses(currentTime);
+    tickSequencer(currentTime);
 
     //iterate through activations and build a new list of activations in the meanwhile.
     LinkedList<TravellingActivation> newActivations=new LinkedList<TravellingActivation>();
@@ -574,6 +628,48 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // wieder aus den Bounds fallen (siehe activationIsValid) statt eine sichtbare Strecke zu reisen
       float startPos=forward ? stripeIdx*nLedsInStripe : stripeIdx*nLedsInStripe + (nLedsInStripe-1);
       activations.add(new TravellingActivation(startPos, stripeIdx, forward ? speed : -speed, energy));
+    }
+  }
+
+  // Strukturierter Spawn-Layer, siehe /net/sequencer/* in CLAUDE.md. Laeuft
+  // unabhaengig neben spawnRandomImpulses() - beide Layer sind gleichzeitig
+  // aktivierbar, der eine ist der chaotische Ambient-Teppich, der andere die
+  // wiedererkennbare Choreografie.
+  //
+  // Die Uhr laeuft AUCH bei sequencerEnabled=0 weiter: sie ist die gemeinsame
+  // Phase, und ein Stillstand waehrend der Aus-Phase machte das
+  // Wiedereinschalten von der Dauer der Pause abhaengig.
+  private void tickSequencer(double currentTime) {
+    musicalClock.advance(currentTime, sequencerBpm.getValue());
+    if (sequencerEnabled.getValue() != 1) {
+      return;
+    }
+    for (int i=0; i<OriginSequencer.TRACK_COUNT; i++) {
+      TrackConfig c=trackConfigs[i];
+      c.enabled=trackEnabled[i].getValue()==1;
+      c.noteValue=trackNoteValue[i].getValue();
+      c.repeatCount=trackRepeatCount[i].getValue();
+      c.energy=trackEnergy[i].getValue();
+      c.swingJitter=trackSwingJitter[i].getValue();
+      c.originStripeOverride=trackOriginOverride[i].getValue();
+    }
+    int[] firing=originSequencer.update(musicalClock.beats(), trackConfigs, mathRandom);
+    if (firing.length == 0) {
+      return;
+    }
+    // Geschwindigkeit kommt wie beim Ambient-Spawn von impulseSpeed, damit
+    // getaktete und zufaellige Impulse gleich schnell wirken. decayScale 1.0
+    // (der Konstruktor ohne ausdruecklichen Wert): ein gespawnter Impuls folgt
+    // dem globalen Lifetime, gestreut wird erst an einer Kreuzung.
+    float speed=impulseSpeed.getValue();
+    for (int i=0; i<firing.length; i++) {
+      int track=firing[i];
+      int stripeIdx=originSequencer.originOf(track);
+      if (stripeIdx < 0 || stripeIdx >= nStripes) {
+        continue;
+      }
+      activations.add(new TravellingActivation(stripeIdx*nLedsInStripe, stripeIdx,
+          speed, trackConfigs[track].energy));
     }
   }
 
