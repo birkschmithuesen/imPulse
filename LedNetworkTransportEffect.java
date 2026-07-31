@@ -526,7 +526,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     oscP5.send(myMessage, remoteLocation);
   }
 
-  // Gedrosselter Positionsstrom der reisenden Impulse.
+  // Gedrosselter Positionsstrom der reisenden Impulse:
+  //   /net/impulse <id:int> <x:float> <y:float> <energy:float> <speed:float>
+  // Das fuenfte Argument ist der BETRAG der Geschwindigkeit in LEDs/Sekunde
+  // und kam spaeter dazu - rein angehaengt, siehe unten.
   //
   // Ueberspringt Filler explizit (gleiche Klassenpruefung wie an ihrer
   // Entfernungsstelle in der Zeichenschleife) - ein Elternimpuls und seine
@@ -573,6 +576,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       myMessage.add(positionMap.x(ledIndex));
       myMessage.add(positionMap.y(ledIndex));
       myMessage.add(a.energy);
+      // Betrag der Geschwindigkeit in LEDs/Sekunde, rein ANGEHAENGT - genau
+      // das Muster, mit dem /net/hitNode schon um x/y erweitert wurde: ein
+      // Empfaenger, der nur die ersten vier Argumente liest, bleibt unberuehrt.
+      //
+      // Das Vorzeichen traegt die Richtung und ist fuer die Klangfarbe
+      // bedeutungslos, deshalb der Betrag. Die Klangseite koppelt daran die
+      // Filterfrequenz des Travel-Sounds (schneller = schaerfer).
+      myMessage.add(Math.abs(a.speed));
       oscP5.send(myMessage, remoteLocation);
     }
   }
