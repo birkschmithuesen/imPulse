@@ -67,6 +67,20 @@ s.options.numInputBusChannels = 2;
 // kleiner Sicherheitsabstand zur digitalen Vollausteuerung).
 ~limiterCeiling = 0.95;
 
+// Polyphonie-Obergrenze (Birk 2026-07-31, nach Live-Ausfall): bei sehr hoher
+// Trefferrate (viele Ambient-Spawns + hohe Speed gleichzeitig) kann die
+// interne scsynth-Befehlswarteschlange ueberlaufen ("command FIFO full" im
+// Log) -- der Server verwirft dann die meisten neuen Synth-Erzeugungen und
+// es kommt kein Sound mehr raus, OHNE dass der Prozess abstuerzt (schwer zu
+// erkennen: sclang/scsynth laufen weiter, "Wird ausgefuehrt" im Task-
+// Manager). ~maxPolyphony deckelt die Anzahl gleichzeitig aktiver Glocken
+// hart: kommt eine neue dazu und das Limit ist erreicht, wird die AELTESTE
+// per Voice-Stealing sofort abgewuergt (n_free), bevor die neue startet.
+// Das haelt die Anzahl aktiver Synths -- und damit die DSP-/Command-Last --
+// dauerhaft unter der Grenze, an der der Server ueberlastet.
+~maxPolyphony = 24;
+~activeBells = List.new;
+
 s.waitForBoot({
     // ---- Gruppen fuer garantierte Ausfuehrungsreihenfolge ---------------
     // Synth.new haengt standardmaessig an den KOPF (addToHead) der Ziel-
@@ -87,6 +101,11 @@ s.waitForBoot({
     // Zoom-AMS-24-Ausgaengen verteilt wird (outCh = nodeId % 4).
     ~mixBus.free;
     ~mixBus = Bus.audio(s, ~numOutChannels);
+
+    // Liste aktiver Glocken-Synths zuruecksetzen (Boot/Reboot: alte Synth-
+    // Referenzen sind ungueltig, sonst wuerde spaeter versucht, laengst
+    // verschwundene Nodes freizugeben).
+    ~activeBells = List.new;
 
     SynthDef(\glockenBell, { |freq = 440, amp = 0.3, out = 0|
         var sig, bellSig, grit, partials, partialAmps, partialDecays, env0;
@@ -148,7 +167,7 @@ s.waitForBoot({
 
     ~netHitNodeOscFunc.free;
     ~netHitNodeOscFunc = OSCFunc({ |msg, time, addr|
-        var nodeId, energy, noteIndex, octave, degree, semitoneOffset, midiNote, freq, amp, outCh;
+        var nodeId, energy, noteIndex, octave, degree, semitoneOffset, midiNote, freq, amp, outCh, newBell;
 
         nodeId = msg[1].asInteger;
         energy = msg[2].asFloat;
@@ -164,6 +183,17 @@ s.waitForBoot({
 
         outCh = nodeId % ~numOutChannels;
 
+        // Polyphonie-Deckel: ist das Limit erreicht, die AELTESTE aktive
+        // Glocke sofort abwuergen (voice stealing), bevor die neue startet.
+        // ~activeBells haelt Synths in Erzeugungsreihenfolge -> removeAt(0)
+        // ist immer die aelteste. Free ist sofort wirksam (kein Fade-out),
+        // das ist ein bewusster Trade-off: ein kurzer harter Cut bei
+        // Ueberlast-Grenze ist unauffaelliger als gar kein Sound mehr, weil
+        // der Server komplett dicht ist.
+        if (~activeBells.size >= ~maxPolyphony) {
+            ~activeBells.removeAt(0).free;
+        };
+
         // Glocken landen in ~sourceGroup (VOR dem Limiter in der Node-Order)
         // und schreiben auf den passenden Kanal des ~mixBus, nicht mehr
         // direkt auf Hardware-out -- der Limiter setzt hinter allen vier
@@ -171,8 +201,15 @@ s.waitForBoot({
         // ~mixBus direkt!) liefert den numerischen Bus-Index, den der
         // \out-Slot des Synths erwartet -- Bus-Objekte selbst haben keinen
         // '+'-Operator.
-        Synth(\glockenBell, [\freq, freq, \amp, amp, \out, ~mixBus.index + outCh],
+        newBell = Synth(\glockenBell, [\freq, freq, \amp, amp, \out, ~mixBus.index + outCh],
             ~sourceGroup);
+        ~activeBells.add(newBell);
+        // Natuerliches Verklingen (Envelope-doneAction 2 im SynthDef)
+        // muss ~activeBells auch aufraeumen, sonst waechst die Liste
+        // dauerhaft weiter und removeAt(0) wuergt irgendwann laengst
+        // verklungene/nicht mehr existierende Synths ab (harmlos, aber
+        // sinnlos -- das echte Voice-Stealing traefe dann die falschen).
+        newBell.onFree({ ~activeBells.remove(newBell); });
 
         ("node % -> % Hz (amp %) on output ch %".format(nodeId, freq.round(0.1), amp.round(0.01), outCh)).postln;
     }, '/net/hitNode', recvPort: ~oscListenPort);
