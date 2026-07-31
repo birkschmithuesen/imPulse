@@ -428,11 +428,15 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   // Gedrosselter Positionsstrom der reisenden Impulse.
   //
-  // Wird bewusst NACH der Zeichenschleife gerufen: die hat die Filler im
-  // selben Frame ueber iter.remove() wieder entfernt, in activations steht
-  // hier also genau ein Eintrag je echtem Impuls. Ohne diese Reihenfolge
-  // muesste man Filler von Hand aussortieren und wuerde denselben Impuls
-  // mehrfach melden.
+  // Ueberspringt Filler explizit (gleiche Klassenpruefung wie an ihrer
+  // Entfernungsstelle in der Zeichenschleife) - ein Elternimpuls und seine
+  // Filler tragen im selben Frame dieselbe id, ein Filler im Strom saehe
+  // fuer die Klangseite wie ein einziger, zwischen mehreren Positionen
+  // hin- und herspringender Impuls aus. Die Invariante haengt damit nicht
+  // mehr allein an der Aufrufreihenfolge.
+  //
+  // Muss trotzdem NACH der Zeichenschleife gerufen werden: erst dort stehen
+  // die Positionen der echten Impulse fuer diesen Frame fest.
   //
   // Kein Todes-Signal: der Strom ist durch oscMaxCount ohnehin lueckenhaft -
   // ein Impuls kann aus der Auswahl fallen, ohne zu sterben. Die Klangseite
@@ -450,11 +454,17 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     TravellingActivation[] flat = new TravellingActivation[n];
     int k = 0;
     for (TravellingActivation a : activations) {
+      if (a.getClass() == TravellingActivationFiller.class) {
+        continue;
+      }
       flat[k] = a;
       energies[k] = a.energy;
       k++;
     }
-    int[] chosen = impulseThrottle.select(energies, impulseOscMaxCount.getValue());
+    if (k == 0) {
+      return;
+    }
+    int[] chosen = impulseThrottle.select(Arrays.copyOf(energies, k), impulseOscMaxCount.getValue());
     for (int i = 0; i < chosen.length; i++) {
       TravellingActivation a = flat[chosen[i]];
       int ledIndex = a.getLedIndex();

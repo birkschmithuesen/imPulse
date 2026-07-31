@@ -61,7 +61,15 @@ float ledPitchM = stripeLengthM / numLedsPerStripe;   // 0.0166667 m
 
 // Draufsicht-Flaeche im Positionsmodus. 525:300 entspricht 14:8 genau, es
 // gibt also keine Verzerrung; ein Pixel sind 2,67 cm.
-int paneX = 0, paneY = 0, paneW = 525, paneH = 300;
+// Der Rand von 10px ist Absicht: sitzt die Flaeche in der Fensterecke, landet
+// schon ein Klick, der bloss das Fenster in den Vordergrund holen soll, in ihr
+// drin - und mousePressed() -> positionClick() -> setCurrent() ueberschreibt
+// den Anker des aktuellen Eintrags ohne Rueckfrage. Auf der Platte geht dabei
+// nichts verloren (erst S schreibt), aber es ist eine still falsche Zahl.
+// Nebeneffekt: der linke Lautsprecher-Marker wird nicht mehr am Fensterrand
+// abgeschnitten. Zeichnen (drawPositionPane) und Treffertest (paneToWorld)
+// rechnen beide ueber paneX/paneY, es gibt also keine zweite Stelle.
+int paneX = 10, paneY = 10, paneW = 525, paneH = 300;
 
 LedAnchorStore ledAnchorStore;
 LedPositionMap ledPositionMap;
@@ -91,26 +99,37 @@ PresetManager presetManager;
 RemoteControlledIntParameter presetSchedulerEnabled;
 RemoteControlledFloatParameter presetSchedulerInterval;
 
-// Sicherheitsventil ausschliesslich fuer die Testbilder (TestPatterns 1-5,
-// siehe drawPattern()/calibrationMode) - unabhaengig vom Show-Fader
-// masterLevel, der seit 2026-07-30 bis 1.0 gehen darf. TestPatterns 3/5
-// senden bewusst Vollweiss (1,1,1); bei 10-m-Stripe-Laenge ist das laut
-// Handbuch schon ein Spannungsabfall-Risiko. Bewusst eine Konstante statt
-// eines OSC-Parameters, damit sie sich nicht versehentlich hochschrauben
-// laesst (gleiche Begruendung wie test/PatternProbe.java MASTER_LEVEL).
-static final float CALIBRATION_MASTER_LEVEL = 0.1f;
+// Das Sicherheitsventil der Testbilder steht seit 2026-07-31 nicht mehr hier,
+// sondern als TestPatterns.PATTERN_LEVEL in den Mustern selbst - siehe die
+// Begruendung dort. Der Kalibriermodus laeuft dadurch auf demselben Fader wie
+// alles andere und darf bis 1.0 gehen.
 
 
 void setup() {
-  // Fensterhoehe: die Vorschau braucht numStripes*10 Pixel (image() weiter
-  // unten skaliert genau darauf), bei 30 Stripes also 300px. Darunter zeigt
-  // das HUD im Kalibriermodus vier Textzeilen (Cursorstaende/Zaehler/Auswahl,
-  // Meldung, Tastenbelegung auf zwei Zeilen) beginnend bei y=numStripes*10+20 - dafuer
-  // braucht es nochmal gut 100px Reserve. 450 ist bei 30 Stripes sicher
-  // ausreichend (300 Vorschau + 20 Abstand + 4 Zeilen + Rand). size()
-  // erlaubt hier keine Variablen, deshalb ein Literal - bei einer anderen
-  // Stripe-Zahl muss dieser Wert von Hand neu aus derselben Rechnung
-  // (numStripes*10 + ca. 150) bestimmt werden.
+  // Fenstergroesse. size() erlaubt hier keine Variablen, deshalb Literale -
+  // bei einer anderen Stripe-Zahl muessen sie von Hand aus den drei Ansichten
+  // neu bestimmt werden, die sich das Fenster teilen:
+  //
+  //   Showbetrieb:      Vorschau bei 0/0, numStripes*10 Pixel hoch (image()
+  //                     weiter unten skaliert genau darauf), bei 30 Stripes
+  //                     also 300px, Breite numLedsPerStripe*2 = 1200px.
+  //   Kalibriermodus C: dieselbe Vorschau, darunter das HUD von
+  //                     NodeCalibration.hudText() mit VIER Zeilen
+  //                     (Cursorstaende/Zaehler/Auswahl, Meldung,
+  //                     Tastenbelegung auf zwei Zeilen), beginnend bei
+  //                     y = numStripes*10 + 20.
+  //   Positionsmodus P: die Draufsicht-Flaeche paneW x paneH = 525x300 bei
+  //                     paneX/paneY = 10/10 (endet also bei 535/310), rechts
+  //                     daneben die verkleinerte Vorschau bei x=560, 600x120,
+  //                     und darunter das HUD von
+  //                     LedPositionCalibration.hudText() mit FUENF Zeilen ab
+  //                     y = paneY + paneH + 20 = 330.
+  //
+  // Die Hoehe muss also den groesseren der beiden Faelle tragen:
+  // max(numStripes*10, paneY + paneH) + 20 Abstand + fuenf Textzeilen + Rand.
+  // Bei 30 Stripes sind das 310 + 20 + ca. 70 + Rand; 450 hat dafuer Reserve.
+  // Die Breite deckt mit 1400 sowohl die 1200px-Vorschau des Showbetriebs als
+  // auch 560+600 = 1160 des Positionsmodus ab.
   size(1400, 450, P3D);
   frameRate(40);
   //opens the port to receive OSC
@@ -127,10 +146,10 @@ void setup() {
   System.out.print(artNetOutput.describeMapping());
   // 2026-07-30, Birk: Obergrenze auf 0..1 freigegeben - die Show fährt die
   // Stripes bewusst nie auf Vollweiss, das Hardware-Risiko (Spannungsabfall
-  // bei Weiss auf 10 m Laenge) betraf nur die Testbilder (TestPatterns 3/5
-  // senden (1,1,1)). Die Testbilder haben deshalb jetzt einen eigenen, vom
-  // Fader unabhaengigen Fixpegel CALIBRATION_MASTER_LEVEL statt masterLevel
-  // zu nutzen - der Fader selbst darf nun bis 1.0 gehen.
+  // bei Weiss auf 10 m Laenge) betraf nur die Testbilder. Die daempfen sich
+  // seit 2026-07-31 selbst (TestPatterns.PATTERN_LEVEL), der Fader gilt
+  // seither ungefiltert fuer jede Betriebsart - Show, Kalibrierung,
+  // Positionsmodus.
   masterLevel = new RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 1f);
   artNetOutput.start();
 
@@ -152,12 +171,27 @@ void setup() {
   ledPositionMap = new LedPositionMap(numStripes, numLedsPerStripe, footprintX, footprintY);
   ledPositionMap.apply(ledAnchorStore);
   LedNetworkNode.applyPositions(ledPositionMap, listOfNodes);
-  // Eine Warnzeile, wenn Positionen fehlen. Die Show laeuft dann wie bisher,
-  // nur ohne Raumbezug - jede Koordinate ist (0,0), also die Netzmitte.
-  if (ledPositionMap.undefinedCount() > 0) {
+  // Zwei verschiedene Arten von unfertiger Kalibrierung, beide still - die
+  // Show laeuft in jedem Fall weiter, nur der Raumbezug stimmt nicht.
+  // docs/positionen-anleitung.md verlangt aus der Taste T ausdruecklich
+  // "0 LEDs ohne Position, 0 nur extrapoliert"; hier wird beides geprueft.
+  if (ledPositionMap.undefinedCount() > 0 || ledPositionMap.extrapolatedCount() > 0) {
     System.out.println("WARNUNG: " + ledPositionMap.coverageReport(ledAnchorStore));
-    System.out.println("WARNUNG: diese LEDs senden (0,0) als Klangposition. "
-        + "Positionen mit P aufnehmen, siehe docs/positionen-anleitung.md");
+    if (ledPositionMap.undefinedCount() > 0) {
+      System.out.println("WARNUNG: LEDs ohne Position senden (0,0) als Klangposition, "
+          + "also die Netzmitte.");
+    }
+    if (ledPositionMap.extrapolatedCount() > 0) {
+      // Genau ein Anker je Stripe macht undefinedCount() = 0 und sieht damit
+      // fertig aus, obwohl LedPositionMap.positionOf() dann ALLE LEDs des
+      // Stripes auf diesen einen Punkt legt - 30 Anker statt 18000 Positionen.
+      // Ohne diese Zeile faellt das nirgends auf.
+      System.out.println("WARNUNG: extrapolierte LEDs sind geraten, nicht gestuetzt. "
+          + "Bei nur einem Anker je Stripe faellt der ganze Stripe auf diesen Punkt "
+          + "zusammen. Zwei Anker je Stripe machen daraus eine Interpolation.");
+    }
+    System.out.println("WARNUNG: Positionen mit P aufnehmen, "
+        + "siehe docs/positionen-anleitung.md");
   }
   ledPositionCalibration = new LedPositionCalibration(ledAnchorStore, ledPositionMap,
       crossingStore, listOfNodes, numStripes, numLedsPerStripe,
@@ -217,13 +251,18 @@ void draw() {
     ledColors = mixer.mix();
   }
   drawLedColorsToCanvas(); // the visuals to be displayed on the led-stripes are drawn into the canvas to be displayed on the screen
+  // P3D behaelt den Inhalt des vorherigen Frames. Ohne dieses Loeschen wuerde
+  // sich der HUD-Text Frame um Frame zu einem unlesbaren Klumpen stapeln, und
+  // nach dem Verlassen eines Kalibriermodus blieben HUD und Draufsicht-Flaeche
+  // eingefroren stehen: die Vorschau deckt nur 1200x300 Pixel des 1400x450
+  // grossen Fensters ab, alles darunter und rechts daneben wird im Showbetrieb
+  // sonst nie wieder ueberschrieben. Ein Vollbild-Clear kostet auf der GPU
+  // praktisch nichts und erledigt alle drei Modi mit einer Zeile - deshalb hier
+  // vor der Fallunterscheidung statt je Zweig einzeln.
+  background(0);
   if (positionMode) {
     // Im Positionsmodus belegt die Draufsicht-Flaeche den Bereich links, die
     // verkleinerte LED-Vorschau sitzt rechts daneben.
-    // background(0) raeumt dabei zugleich den vorherigen Frame weg - P3D
-    // behaelt ihn sonst, und Flaeche wie HUD wuerden sich uebereinander
-    // stapeln, statt ersetzt zu werden.
-    background(0);
     drawPositionPane();
     image(canvas, 560, 0, 600, 120);
     fill(255);
@@ -231,12 +270,6 @@ void draw() {
   } else {
     image(canvas, 0, 0, numLedsPerStripe*2, numStripes*10); // display the led-stripes
     if (calibrationMode) {
-      // P3D behaelt den Inhalt des vorherigen Frames - ohne dieses Loeschen
-      // wuerde sich der HUD-Text unterhalb der Vorschau zu einem unlesbaren
-      // Klumpen stapeln, statt jeden Frame ersetzt zu werden
-      fill(0);
-      noStroke();
-      rect(0, numStripes * 10, width, height - numStripes * 10);
       fill(255);
       text(nodeCalibration.hudText(), 10, numStripes * 10 + 20);
     }
@@ -245,10 +278,12 @@ void draw() {
   //server.sendTexture(canvas); //use this on Windows
   //server.sendImage(canvas); //use this on MacOS
   //send data directly to ArtNet Interface withoput MadMapper in between
-  // Testbilder (calibrationMode) laufen auf einem eigenen Fixpegel statt dem
-  // Show-Fader: TestPatterns 3/5 senden Vollweiss (1,1,1), das darf nicht mit
-  // masterLevel bis 1.0 rausgehen (Spannungsabfall-Risiko bei Weiss auf 10 m).
-  artNetOutput.setMasterLevel(calibrationMode ? CALIBRATION_MASTER_LEVEL : masterLevel.getValue());
+  // Ein Pegel fuer alle Betriebsarten, auch die Kalibrierung: die Testbilder
+  // daempfen sich seit 2026-07-31 selbst (TestPatterns.PATTERN_LEVEL), der
+  // Fader muss sie also nicht mehr abfangen. Damit laesst sich die
+  // Kalibrieransicht - einzelne Punkte, zwei schwach eingefaerbte Stripes -
+  // auf 1.0 hochziehen, ohne dass ein flaechiges Testbild mitgeht.
+  artNetOutput.setMasterLevel(masterLevel.getValue());
   artNetOutput.publish(ledColors);
 }
 

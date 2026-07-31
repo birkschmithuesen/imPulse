@@ -9,6 +9,34 @@
 // nicht zeigt.
 class TestPatterns {
 
+  // Sicherheitsventil der Testbilder. Die Muster ziehen bis zu alle 18 000
+  // LEDs gleichzeitig auf, und bei 10 m Stripe-Laenge ist das laut Handbuch
+  // ein Spannungsabfall-Risiko - deshalb geben sie hoechstens diesen Anteil
+  // aus.
+  //
+  // Der Pegel sitzt seit 2026-07-31 HIER und nicht mehr am Master
+  // (frueher CALIBRATION_MASTER_LEVEL in imPulse.pde, das den Fader waehrend
+  // des Kalibriermodus pauschal ersetzte). Grund: die Kalibrieransicht selbst
+  // zeigt nur einzelne Punkte und zwei schwach eingefaerbte Stripes, die darf
+  // der Fader bis 1.0 hochziehen - nur die flaechigen Testbilder duerfen es
+  // nicht. Ein Master, der beides zugleich bedient, kann das nicht trennen.
+  //
+  // Die Sicherheitseigenschaft bleibt dabei erhalten, sie wird sogar
+  // strenger: der Master multipliziert weiter obendrauf und ist auf 0..1
+  // geklemmt (ArtNetOutput.setMasterLevel), ein Testbild kommt also nie ueber
+  // PATTERN_LEVEL heraus - der Fader kann es nur dunkler machen. Bewusst eine
+  // Konstante statt eines OSC-Parameters, damit sie sich nicht versehentlich
+  // hochschrauben laesst.
+  static final float PATTERN_LEVEL = 0.1f;
+
+  // Jede Farbe eines Testbildes geht durch diese Methode - kein Muster baut
+  // sein LedColor selbst. Ohne diesen einen Durchgang waere PATTERN_LEVEL
+  // eine Konvention, an die sich ein spaeter ergaenztes Muster erinnern
+  // muesste; test/TestPatternsTest.java haelt das nach.
+  private static LedColor lit(float r, float g, float b) {
+    return new LedColor(r * PATTERN_LEVEL, g * PATTERN_LEVEL, b * PATTERN_LEVEL);
+  }
+
   // Zustand, der zwischen Frames fortbesteht: der laufende Stripe bei
   // Muster 1, die Lauflicht-Position bei Muster 2, der Zeitstempel des
   // letzten Schritts (von beiden Mustern genutzt, da nie gleichzeitig
@@ -54,7 +82,7 @@ class TestPatterns {
     }
     int base = stripe * numLedsPerStripe;
     for (int i = 0; i < 4 && patternLed + i < numLedsPerStripe; i++) {
-      buffer[base + patternLed + i].set(new LedColor(1, 1, 1));
+      buffer[base + patternLed + i].set(lit(1, 1, 1));
     }
     return "Testbild 2 - Stripe " + stripe + " LED " + patternLed
         + "  (Grenzen bei 128 256 384 512)";
@@ -67,7 +95,7 @@ class TestPatterns {
     for (int s = 0; s < numStripes; s++) {
       int base = s * numLedsPerStripe;
       for (int i = numLedsPerStripe - 4; i < numLedsPerStripe; i++) {
-        buffer[base + i].set(new LedColor(1, 1, 1));
+        buffer[base + i].set(lit(1, 1, 1));
       }
     }
     return "Testbild 3 - nur LED " + (numLedsPerStripe - 4) + ".."
@@ -105,11 +133,11 @@ class TestPatterns {
               : elapsed < PHASE4_BLUE_END ? 3
               : 4;
     patternColorPhase = phase;
-    LedColor c = phase == 0 ? new LedColor(1, 1, 1)
-               : phase == 1 ? new LedColor(1, 0, 0)
-               : phase == 2 ? new LedColor(0, 1, 0)
-               : phase == 3 ? new LedColor(0, 0, 1)
-               : new LedColor(0, 0, 0);
+    LedColor c = phase == 0 ? lit(1, 1, 1)
+               : phase == 1 ? lit(1, 0, 0)
+               : phase == 2 ? lit(0, 1, 0)
+               : phase == 3 ? lit(0, 0, 1)
+               : lit(0, 0, 0);
     LedColor.set(buffer, c);
     return "Testbild 4 - " + colorName(phase);
   }
@@ -140,17 +168,24 @@ class TestPatterns {
     }
   }
 
-  // Muster 5: flaechig weiss.
+  // Muster 5: alle Stripes flaechig gruen.
+  //
+  // War bis 2026-07-31 flaechig weiss. Gruen auf Nutzer-Wunsch: das ist das
+  // Bild, mit dem am Aufbau geprueft wird, ob alle Stripes durchgehend
+  // leuchten, und es zieht dabei nur einen der drei Kanaele auf - also ein
+  // Drittel der Last des frueheren Weiss auf denselben 18 000 LEDs. Die
+  // Kanalreihenfolge prueft weiterhin Muster 4, das Weiss und die Grundfarben
+  // nacheinander zeigt.
   static String pattern5(LedColor[] buffer) {
-    LedColor.set(buffer, new LedColor(1, 1, 1));
-    return "Testbild 5 - flaechig weiss";
+    LedColor.set(buffer, lit(0, 1, 0));
+    return "Testbild 5 - alle Stripes flaechig gruen";
   }
 
   private static void dimStripe(LedColor[] buffer, int stripe, int numLedsPerStripe,
       float r, float g, float b) {
     int base = stripe * numLedsPerStripe;
     for (int i = 0; i < numLedsPerStripe; i++) {
-      buffer[base + i].set(new LedColor(r, g, b));
+      buffer[base + i].set(lit(r, g, b));
     }
   }
 }

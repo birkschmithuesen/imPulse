@@ -28,6 +28,13 @@ class LedPositionCalibration {
   static final long CLEAR_ALL_CONFIRM_MAX_MILLIS = 5000;
   static final float DIM = 0.06f;
 
+  // Nachbarn je Seite, die mit der LED des aktuellen Eintrags weiss blinken.
+  // Eine einzelne LED ist am Netz aus ein paar Metern Entfernung kaum zu
+  // finden; 12 je Seite ergeben bei 1,67 cm Pitch einen Abschnitt von rund
+  // 42 cm. Der Anker selbst bleibt die LED in der Mitte - der Abschnitt ist
+  // nur Markierung, er verbreitert den aufgenommenen Punkt nicht.
+  static final int MARK_RADIUS = 12;
+
   private final LedAnchorStore store;
   private final LedPositionMap map;
   private final NodeCrossingStore crossingStore;
@@ -394,13 +401,23 @@ class LedPositionCalibration {
   }
 
   // Verwerfen ALLER Anker, auch der geladenen. Erster Druck kuendigt an, ein
-  // zweiter zwischen 300 ms und 5 s danach fuehrt aus. Die Untergrenze wehrt
-  // Tastenwiederholung bei gehaltenem L ab; die angekuendigte Bestaetigung
-  // wird dabei NICHT erneuert, sonst haelt ein gedruecktes L das Fenster
-  // endlos offen.
+  // zweiter zwischen 300 ms und 5 s danach fuehrt aus.
+  //
+  // Die Untergrenze allein reicht gegen Tastenwiederholung NICHT: solange ein
+  // zu frueher Druck nur uebersprungen wurde, lief die Uhr seit dem ersten
+  // Druck weiter, und der Ereignisstrom eines gehaltenen L (X11: erste
+  // Wiederholung nach ca. 500 ms, danach alle ca. 30 ms) traf zwangslaeufig
+  // irgendwann das Fenster ab 300 ms - die Wiederholung selbst loeste also die
+  // Bestaetigung aus und eine stundenlange Sitzung war weg. Ein zu frueher
+  // Druck schiebt die Ankuendigung deshalb nach vorn (clearAllArmedAt = jetzt)
+  // statt sie zu ignorieren: bei gehaltenem L bleibt der Abstand damit immer
+  // der Wiederholabstand von ca. 30 ms und erreicht die 300 ms nie. Verworfen
+  // wird die Ankuendigung dabei bewusst nicht - ein absichtlicher zweiter
+  // Druck nach dem Loslassen soll weiter greifen.
   boolean requestClearAll(long nowMillis) {
     long sinceArmed = nowMillis - clearAllArmedAt;
     if (clearAllPending && sinceArmed < CLEAR_ALL_CONFIRM_MIN_MILLIS) {
+      clearAllArmedAt = nowMillis;
       return false;
     }
     if (clearAllPending && sinceArmed <= CLEAR_ALL_CONFIRM_MAX_MILLIS) {
@@ -444,6 +461,39 @@ class LedPositionCalibration {
         message);
   }
 
+  // Erste und letzte LED des Leuchtabschnitts um led herum, beide
+  // einschliesslich.
+  //
+  // Der Abschnitt hat immer dieselbe Laenge (2*MARK_RADIUS+1) und wird an
+  // einem Stripe-Ende nach innen GESCHOBEN statt abgeschnitten - sonst waere
+  // die Markierung ausgerechnet an den Enden halb so gross, und die muss man
+  // beim Einmessen genauso finden wie eine Kreuzung in der Mitte.
+  //
+  // Er endet dabei zwingend am eigenen Stripe. Liefe er in den Nachbar-Stripe
+  // hinein, markierte er dort einen Punkt, den es nicht gibt - beim Einmessen
+  // die schlimmste Sorte Fehler, weil er aussieht wie ein echter Treffer.
+  //
+  // Ist der Stripe kuerzer als der Abschnitt, leuchtet er ganz. Das kommt am
+  // Aufbau nicht vor (600 LEDs je Stripe), wohl aber in den Tests.
+  int[] markSpan(int led) {
+    int base = (led / numLedsPerStripe) * numLedsPerStripe;
+    int last = base + numLedsPerStripe - 1;
+    int from = led - MARK_RADIUS;
+    int to = led + MARK_RADIUS;
+    if (from < base) {
+      to += base - from;
+      from = base;
+    }
+    if (to > last) {
+      from -= to - last;
+      to = last;
+    }
+    if (from < base) {
+      from = base;
+    }
+    return new int[] { from, to };
+  }
+
   LedColor[] drawMe() { return drawMe(System.currentTimeMillis()); }
 
   // Drei Regeln, spaetere ueberschreiben fruehere:
@@ -451,8 +501,9 @@ class LedPositionCalibration {
   //      dunkel unbekannt
   //   2. jeder Stripe, der eine LED des aktuellen Eintrags traegt, glimmt
   //      gruen; sonst waere er von den anderen nicht zu unterscheiden
-  //   3. alle LEDs des aktuellen Eintrags blinken weiss - an einer Kreuzung
-  //      markieren damit zwei LEDs denselben physischen Punkt
+  //   3. alle LEDs des aktuellen Eintrags blinken weiss, mitsamt MARK_RADIUS
+  //      Nachbarn auf demselben Stripe - an einer Kreuzung markieren damit
+  //      zwei Abschnitte denselben physischen Punkt
   LedColor[] drawMe(long nowMillis) {
     if (mapDirty) {
       map.apply(store);
@@ -480,7 +531,10 @@ class LedPositionCalibration {
       }
       if (nowMillis % (2 * BLINK_MILLIS) < BLINK_MILLIS) {
         for (int led : leds) {
-          buffer[led].set(1f, 1f, 1f);
+          int[] span = markSpan(led);
+          for (int i = span[0]; i <= span[1]; i++) {
+            buffer[i].set(1f, 1f, 1f);
+          }
         }
       }
     }

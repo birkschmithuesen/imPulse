@@ -48,7 +48,8 @@ if [ "$#" -eq 0 ]; then
   set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest
   for optional in NodeSelectionTest LedAnchorStoreTest LedPositionMapTest \
                   LedPositionCalibrationTest ImpulseOscThrottleTest \
-                  PresetStoreTest PresetSchedulerTest ParameterOscillatorTest; do
+                  TestPatternsTest PresetStoreTest PresetSchedulerTest \
+                  ParameterOscillatorTest; do
     if [ -f "test/$optional.java" ]; then
       set -- "$@" "$optional"
     else
