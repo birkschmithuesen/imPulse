@@ -338,6 +338,13 @@ s.options.device = "ASIO : ZOOM AMS-24 ASIO Driver";
 // steht meist allein.
 ~droneAmpScale = 0.06;
 
+// Haerte der Richtwirkung fuer Nodes/Drohnen (0 = normale radiusabhaengige
+// Richtwirkung, Mitte diffus/Rand gerichtet; 1 = IMMER voll gerichtet).
+// Birk vor Ort 2026-07-31: erst mal auf maximale Haerte fuer die
+// Azimuth-Testabnahme, spaeter per /klangnetz/param/directHardness live
+// zuruecknehmbar (siehe ~registerParam unten).
+~directHardness = 1.0;
+
 // ---- OSC-Sound-Parameter-Registry --------------------------------------
 // Kleine, für DIESE Datei gebaute Registry — kein Anspruch auf
 // Wiederverwendbarkeit in anderen Patches. Jeder Eintrag: Environment-
@@ -372,6 +379,12 @@ s.options.device = "ASIO : ZOOM AMS-24 ASIO Driver";
         entry[\synth].set(\lpfMult, val);
     }) };
 });
+// directHardness wirkt nur auf NEU gestartete Synths (das Encoder-
+// Lambda ~toBformat liest die Environment-Variable bei jedem Aufruf neu,
+// aber ein bereits laufender Drohnen-Synth hat den Wert schon in seinen
+// SC-Graphen eingerechnet) -- kein onSet-Callback noetig/moeglich, wirkt
+// wie brightness/detune erst beim naechsten Treffer/neuer Drohne.
+~registerParam.(\directHardness, 1.0, 0.0, 1.0, nil);
 
 s.waitForBoot({
     // ---- Alten Aufbau abräumen ---------------------------------------
@@ -433,7 +446,14 @@ s.waitForBoot({
         var azimuth, radius, direct, bf;
         azimuth = ((px * ~azimuthSign).atan2(py) / pi) + ~azimuthOffset;
         radius  = px.hypot(py);
-        direct  = (radius / ~maxRadiusM).clip(0, 1);
+        // ~directHardness: 0 = normale radiusabhaengige Richtwirkung
+        // (Mitte diffus, Rand voll gerichtet, urspruengliches Verhalten),
+        // 1 = IMMER voll gerichtet (direct=1), egal wie nah an der
+        // Netzmitte. Birk vor Ort 2026-07-31: "erst mal mit maximaler
+        // Haerte" fuer die Testabnahme -- linear interpoliert per
+        // ~registerParam, damit spaeter live zwischen beiden Extremen
+        // gefahren werden kann (siehe /klangnetz/param/directHardness).
+        direct  = ((radius / ~maxRadiusM).clip(0, 1)).blend(1, ~directHardness);
         bf = PanB2.ar(sig, azimuth, 1);
         [bf[0], bf[1] * direct, bf[2] * direct]
     };
