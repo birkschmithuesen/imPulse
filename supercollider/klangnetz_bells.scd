@@ -66,6 +66,8 @@
 // Empfängt OSC von imPulse (Processing-Sketch) auf Port 8002:
 //   /net/hitNode <nodeId:int>    <energy:float> <x:float> <y:float>
 //   /net/impulse <impulseId:int> <x:float>      <y:float> <energy:float> <speed:float>
+//   /sc/preset/load <name:string>   Sound-Preset laden (siehe ~presetLoad)
+//   /sc/preset/save <name:string>   Sound-Preset schreiben (siehe ~presetSave)
 // (siehe LedNetworkTransportEffect.java sendOscMessage() und
 // sendImpulseStream(), Adresse in imPulse.pde:
 // NetAddress oscOutput = new NetAddress("127.0.0.1", 8002))
@@ -554,6 +556,192 @@ s.options.numInputBusChannels = 2;
 ~registerParam.(\travelFreqMin,   80.0,  20.0,  2000.0, nil);
 ~registerParam.(\travelFreqMax, 6000.0, 200.0, 16000.0, nil);
 
+// ---- Einen Parameterwert anwenden --------------------------------------
+// DER einzige Ort, an dem ein Sound-Parameter seinen Wert bekommt. Sowohl
+// der OSC-Empfang (/klangnetz/param/<name>) als auch das Preset-Laden gehen
+// hier durch -- zwei Kopien dieser vier Zeilen waeren zwei Wege, die
+// auseinanderlaufen koennen (ein neuer Parameter mit onSet-Callback wuerde
+// dann per OSC wirken, per Preset aber nicht, ohne Fehlermeldung).
+//
+// Geklemmt wird auf die Range aus der REGISTRY, nicht auf eine aus einer
+// Datei -- dieselbe Regel wie PresetStore.applyPreset() auf der Java-Seite,
+// damit ein aelteres Preset nach einer Bereichsaenderung gueltig bleibt.
+//
+// Liefert den tatsaechlich gesetzten Wert, oder nil bei unbekanntem Namen.
+~applyParam = { |name, rawValue|
+    var entry = ~params[name];
+    if (entry.isNil) {
+        nil
+    } {
+        var val = rawValue.asFloat.clip(entry[\lo], entry[\hi]);
+        currentEnvironment[name] = val;
+        entry[\onSet] !? { |cb| cb.(val) };
+        // Die vier Master-/Reverb-Parameter wirken ueber den dauerhaft
+        // laufenden \masterReverb-Synth. Ein .set auf alle ist billig und
+        // robust gegen Aufrufreihenfolge -- unschaedlich, wenn ein
+        // SynthDef-Argumentname bei diesem Parameter gar nicht existiert,
+        // .set ignoriert unbekannte Keys still.
+        ~masterReverbSyn !? { |syn| syn.set(name, val) };
+        val
+    }
+};
+
+// ---- Presets fuer die Sound-Parameter ----------------------------------
+// Ein SC-Preset ist ein Satz von Werten fuer die oben registrierten
+// Parameter -- und NUR fuer die. Das Licht (Speed, Lifetime, Sequencer,
+// Farben) liegt in data/presets/<name>.txt auf der Processing-Seite und
+// bleibt dort; imPulse ist Master und schickt bei jedem Wechsel
+// /sc/preset/load <name> hierher (PresetManager.forwardToSound()).
+//
+// GLEICHER NAME, ZWEI DATEIEN: "hang_drum_slow" meint
+// data/presets/hang_drum_slow.txt fuer das Licht UND
+// supercollider/presets/hang_drum_slow.txt fuer den Klang. Ein Name, der
+// hier keine Datei hat, ist kein Fehler -- dann bleibt der Klang stehen,
+// waehrend das Licht wechselt. Das ist der haeufige Fall und wird nur
+// gemeldet, nicht beklagt.
+//
+// FORMAT: dasselbe wie remoteSettings.txt und die visuellen Presets, sechs
+// tabgetrennte Spalten, nach Adresse sortiert, Zeilenende '\n':
+//   float <TAB> /klangnetz/param/<name> <TAB> <TAB> wert <TAB> min <TAB> max
+// Die Beschreibungsspalte bleibt leer (wie in den vorhandenen SC-Presets).
+// min/max stehen zur Information in der Datei, GEKLEMMT wird auf die Range
+// aus der Registry (siehe ~applyParam).
+~presetDir = thisProcess.nowExecutingPath.notNil.if(
+    { thisProcess.nowExecutingPath.dirname +/+ "presets" },
+    // Rueckfall, wenn die Datei nicht als Datei ausgewertet wird (aus einem
+    // Scratch-Buffer heraus). Dann liegen die Presets im Arbeitsverzeichnis
+    // und die Meldung unten nennt den Pfad, damit das nicht raetselhaft ist.
+    { "presets" }
+);
+("Sound-Preset-Ordner: " ++ ~presetDir).postln;
+
+// Spiegelt PresetStore.isValidName() auf der Java-Seite: a-z, 0-9,
+// Unterstrich, Bindestrich, hoechstens 64 Zeichen. Autoritaet ist Java --
+// hier geht es um Pfad-Traversal: ohne diese Pruefung wuerde
+// /sc/preset/load "../../../etc/passwd" eine beliebige Datei oeffnen.
+~presetValidName = { |name|
+    var text = name.asString;
+    var ok = (text.size > 0) and: { text.size <= 64 };
+    text.do({ |c|
+        var allowed = c.isDecDigit
+            or: { (c >= $a) and: { c <= $z } }
+            or: { c == $_ } or: { c == $- };
+        allowed.not.if({ ok = false });
+    });
+    ok
+};
+
+~presetPath = { |name| ~presetDir +/+ (name.asString ++ ".txt") };
+
+// Alle registrierten Parameter als Preset-Zeilen, nach Adresse sortiert
+// (wie PresetStore.write()) -- so bleibt ein git diff zwischen zwei
+// Speichervorgaengen auf die wirklich geaenderten Zeilen beschraenkt.
+~presetSnapshot = {
+    var lines = ~params.keys.asArray.collect({ |name|
+        var entry = ~params[name];
+        [
+            "float",
+            "/klangnetz/param/" ++ name,
+            "",
+            currentEnvironment[name].asString,
+            entry[\lo].asString,
+            entry[\hi].asString
+        ].join("\t")
+    });
+    lines.sort({ |a, b| a < b });
+    lines
+};
+
+~presetSave = { |name|
+    var path, file, ok = false;
+    if (~presetValidName.(name).not) {
+        ("Sound-Preset speichern abgelehnt: unzulaessiger Name %"
+            .format(name.asString.quote)).postln;
+    } {
+        File.exists(~presetDir).not.if({ File.mkdir(~presetDir) });
+        path = ~presetPath.(name);
+        // Direkt geschrieben, nicht ueber Temp-Datei plus Umbenennen wie auf
+        // der Java-Seite: sclang hat kein portables rename, und hier
+        // speichert ein Mensch von Hand statt eines Schedulers im
+        // Sekundentakt. Der Preis ist eine halb geschriebene Datei, falls
+        // sclang genau dabei abstuerzt.
+        file = File(path, "w");
+        if (file.isOpen) {
+            file.write(~presetSnapshot.().join("\n") ++ "\n");
+            file.close;
+            ok = true;
+            ("Sound-Preset % gespeichert (% Parameter) -> %"
+                .format(name.asString.quote, ~params.size, path)).postln;
+        } {
+            ("Sound-Preset nicht schreibbar: %".format(path)).postln;
+        };
+    };
+    ok
+};
+
+~presetLoad = { |name|
+    var path, file, text, applied = 0, unknown = 0, broken = 0;
+    if (~presetValidName.(name).not) {
+        ("Sound-Preset laden abgelehnt: unzulaessiger Name %"
+            .format(name.asString.quote)).postln;
+    } {
+        path = ~presetPath.(name);
+        if (File.exists(path).not) {
+            // KEIN Fehler: nicht jede Lichtszene hat ein Klang-Gegenstueck.
+            // Der Klang bleibt dann einfach stehen.
+            ("Kein Sound-Preset % - Klang bleibt unveraendert"
+                .format(name.asString.quote)).postln;
+        } {
+            file = File(path, "r");
+            if (file.isOpen.not) {
+                ("Sound-Preset nicht lesbar: %".format(path)).postln;
+            } {
+                text = file.readAllString;
+                file.close;
+                // \r mit weg: eine von Hand unter Windows bearbeitete Datei
+                // haette sonst ein \r am Ende jedes Zahlenwerts und jede
+                // Zeile schluege als unlesbar fehl.
+                text.replace("\r", "").split($\n).do({ |line|
+                    var fields, address, key;
+                    if (line.stripWhiteSpace.size > 0) {
+                        fields = line.split($\t);
+                        if (fields.size < 4) {
+                            broken = broken + 1;
+                        } {
+                            address = fields[1].stripWhiteSpace;
+                            if (address.beginsWith("/klangnetz/param/").not) {
+                                unknown = unknown + 1;
+                            } {
+                                key = address.copyToEnd(
+                                    "/klangnetz/param/".size).asSymbol;
+                                if (~params[key].isNil) {
+                                    unknown = unknown + 1;
+                                } {
+                                    ~applyParam.(key, fields[3].asFloat);
+                                    applied = applied + 1;
+                                };
+                            };
+                        };
+                    };
+                });
+                ("Sound-Preset % geladen: % uebernommen, % unbekannt, % unlesbar"
+                    .format(name.asString.quote, applied, unknown, broken)).postln;
+                // Der wahrscheinlichste Grund, wenn gar nichts ankommt: die
+                // Datei stammt aus dem alten Parametersatz (/sc/amp/*,
+                // /sc/bell/*, /sc/scale/*), den es seit dem Pan4-Umbau nicht
+                // mehr gibt. Ohne diesen Hinweis sucht man den Fehler im
+                // Loader statt in der Datei.
+                if ((applied == 0) and: { unknown > 0 }) {
+                    ("  -> keine bekannte Adresse dabei. Stammt % noch aus dem"
+                        + "alten Parametersatz? Mit /sc/preset/save % neu"
+                        + "schreiben.").format(path, name.asString).postln;
+                };
+            };
+        };
+    };
+    applied
+};
+
 s.waitForBoot({
     // ---- Alten Aufbau abräumen ---------------------------------------
     // Nur beim Re-Evaluieren im Live-Coding relevant, beim ersten Lauf sind
@@ -569,6 +757,8 @@ s.waitForBoot({
     ~noiseTestOscFunc !? { |f| f.free };
     ~noiseTestHardOscFunc !? { |f| f.free };
     OSCdef(\impulseStream) !? { |d| d.free };
+    OSCdef(\scPresetLoad) !? { |d| d.free };
+    OSCdef(\scPresetSave) !? { |d| d.free };
     ~droneReaper !? { |r| r.stop };
     ~paramOscDefs !? { |defs| defs.do({ |d| d.free }) };
     ~masterReverbSyn !? { |syn| syn.free };
@@ -1108,38 +1298,46 @@ s.waitForBoot({
     // ---- OSC-Empfang: Sound-Parameter-Layer ---------------------------
     // Ein OSCdef je registriertem Parameter (siehe ~registerParam oben) —
     // schlichter Loop über ~params statt sieben Kopien desselben Rumpfs.
-    // Jede Nachricht bringt EINEN Float als erstes Argument, wird auf
-    // [lo, hi] geklemmt, in die Environment-Variable geschrieben, an einen
-    // etwaigen onSet-Callback gereicht und dann an den laufenden
-    // \masterReverb-Synth weitergegeben (der einzige Sink, der die vier
-    // reinen Environment-Parameter masterVolume/reverbMix/reverbRoom/
-    // reverbDamp live braucht — brightness/detune/droneLpfMult werden
-    // anders zugestellt, siehe deren Kommentare bei den SynthDefs).
+    // Jede Nachricht bringt EINEN Float als erstes Argument.
+    //
+    // Das Anwenden selbst macht ~applyParam (oben definiert), nicht dieser
+    // Rumpf: dieselbe Funktion nutzt auch das Preset-Laden. Zwei Kopien
+    // waeren zwei Wege, die auseinanderlaufen koennen.
+    //
     // recvPort ist ~oscListenPort, derselbe wie /net/hitNode — ein OSCdef
     // pro Adresse ist die feinste Granularität, die SC anbietet, ein
-    // gemeinsamer Empfänger für alle sieben Adressen bräuchte selbst
-    // wieder eine Verzweigung nach Adresse und würde nur Code verschieben.
+    // gemeinsamer Empfänger für alle Adressen bräuchte selbst wieder eine
+    // Verzweigung nach Adresse und würde nur Code verschieben.
     ~paramOscDefs = ~params.keys.collect({ |name|
         OSCdef(
             ("klangnetzParam_" ++ name).asSymbol,
             { |msg|
-                var entry = ~params[name];
-                var val = msg[1].asFloat.clip(entry[\lo], entry[\hi]);
-                currentEnvironment[name] = val;
-                entry[\onSet] !? { |cb| cb.(val) };
-                // Die vier Master-/Reverb-Parameter wirken über den
-                // dauerhaft laufenden \masterReverb-Synth — ein .set auf
-                // alle vier ist billig und robust gegen Aufrufreihenfolge
-                // (unschädlich, wenn ein SynthDef-Argumentname bei diesem
-                // Parameter gar nicht existiert, .set ignoriert unbekannte
-                // Keys still).
-                ~masterReverbSyn !? { |syn| syn.set(name, val) };
+                var val = ~applyParam.(name, msg[1]);
                 ("klangnetz param % -> %".format(name, val.round(0.001))).postln;
             },
             ("/klangnetz/param/" ++ name).asSymbol,
             recvPort: ~oscListenPort
         );
     });
+
+    // ---- OSC-Empfang: Sound-Presets -----------------------------------
+    // /sc/preset/load <name:string>  und  /sc/preset/save <name:string>
+    //
+    // imPulse ist Master: PresetManager schickt bei JEDEM Preset-Wechsel
+    // (von Hand, per Scheduler oder beim Start) /sc/preset/load mit
+    // demselben Namen, unter dem das Licht-Preset in data/presets/ liegt.
+    // Hier hoert also niemand auf einen eigenen Zeitplan -- es gibt genau
+    // einen Scheduler, und der laeuft in imPulse.
+    //
+    // Fire-and-forget in beide Richtungen: es geht keine Antwort zurueck.
+    // Ein Name ohne Datei ist kein Fehler (siehe ~presetLoad).
+    OSCdef(\scPresetLoad, { |msg|
+        if (msg.size > 1) { ~presetLoad.(msg[1].asString) };
+    }, '/sc/preset/load', recvPort: ~oscListenPort);
+
+    OSCdef(\scPresetSave, { |msg|
+        if (msg.size > 1) { ~presetSave.(msg[1].asString) };
+    }, '/sc/preset/save', recvPort: ~oscListenPort);
 
     // =================================================================
     // Messhilfen für die zwei ungemessenen Werte

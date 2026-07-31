@@ -445,10 +445,18 @@ wird dort nur vermerkt, gelesen und angewendet wird in `draw()`.
 werden — die Suite hat nur `core.jar`.
 
 **Sound:** imPulse ist Master. Bei jedem Wechsel geht zusätzlich
-`/sc/preset/load <name>` an `127.0.0.1:8002` — derselbe Port, auf dem
-SuperCollider schon `/net/hitNode` empfängt, nur eine neue Adresse. Es gibt
-genau einen Scheduler, deshalb können Licht und Klang nicht auseinanderlaufen.
+`/sc/preset/load <name>` an `127.0.0.1:8002` und bei jedem erfolgreichen
+Speichern `/sc/preset/save <name>` — derselbe Port, auf dem SuperCollider
+schon `/net/hitNode` empfängt, nur zwei neue Adressen. Es gibt genau einen
+Scheduler, deshalb können Licht und Klang nicht auseinanderlaufen.
 Fire-and-forget: läuft sclang nicht, läuft die Visual-Show weiter.
+
+Das Speichern wird **nach** dem erfolgreichen eigenen Schreiben weitergereicht
+— sonst legte ein fehlgeschlagenes Licht-Preset trotzdem ein Klang-Preset an,
+und der Name stünde danach nur auf einer der zwei Seiten. Ohne die
+Weiterleitung erfasste „Speichern" im Web-UI still nur das Licht: die Szene
+käme später optisch zurück und klanglich nicht, ohne Fehlermeldung. Was
+SuperCollider damit tut, steht unter „Klangseite".
 
 ### Ausgabepfade
 
@@ -648,6 +656,57 @@ Ursprungs-Buchführung auf der Processing-Seite. Der Whoosh behält seine
 Klangidentität über seine ganze Lebensdauer, auch wenn er in eine andere
 Region fliegt.
 
+**Sound-Presets** (`~presetLoad`, `~presetSave`, Adressen `/sc/preset/load`
+und `/sc/preset/save`, jeweils ein String-Argument): ein SC-Preset ist ein
+Wertesatz für **genau die per `~registerParam` registrierten Parameter** —
+aktuell 18, siehe Tabelle unten. Nichts sonst; Tonleiter, Grundton und die
+Amplituden-Grenzen sind vor Ort getunte Konstanten und bleiben es.
+
+- **Dateien:** `supercollider/presets/<name>.txt`, **gleiches Format** wie
+  `remoteSettings.txt` und die visuellen Presets (sechs Tab-Spalten, nach
+  Adresse sortiert, `\n` als Zeilenende). Die Adress-Spalte trägt die
+  Live-Adresse `/klangnetz/param/<name>`, die Beschreibungsspalte bleibt leer.
+- **Ein Name, zwei Dateien.** `hang_drum_slow` meint
+  `data/presets/hang_drum_slow.txt` für das Licht **und**
+  `supercollider/presets/hang_drum_slow.txt` für den Klang. imPulse ist
+  Master: `PresetManager.forwardToSound()` schickt bei jedem Laden **und**
+  jedem Speichern denselben Namen an 8002. Es gibt genau einen Scheduler, und
+  der läuft in imPulse — SC hat keinen eigenen Zeitplan.
+- **Ein Name ohne SC-Datei ist kein Fehler.** Dann wechselt das Licht und der
+  Klang bleibt stehen; `~presetLoad` meldet das in einer Zeile. Das ist der
+  häufige Fall, nicht der Ausnahmefall.
+- **Geklemmt wird auf die Range aus der Registry, nicht auf die aus der
+  Datei** — dieselbe Regel wie `PresetStore.applyPreset()` auf der Java-Seite,
+  damit ein älteres Preset nach einer Bereichsänderung gültig bleibt.
+- **`~applyParam` ist der einzige Ort, an dem ein Sound-Parameter seinen Wert
+  bekommt.** OSC-Empfang und Preset-Laden gehen beide hindurch. Zwei Kopien
+  dieser vier Zeilen wären zwei Wege, die auseinanderlaufen: ein neuer
+  Parameter mit `onSet`-Callback würde per OSC wirken, per Preset aber nicht —
+  ohne Fehlermeldung.
+- **`~presetValidName` spiegelt `PresetStore.isValidName()`** (a–z, 0–9, `_`,
+  `-`, höchstens 64 Zeichen). Autorität bleibt Java; hier geht es um
+  Pfad-Traversal, ohne die Prüfung würde `/sc/preset/load ../../etc/passwd`
+  eine beliebige Datei öffnen.
+- **Geschrieben wird direkt, nicht atomar über Temp-Datei plus Umbenennen**
+  wie auf der Java-Seite: sclang hat kein portables `rename`, und hier
+  speichert ein Mensch von Hand statt eines Schedulers im Sekundentakt.
+- **Die zwei Dateien, die schon in `supercollider/presets/` liegen
+  (`standby.txt`, `hang_drum_slow.txt`), stammen aus dem alten Parametersatz**
+  (`/sc/amp/*`, `/sc/bell/*`, `/sc/scale/*`) und enthalten **keine** heute
+  gültige Adresse. Sie zu laden ändert nichts und meldet „0 übernommen, 7
+  unbekannt" plus einen Hinweis auf genau diese Ursache. Ein
+  `/sc/preset/save standby` überschreibt sie mit dem aktuellen Satz.
+
+Die 18 Parameter, die ein Preset umfasst: `masterVolume`, `reverbMix`,
+`reverbRoom`, `reverbDamp`, `brightness`, `detune`, `droneLpfMult`,
+`panSharpness`, `regionBiasAmount`, `travelMix`, `travelRq`,
+`travelAmpScale`, `travelFreqBase`, `travelSpeedRef`, `travelOctavesPerStep`,
+`travelSnap`, `travelFreqMin`, `travelFreqMax`. Wer einen `~registerParam`
+ergänzt, bekommt ihn ohne weiteres Zutun in die Presets — die Liste wird aus
+`~params` gelesen, nicht gepflegt. (Die handgepflegte Kopie im Web-UI,
+`SC_PARAMS` in `webui/server.py`, muss dann allerdings nachgezogen werden;
+zwei Tests halten das nach.)
+
 Zwei Dinge, die man kennen muss, bevor man dort etwas anfasst:
 
 - **Es gibt kein Ambisonics mehr.** `~azimuthSign`, `~azimuthOffset` und `~decoderOrientation` sind mit dem Umbau auf `Pan4` am 2026-07-31 (Commit `cbb06d7`) **komplett entfallen** — ältere Notizen, die eine ausstehende Azimut-Messung dieser drei Werte fordern, sind überholt. Ambisonics erster Ordnung ist ein Diffusionsverfahren: eine Punktquelle streut bei voller Richtwirkung immer auf alle vier Kanäle (gemessen: dominanter Kanal nur ~43 % der Gesamtenergie, siehe `docs/ambisonics-sharper-panning-optionen.md`). Das lohnt sich nur bei flexiblem Lautsprecher-Layout; unseres ist fest. `Pan4` erreicht in der Boxecke 100 % auf dieser Box und in der Netzmitte exakt 25/25/25/25 %.
@@ -661,28 +720,18 @@ Zwei Dinge, die man kennen muss, bevor man dort etwas anfasst:
 - **Fenstergrösse in `size()`**: Processing erlaubt dort nur Literale, keine Variablen. Die Höhe muss von Hand zur Stripe-Zahl passen — Vorschau braucht `numStripes*10` Pixel, darunter das mehrzeilige Kalibrier-HUD (siehe Kommentar direkt bei `size(...)` in `imPulse.pde`). Der Kommentar dort rechnet nur mit den vier Zeilen des Kalibrier-HUDs; das Positions-HUD hat fünf und sitzt unter einer 525 × 300 px grossen Draufsicht-Fläche. Wer die Fensterhöhe neu herleitet, muss beides prüfen.
 - **Farbwerte 0..1** durchgängig; Werte > 1 sind erlaubt und werden erst am Output geclampt (`LedColor.clamp()` wird im Mixer bewusst nicht aufgerufen).
 - **SuperCollider-Presets** liegen in `supercollider/presets/<name>.txt`, im
-  selben Tab-Format wie die visuellen Presets, erweitert um den Typ `ints` für
-  die Tonleiter (kommagetrennt in der Wertspalte). Vorgesehen sind
-  `/sc/scale/steps|rootMidi|octaves`, `/sc/amp/min|max` und die zwei globalen
-  Klangregler `/sc/bell/decayScale` (streckt alle Teilton-Decays) und
-  `/sc/bell/tilt` (Exponent auf die Teilton-Amps: >1 dumpfer, <1 brillanter).
-  **Der empfangende Teil fehlt derzeit in `klangnetz_bells.scd`**: er stand in
-  der Repo-Fassung (Commit `e50cd38`) und ging verloren, als am 2026-07-31 die
-  Laptop-Kopie zur kanonischen Datei wurde. `PresetManager` schickt weiterhin
-  `/sc/preset/load` an 8002, dort hört aber niemand darauf — die
-  Preset-Dateien unter `supercollider/presets/` sind also aktuell tot. Was
-  live steuerbar ist, ist stattdessen der Sound-Parameter-Layer unter
-  `/klangnetz/param/<name>` (Adressliste im Kopf der `.scd`). Wer den
-  Preset-Empfang zurückholt, holt ihn aus `e50cd38` und passt ihn an die
-  heutige Pan4-Fassung an (`~scaleSteps` statt `~pentatonicSteps`,
-  `decayScale`/`tilt` gibt es in der SynthDef derzeit nicht — die
-  vorhandenen Timbre-Regler heissen `brightness` und `detune`).
-  **Nachgeprüft am 2026-07-31** (`git ls-tree -r master`): `PresetManager`,
-  `PresetStore`, `PresetScheduler`, `data/presets/` und beide Testsuiten
-  liegen sehr wohl auf `master` — es fehlt **ausschliesslich** der
-  SC-seitige Empfänger. Eine gegenteilige Notiz („das Preset-System liegt
-  nur auf `feature/preset-system-v2`") ist falsch und meint diesen
-  Empfänger.
+  selben Tab-Format wie die visuellen Presets. Der Empfänger
+  (`/sc/preset/load`, `/sc/preset/save`) ist **seit 2026-07-31 gebaut** und
+  steht in `klangnetz_bells.scd` — Details oben unter „Klangseite". Ein
+  Preset umfasst genau die per `~registerParam` registrierten Parameter.
+  **Nicht** zurückgeholt wurde der alte Empfänger aus Commit `e50cd38`: der
+  bediente `/sc/scale/steps|rootMidi|octaves`, `/sc/amp/min|max`,
+  `/sc/bell/decayScale` und `/sc/bell/tilt` — Adressen, die es im heutigen
+  Sound-Design **nicht mehr gibt** (die vorhandenen Timbre-Regler heissen
+  `brightness` und `detune`). Ein Merge von `feature/preset-system-v2` ist
+  aus demselben Grund der falsche Weg: die dortige `.scd` ist der
+  Ambisonics-Stand vor dem Pan4-Umbau. Der Typ `ints` für eine Tonleiter
+  wird derzeit von keiner Seite geschrieben oder gelesen.
   Die `#[...]`-Teilton-Literale in der SynthDef bleiben stehen — kein Rebuild
   beim Preset-Wechsel. Alles liegt weiter in **einem** `(...)`-Block: mehrere
   Top-Level-Blöcke hängen `sclang -D` auf. Für den SC-Teil gibt es **kein**

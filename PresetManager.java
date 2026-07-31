@@ -101,7 +101,7 @@ class PresetManager implements OscMessageSink {
 		PresetApplyReport report = PresetStore.apply(entries, OscMessageDistributor.presetTargets());
 		scheduler.noteLoaded(name, nowMillis);
 		System.out.println("Preset \"" + name + "\" geladen: " + report.summary());
-		forwardToSound(name);
+		forwardToSound("/sc/preset/load", name);
 		return true;
 	}
 
@@ -112,6 +112,14 @@ class PresetManager implements OscMessageSink {
 			return false;
 		}
 		System.out.println("Preset \"" + name + "\" gespeichert: " + store.lastMessage());
+		// Erst NACH dem erfolgreichen eigenen Schreiben: sonst legte ein
+		// fehlgeschlagenes Licht-Preset trotzdem ein Klang-Preset an, und der
+		// Name stuende danach nur auf einer der zwei Seiten.
+		//
+		// Ohne diese Zeile erfasste "Speichern" im Web-UI still nur das Licht
+		// - beim spaeteren Laden kaeme die Szene optisch zurueck und klanglich
+		// nicht, ohne Fehlermeldung.
+		forwardToSound("/sc/preset/save", name);
 		return true;
 	}
 
@@ -126,11 +134,17 @@ class PresetManager implements OscMessageSink {
 
 	// Fire-and-forget: imPulse wartet auf keine Antwort. Laeuft sclang nicht,
 	// laeuft die Visual-Show trotzdem weiter.
-	private void forwardToSound(String name) {
+	//
+	// Der Name ist auf beiden Seiten derselbe: "hang_drum_slow" meint
+	// data/presets/hang_drum_slow.txt fuer das Licht UND
+	// supercollider/presets/hang_drum_slow.txt fuer den Klang. Fehlt die
+	// SC-Datei, bleibt der Klang stehen - kein Fehler, siehe ~presetLoad in
+	// klangnetz_bells.scd.
+	private void forwardToSound(String address, String name) {
 		if (oscP5 == null || soundTarget == null) {
 			return;
 		}
-		OscMessage message = new OscMessage("/sc/preset/load");
+		OscMessage message = new OscMessage(address);
 		message.add(name);
 		oscP5.send(message, soundTarget);
 	}
