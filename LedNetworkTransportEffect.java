@@ -65,6 +65,25 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledFloatParameter splitSpeedJitter;
   RemoteControlledFloatParameter splitLifetimeJitter;
 
+  // Rhythmisch quantisierte Spawn-Geschwindigkeit: die Geschwindigkeit eines
+  // neuen Impulses ist ein Vielfaches von impulseSpeed (der 1x-Klasse), nach
+  // Gewichten gezogen. Referenz ist impulseSpeed SELBST, kein eigener
+  // Parameter - sonst gaebe es zwei Regler, die beide "die Geschwindigkeit"
+  // heissen, und die Zeitbasis-Kopplung (lifetime, nodeDeadTime,
+  // randomSpawn/interval haengen an impulseSpeed) haette einen zweiten,
+  // unbeteiligten Bezugspunkt.
+  //
+  // enabled=0 im Auslieferungszustand: dann bekommt jeder Spawn exakt
+  // impulseSpeed wie bisher, ohne Ziehung.
+  RemoteControlledIntParameter speedQuantizeEnabled;
+  RemoteControlledFloatParameter speedQuantizeJitter;
+  // Ein Gewicht je Klasse aus SpeedQuantizer.MULTIPLIERS, gleiche Reihenfolge.
+  RemoteControlledFloatParameter[] speedClassWeights =
+      new RemoteControlledFloatParameter[SpeedQuantizer.MULTIPLIERS.length];
+  // Wiederverwendet statt je Spawn neu angelegt - bei dichtem Betrieb spawnen
+  // mehrere Impulse je Frame.
+  private final float[] weightScratch = new float[SpeedQuantizer.MULTIPLIERS.length];
+
   // Optionaler Sinus-Randomizer je Parameter (Speed und Lifetime unabhaengig,
   // kein gemeinsamer Takt). Bei enabled=1 UEBERSCHREIBT der Oszillator den
   // manuell gesetzten Wert in jedem Frame:
@@ -226,6 +245,22 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       trackConfigs[i]= new TrackConfig();
     }
 
+    // Auslieferungswerte: aus. Die Gewichte darunter sind der Zustand, den
+    // ein Operator vorfindet, wenn er einschaltet - 1x bleibt der weit
+    // ueberwiegende Normalfall, ein 8x-Ausreisser ist etwa jeder hundertste.
+    speedQuantizeEnabled= new RemoteControlledIntParameter("/net/impulse/speedQuantize/enabled", 0, 0, 1);
+    speedQuantizeJitter= new RemoteControlledFloatParameter("/net/impulse/speedQuantize/jitter", 0f, 0f, 1f);
+    // Adressnamen ohne Punkt: "0x5" statt "0.5x". Ein Punkt in einer
+    // OSC-Adresse ist zwar erlaubt, aber remoteSettings.txt und das Web-UI
+    // lesen Adressen als Text und der Punkt liest sich dort wie ein
+    // Dezimaltrenner in einem Namen.
+    String[] weightNames = { "0x5", "1x", "2x", "4x", "8x" };
+    float[] weightDefaults = { 0f, 85f, 10f, 4f, 1f };
+    for (int i=0; i<SpeedQuantizer.MULTIPLIERS.length; i++) {
+      speedClassWeights[i]= new RemoteControlledFloatParameter(
+          "/net/impulse/speedQuantize/weight/"+weightNames[i], weightDefaults[i], 0f, 100f);
+    }
+
     // 0 schaltet den Strom ab - der Notausgang, wenn Netz oder Klangrechner
     // waehrend der Show nicht mitkommen. /net/hitNode laeuft davon unberuehrt
     // weiter.
@@ -247,17 +282,20 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       if (theValue>0&&theValue<nodes.size()) {
         LedNetworkNode activeNode=nodes.get(theValue);
         int nLeds=ledNetInfo.length;
+        // Einmal je Kommando gezogen, nicht je Richtung: die zwei Zweige
+        // desselben Anstosses sollen zusammengehoeren.
+        float cmdSpeed=spawnSpeed();
         for (Integer nodeLedIdx : activeNode.ledIndices) {
           LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
           //  activation spreads in boths directions
-          int forwPos=nodeLedIdx +1;           
+          int forwPos=nodeLedIdx +1;
           if (forwPos>0&&forwPos<nLeds) {
-			activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, impulseSpeed.getValue(), 1f ));
+			activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, cmdSpeed, 1f ));
 		}
           //do not go back the same stripe:
-          int backwPos=nodeLedIdx -1;            
+          int backwPos=nodeLedIdx -1;
           if (backwPos>0&&backwPos<nLeds) {
-			activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -impulseSpeed.getValue(), 1f));
+			activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -cmdSpeed, 1f));
 		}
         }
       }
@@ -267,7 +305,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       newMessage.getTypetagAsBytes()[0]=='i'
       ) {
       int theValue=newMessage.get(0).intValue();
-      activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), 1f ));
+      activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), 1f ));
     }
 
     //System.out.println(newMessage);
@@ -288,7 +326,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       //System.out.println("Calculated Energy: "  + energy);
       //PApplet.println(theValue);
       if (theValue<nStripes) {
-        activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), energy));
+        activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), energy));
       }
     }
   }
@@ -371,9 +409,9 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     float timeStep=(float) (currentTime-lastCyclePos);
     lastCyclePos=currentTime;
     // vor jeder Nutzung von impulseSpeed/impulseLifetime in diesem Frame -
-    // auch spawnRandomImpulses() liest impulseSpeed
+    // spawnRandomImpulses() und tickSequencer() lesen impulseSpeed ueber
+    // spawnSpeed()
     applyRandomizers(currentTime);
-    float speed=impulseSpeed.getValue();
 
     spawnRandomImpulses(currentTime);
     tickSequencer(currentTime);
@@ -631,15 +669,42 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     int count=randomSpawnCount.getValue(); // bereits durch min/max des Parameters auf 1..nStripes begrenzt
     float energy=randomSpawnEnergy.getValue();
     float directionBias=randomSpawnDirectionBias.getValue();
-    float speed=impulseSpeed.getValue(); // bewusst kein eigener Speed-Parameter, siehe Feldkommentar
 
     for (int stripeIdx : pickDistinctStripes(count)) {
       boolean forward=Math.random() < directionBias;
+      // Je Impuls eine eigene Klasse (spawnSpeed): bei count > 1 soll nicht
+      // der ganze Schwung gleich schnell sein. Grundwert bleibt impulseSpeed,
+      // bewusst kein eigener Speed-Parameter fuer den Ambient-Layer.
+      float speed=spawnSpeed();
       // "rueckwaerts" beginnt am anderen Ende des Stripes, sonst wuerde der Impuls sofort
       // wieder aus den Bounds fallen (siehe activationIsValid) statt eine sichtbare Strecke zu reisen
       float startPos=forward ? stripeIdx*nLedsInStripe : stripeIdx*nLedsInStripe + (nLedsInStripe-1);
       activations.add(new TravellingActivation(startPos, stripeIdx, forward ? speed : -speed, energy));
     }
+  }
+
+  // Geschwindigkeit fuer EINEN neu gespawnten Impuls, immer als positiver
+  // Betrag - die Richtung setzt der Aufrufer ueber das Vorzeichen.
+  //
+  // Der einzige Ort, an dem eine Spawn-Geschwindigkeit entsteht: alle fuenf
+  // Spawn-Pfade (Tube-Trigger, activateStripe, activateNode, RandomSpawn,
+  // Sequencer) gehen hierdurch. Split-Kinder NICHT - die erben die (schon
+  // vervielfachte) Geschwindigkeit ihres Elternimpulses und bekommen
+  // obendrauf splitSpeedJitter, siehe activationEncounteredNode().
+  private float spawnSpeed() {
+    float base=impulseSpeed.getValue();
+    if (speedQuantizeEnabled.getValue() != 1) {
+      return base;
+    }
+    for (int i=0; i<speedClassWeights.length; i++) {
+      weightScratch[i]=speedClassWeights[i].getValue();
+    }
+    int cls=SpeedQuantizer.pick(weightScratch, Math.random());
+    float speed=base*SpeedQuantizer.multiplierAt(cls);
+    // Swing auf der Geschwindigkeit, gleiche Formel und gleicher
+    // Auslieferungswert 0 wie ueberall sonst: Choreografie primaer exakt,
+    // Jitter ein optionaler Regler obendrauf.
+    return SplitVariance.jitter(speed, speedQuantizeJitter.getValue(), Math.random());
   }
 
   // Strukturierter Spawn-Layer, siehe /net/sequencer/* in CLAUDE.md. Laeuft
@@ -668,11 +733,12 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     if (firing.length == 0) {
       return;
     }
-    // Geschwindigkeit kommt wie beim Ambient-Spawn von impulseSpeed, damit
-    // getaktete und zufaellige Impulse gleich schnell wirken. decayScale 1.0
-    // (der Konstruktor ohne ausdruecklichen Wert): ein gespawnter Impuls folgt
-    // dem globalen Lifetime, gestreut wird erst an einer Kreuzung.
-    float speed=impulseSpeed.getValue();
+    // Geschwindigkeit je Track einzeln gezogen (spawnSpeed): zwei Tracks, die
+    // im selben Beat feuern, sollen nicht zwangslaeufig dieselbe Klasse
+    // bekommen. Grundwert bleibt impulseSpeed, damit getaktete und zufaellige
+    // Impulse denselben Bezugspunkt haben. decayScale 1.0 (der Konstruktor
+    // ohne ausdruecklichen Wert): ein gespawnter Impuls folgt dem globalen
+    // Lifetime, gestreut wird erst an einer Kreuzung.
     for (int i=0; i<firing.length; i++) {
       int track=firing[i];
       int stripeIdx=originSequencer.originOf(track);
@@ -680,7 +746,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         continue;
       }
       activations.add(new TravellingActivation(stripeIdx*nLedsInStripe, stripeIdx,
-          speed, trackConfigs[track].energy));
+          spawnSpeed(), trackConfigs[track].energy));
     }
   }
 
