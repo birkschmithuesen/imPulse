@@ -34,6 +34,9 @@ SOURCES="LedColor.java ArtNetOutput.java"
 [ -f ParameterOscillator.java ] && SOURCES="$SOURCES ParameterOscillator.java"
 [ -f PresetStore.java ] && SOURCES="$SOURCES PresetStore.java"
 [ -f PresetScheduler.java ] && SOURCES="$SOURCES PresetScheduler.java"
+[ -f SplitVariance.java ] && SOURCES="$SOURCES SplitVariance.java"
+[ -f MusicalClock.java ] && SOURCES="$SOURCES MusicalClock.java"
+[ -f OriginSequencer.java ] && SOURCES="$SOURCES OriginSequencer.java"
 
 javac -nowarn -cp "$CORE" -d build $SOURCES test/*.java
 
@@ -49,7 +52,8 @@ if [ "$#" -eq 0 ]; then
   for optional in NodeSelectionTest LedAnchorStoreTest LedPositionMapTest \
                   LedPositionCalibrationTest ImpulseOscThrottleTest \
                   TestPatternsTest PresetStoreTest PresetSchedulerTest \
-                  ParameterOscillatorTest; do
+                  ParameterOscillatorTest SplitVarianceTest \
+                  MusicalClockTest OriginSequencerTest; do
     if [ -f "test/$optional.java" ]; then
       set -- "$@" "$optional"
     else
