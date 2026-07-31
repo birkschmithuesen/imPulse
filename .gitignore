@@ -10,3 +10,8 @@ application.macosx
 __pycache__/
 *.pyc
 webui/.venv/
+
+# Boot-Snapshot, wird von imPulse bei jedem Start komplett neu geschrieben
+# (OscMessageDistributor.dumpParameterInfo) -- reine Momentaufnahme, keine
+# Quelle der Wahrheit, verursacht nur wiederkehrende Merge-Konflikte.
+data/remoteSettings.txt
