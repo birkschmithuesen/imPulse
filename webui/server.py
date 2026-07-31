@@ -133,6 +133,13 @@ SPLIT_GROUP_PREFIXES: List[Tuple[str, str]] = [
     # Je Sequencer-Track eine eigene Sektion. Ohne diese sechs Eintraege
     # schneidet die generische Praefix-Regel nach zwei Segmenten ab und alle
     # 36 Track-Regler landen unsortiert in einer einzigen Gruppe.
+    #
+    # Im Normalfall greift das nicht mehr: build_sequencer() baut ein eigenes
+    # Panel und sequencer_addresses() nimmt diese Adressen aus dem
+    # generischen Rendering. Die Eintraege sind der RUECKFALL fuer den Fall,
+    # dass das Panel nicht gebaut werden kann (z.B. eine remoteSettings.txt
+    # mit Track-Parametern, aber ohne /net/sequencer/bpm) - dann steht hier
+    # wenigstens eine brauchbare Gruppierung statt einer Sammelgruppe.
     ("/net/sequencer/track0/", "net/sequencer/track0"),
     ("/net/sequencer/track1/", "net/sequencer/track1"),
     ("/net/sequencer/track2/", "net/sequencer/track2"),

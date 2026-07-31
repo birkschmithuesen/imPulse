@@ -23,6 +23,12 @@
 
   <p class="status" id="status" role="status">&nbsp;</p>
 
+  <!-- Spezial-Sektionen. Sie bauen sich aus den strukturierten Feldern
+       "sequencer" / "speedClasses" / "scParams" der Payload und stehen
+       bewusst ausserhalb von <main id="groups">, dessen Raster fuer die
+       generischen Parameterkarten gedacht ist. -->
+  <div id="sequencerHost"></div>
+
   <section class="presets" id="presets">
     <h2>Presets</h2>
     <div class="preset-rows">
@@ -39,6 +45,8 @@
   </section>
 
   <main id="groups"></main>
+
+  <div id="scHost"></div>
 
   <script type="application/json" id="bootstrap">{{ bootstrap|safe }}</script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>

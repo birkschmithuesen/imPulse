@@ -350,6 +350,15 @@ function buildParam(param, value) {
   const handle = param.widget === 'toggle'
     ? buildToggle(param, value, (v) => queueSend(param.address, v))
     : buildSlider(param, value, (v) => queueSend(param.address, v));
+  // Kurzerklaerung, wo die Adresse allein nicht verraet, was der Regler tut
+  // (DESCRIPTIONS in server.py). Sichtbar statt nur als Tooltip: im Dunkeln
+  // neben der Installation findet niemand einen Hover-Text.
+  if (param.help) {
+    const help = document.createElement('p');
+    help.className = 'help';
+    help.textContent = param.help;
+    handle.element.appendChild(help);
+  }
   controls.set(param.address, handle);
   return handle.element;
 }
@@ -485,6 +494,12 @@ function render(data) {
   controls.clear();
   colorCards.length = 0;
   groupsEl.innerHTML = '';
+
+  // Zuerst die Spezial-Sektionen: ihre Adressen hat der Server aus
+  // data.groups entfernt, sie muessen sich also selbst in controls eintragen,
+  // bevor irgendwer (Preset-Laden) die Map benutzt.
+  buildSequencer(data);
+  buildScSection(data);
 
   (data.groups || []).forEach((group) => {
     // Advanced-Gruppe (Setup-/Sicherheitsparameter) per Default eingeklappt,
@@ -664,6 +679,642 @@ async function savePreset() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Spezial-Sektionen: Sequencer, Speed-Klassen, SC-Sound-Parameter
+//
+// Der Server liefert dafuer STRUKTUR statt einer flachen Reglerliste (siehe
+// build_sequencer/build_speed_classes/sc_param_groups in server.py) und nimmt
+// deren Adressen aus dem generischen Rendering heraus. Hier steht, wie das
+// aussieht.
+//
+// Die Regler dieser Sektionen laufen ueber dasselbe queueSend() wie alle
+// anderen und tragen sich in dieselbe controls-Map ein -- dadurch ziehen sie
+// beim Laden eines Presets automatisch mit, ohne eigenen Sonderweg.
+// ---------------------------------------------------------------------------
+
+const sequencerHostEl = document.getElementById('sequencerHost');
+const scHostEl = document.getElementById('scHost');
+
+// Halten den Zustand fuer die Rasteranzeige. Die Uhr laeuft immer, gezeichnet
+// wird nur, wenn der Sequencer eingeschaltet ist.
+const pulseTracks = [];        // { dot, noteValue, enabled }
+let pulseBpm = 60;
+let pulseRunning = false;
+
+function trackColor(index) {
+  return 'var(--track-' + (index % 6) + ')';
+}
+
+/* Kompakter Regler fuer die Track-Karten: Beschriftung, Schieber, Zahl.
+ * Bewusst nicht buildSlider(): dort gehoert eine Adresszeile mit Range dazu,
+ * das waere in einer Karte mit fuenf Reglern nur Rauschen. */
+function miniSlider(labelText, param, initial, format) {
+  const row = document.createElement('label');
+  row.className = 'mini-row';
+
+  const caption = document.createElement('span');
+  caption.textContent = labelText;
+
+  const range = document.createElement('input');
+  range.type = 'range';
+  range.min = param.min;
+  range.max = param.max;
+  range.step = param.step;
+  range.value = initial;
+  range.title = param.address + (param.help ? ' – ' + param.help : '');
+
+  const out = document.createElement('output');
+
+  const fmt = format || ((v) => (param.type === 'int'
+    ? String(Math.round(v)) : formatValue(v, param)));
+
+  let current = Number(initial);
+
+  function apply(value, silent) {
+    let next = Number(value);
+    if (!isFinite(next)) { return; }
+    next = Math.min(param.max, Math.max(param.min, next));
+    if (param.type === 'int') { next = Math.round(next); }
+    current = next;
+    range.value = next;
+    out.textContent = fmt(next);
+    if (!silent) { queueSend(param.address, next); }
+  }
+
+  range.addEventListener('input', () => apply(range.value, false));
+  apply(initial, true);
+
+  row.appendChild(caption);
+  row.appendChild(range);
+  row.appendChild(out);
+
+  const handle = {
+    element: row,
+    set: (value, silent) => apply(value, silent !== false),
+    get: () => current,
+    flash: () => {},
+  };
+  controls.set(param.address, handle);
+  return handle;
+}
+
+/* Notenwert-Leiste: Symbol UND Kuerzel nebeneinander. Nicht jede
+ * Windows-Schrift hat U+1D15D..U+1D161 -- ein Symbol allein waere dort ein
+ * leeres Kaestchen und der Track unbeschriftet. */
+function noteBar(param, initial, noteValues, onPick) {
+  const bar = document.createElement('div');
+  bar.className = 'notes';
+  const buttons = [];
+
+  function mark(value) {
+    buttons.forEach((entry) => {
+      entry.button.setAttribute('aria-pressed',
+        entry.value === value ? 'true' : 'false');
+    });
+  }
+
+  // Auf den naechstniedrigeren erlaubten Wert rasten - dieselbe Regel wie
+  // OriginSequencer.quantizeNoteValue() auf der Java-Seite. Ein Preset mit
+  // einem krummen Wert markiert damit denselben Knopf, den der Sequencer
+  // tatsaechlich faehrt.
+  function quantize(raw) {
+    let best = noteValues[0].value;
+    noteValues.forEach((n) => { if (n.value <= raw) { best = n.value; } });
+    return best;
+  }
+
+  noteValues.forEach((note) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.title = note.name + ' (' + note.value + ')';
+    const sym = document.createElement('span');
+    sym.className = 'sym';
+    sym.textContent = note.symbol;
+    const lbl = document.createElement('span');
+    lbl.className = 'lbl';
+    lbl.textContent = note.value === 1 ? '1/1' : '1/' + note.value;
+    button.appendChild(sym);
+    button.appendChild(lbl);
+    button.addEventListener('click', () => {
+      mark(note.value);
+      queueSend(param.address, note.value);
+      if (onPick) { onPick(note.value); }
+    });
+    buttons.push({ value: note.value, button: button });
+    bar.appendChild(button);
+  });
+
+  mark(quantize(Number(initial)));
+
+  const handle = {
+    element: bar,
+    set: (value, silent) => {
+      const q = quantize(Number(value));
+      mark(q);
+      if (!silent) { queueSend(param.address, q); }
+      if (onPick) { onPick(q); }
+    },
+    get: () => {
+      const active = buttons.find((entry) =>
+        entry.button.getAttribute('aria-pressed') === 'true');
+      return active ? active.value : noteValues[0].value;
+    },
+    flash: () => {},
+  };
+  controls.set(param.address, handle);
+  return handle;
+}
+
+function buildSequencer(data) {
+  sequencerHostEl.innerHTML = '';
+  pulseTracks.length = 0;
+  pulseRunning = false;
+  const seq = data.sequencer;
+  if (!seq) {
+    // Aelterer imPulse-Stand ohne Sequencer: nichts zeigen. Die Parameter
+    // waeren dann ohnehin nicht da.
+    return;
+  }
+
+  const section = document.createElement('section');
+  section.className = 'seq';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Sequencer';
+  section.appendChild(title);
+
+  const top = document.createElement('div');
+  top.className = 'seq-top';
+
+  // --- BPM gross ---
+  const bpmParam = seq.bpm;
+  const bpmWrap = document.createElement('div');
+  bpmWrap.className = 'seq-bpm';
+  const bpmValue = document.createElement('span');
+  bpmValue.className = 'seq-bpm-value';
+  const bpmUnit = document.createElement('span');
+  bpmUnit.className = 'seq-bpm-unit';
+  bpmUnit.textContent = 'bpm';
+  bpmWrap.appendChild(bpmValue);
+  bpmWrap.appendChild(bpmUnit);
+
+  const bpmSlide = document.createElement('div');
+  bpmSlide.className = 'seq-bpm-slider';
+  const bpmRange = document.createElement('input');
+  bpmRange.type = 'range';
+  bpmRange.min = bpmParam.min;
+  bpmRange.max = bpmParam.max;
+  bpmRange.step = bpmParam.step;
+  bpmRange.setAttribute('aria-label', 'Tempo in BPM');
+  bpmRange.title = bpmParam.address + (bpmParam.help ? ' – ' + bpmParam.help : '');
+  bpmSlide.appendChild(bpmRange);
+
+  function applyBpm(value, silent) {
+    let next = Number(value);
+    if (!isFinite(next)) { return; }
+    next = Math.min(bpmParam.max, Math.max(bpmParam.min, next));
+    pulseBpm = next;
+    bpmRange.value = next;
+    bpmValue.textContent = next.toFixed(next % 1 === 0 ? 0 : 1);
+    if (!silent) { queueSend(bpmParam.address, next); }
+  }
+  bpmRange.addEventListener('input', () => applyBpm(bpmRange.value, false));
+  applyBpm(data.values[bpmParam.address], true);
+  controls.set(bpmParam.address, {
+    element: bpmSlide,
+    set: (v, silent) => applyBpm(v, silent !== false),
+    get: () => pulseBpm,
+    flash: () => {},
+  });
+
+  // --- Not-Aus ---
+  const enabledParam = seq.enabled;
+  const power = document.createElement('label');
+  power.className = 'seq-power';
+  power.title = enabledParam.address
+    + (enabledParam.help ? ' – ' + enabledParam.help : '');
+  const powerBox = document.createElement('input');
+  powerBox.type = 'checkbox';
+  const powerDot = document.createElement('span');
+  powerDot.className = 'dot';
+  const powerText = document.createElement('span');
+  power.appendChild(powerBox);
+  power.appendChild(powerDot);
+  power.appendChild(powerText);
+
+  function applyPower(value, silent) {
+    const on = Number(value) >= 1;
+    powerBox.checked = on;
+    power.classList.toggle('on', on);
+    powerText.textContent = on ? 'laeuft' : 'aus';
+    pulseRunning = on;
+    if (!on) {
+      pulseTracks.forEach((t) => t.dot.classList.remove('lit'));
+    }
+    if (!silent) { queueSend(enabledParam.address, on ? 1 : 0); }
+  }
+  powerBox.addEventListener('change', () => applyPower(powerBox.checked ? 1 : 0, false));
+  applyPower(data.values[enabledParam.address], true);
+  controls.set(enabledParam.address, {
+    element: power,
+    set: (v, silent) => applyPower(v, silent !== false),
+    get: () => (powerBox.checked ? 1 : 0),
+    flash: () => {},
+  });
+
+  top.appendChild(bpmWrap);
+  top.appendChild(bpmSlide);
+  top.appendChild(power);
+  section.appendChild(top);
+
+  // --- Die sechs Spuren ---
+  const grid = document.createElement('div');
+  grid.className = 'seq-tracks';
+
+  seq.tracks.forEach((track) => {
+    const card = document.createElement('div');
+    card.className = 'track';
+    card.style.setProperty('--tc', trackColor(track.index));
+
+    const head = document.createElement('div');
+    head.className = 'track-head';
+
+    const caption = document.createElement('span');
+    caption.className = 'track-title';
+    caption.textContent = 'Track ' + track.index;
+
+    const right = document.createElement('div');
+    right.style.display = 'flex';
+    right.style.alignItems = 'center';
+    right.style.gap = '0.5rem';
+
+    const dot = document.createElement('span');
+    dot.className = 'track-pulse';
+    // Ehrliche Beschriftung: das ist die Uhr des Browsers, nicht der Sketch.
+    dot.title = 'Raster (berechnet aus BPM und Notenwert im Browser) – '
+      + 'keine Rueckmeldung aus imPulse, die Phase kann abweichen';
+
+    const sw = document.createElement('label');
+    sw.className = 'track-switch';
+    const swBox = document.createElement('input');
+    swBox.type = 'checkbox';
+    swBox.setAttribute('aria-label', 'Track ' + track.index + ' aktiv');
+    sw.appendChild(swBox);
+
+    right.appendChild(dot);
+    right.appendChild(sw);
+    head.appendChild(caption);
+    head.appendChild(right);
+    card.appendChild(head);
+
+    const state = { dot: dot, noteValue: 4, enabled: false };
+    pulseTracks.push(state);
+
+    function applyEnabled(value, silent) {
+      const on = Number(value) >= 1;
+      swBox.checked = on;
+      card.classList.toggle('off', !on);
+      state.enabled = on;
+      if (!on) { dot.classList.remove('lit'); }
+      if (!silent) { queueSend(track.enabled.address, on ? 1 : 0); }
+    }
+    swBox.addEventListener('change', () => applyEnabled(swBox.checked ? 1 : 0, false));
+    applyEnabled(data.values[track.enabled.address], true);
+    controls.set(track.enabled.address, {
+      element: card,
+      set: (v, silent) => applyEnabled(v, silent !== false),
+      get: () => (swBox.checked ? 1 : 0),
+      flash: () => {},
+    });
+
+    const fields = track.fields || {};
+
+    if (fields.noteValue) {
+      const bar = noteBar(fields.noteValue, data.values[fields.noteValue.address],
+        seq.noteValues, (v) => { state.noteValue = v; });
+      state.noteValue = bar.get();
+      card.appendChild(bar.element);
+    }
+
+    const mini = document.createElement('div');
+    mini.className = 'mini';
+    if (fields.repeatCount) {
+      mini.appendChild(miniSlider('Wdh.', fields.repeatCount,
+        data.values[fields.repeatCount.address],
+        (v) => Math.round(v) + '×').element);
+    }
+    if (fields.energy) {
+      mini.appendChild(miniSlider('Energie', fields.energy,
+        data.values[fields.energy.address]).element);
+    }
+    if (fields.swingJitter) {
+      mini.appendChild(miniSlider('Swing', fields.swingJitter,
+        data.values[fields.swingJitter.address]).element);
+    }
+    if (fields.originStripeOverride) {
+      mini.appendChild(miniSlider('Ursprung', fields.originStripeOverride,
+        data.values[fields.originStripeOverride.address],
+        // -1 heisst "zufaellig" - als Zahl waere das ein Raetsel.
+        (v) => (Math.round(v) < 0 ? 'zufall' : 'S' + Math.round(v))).element);
+    }
+    card.appendChild(mini);
+
+    grid.appendChild(card);
+  });
+
+  section.appendChild(grid);
+  sequencerHostEl.appendChild(section);
+
+  buildSpeedClasses(data, sequencerHostEl);
+}
+
+/* Speed-Klassen. Der Verteilungsbalken macht aus fuenf Gewichten ein Bild -
+ * die Zahlen allein verraten nicht, wie selten ein 8x-Ausreisser wirklich
+ * ist, weil sie nicht auf 100 normiert sind. */
+function buildSpeedClasses(data, host) {
+  const speed = data.speedClasses;
+  if (!speed) { return; }
+
+  const section = document.createElement('section');
+  section.className = 'seq';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Speed-Klassen';
+  section.appendChild(title);
+
+  const body = document.createElement('div');
+  body.style.padding = '0.7rem 0.8rem';
+  body.style.display = 'grid';
+  body.style.gap = '0.6rem';
+
+  // Ein/Aus
+  const power = document.createElement('label');
+  power.className = 'seq-power';
+  power.style.justifySelf = 'start';
+  power.title = speed.enabled.address
+    + (speed.enabled.help ? ' – ' + speed.enabled.help : '');
+  const powerBox = document.createElement('input');
+  powerBox.type = 'checkbox';
+  const powerDot = document.createElement('span');
+  powerDot.className = 'dot';
+  const powerText = document.createElement('span');
+  power.appendChild(powerBox);
+  power.appendChild(powerDot);
+  power.appendChild(powerText);
+
+  function applyPower(value, silent) {
+    const on = Number(value) >= 1;
+    powerBox.checked = on;
+    power.classList.toggle('on', on);
+    powerText.textContent = on ? 'quantisiert' : 'alle 1×';
+    if (!silent) { queueSend(speed.enabled.address, on ? 1 : 0); }
+  }
+  powerBox.addEventListener('change', () => applyPower(powerBox.checked ? 1 : 0, false));
+  applyPower(data.values[speed.enabled.address], true);
+  controls.set(speed.enabled.address, {
+    element: power,
+    set: (v, silent) => applyPower(v, silent !== false),
+    get: () => (powerBox.checked ? 1 : 0),
+    flash: () => {},
+  });
+  body.appendChild(power);
+
+  const bar = document.createElement('div');
+  bar.className = 'dist';
+  const segments = [];
+  body.appendChild(bar);
+
+  const help = document.createElement('p');
+  help.className = 'help';
+  help.textContent = 'Anteil der Impulse je Klasse. Vielfaches von '
+    + '/net/impulse/speed – 1× ist der Normalfall, hohe Klassen sind die '
+    + 'seltenen Ausreisser. Die Gewichte werden normalisiert, sie muessen '
+    + 'sich nicht zu 100 summieren.';
+  body.appendChild(help);
+
+  const weightHandles = [];
+
+  function redraw() {
+    const values = weightHandles.map((h) => Math.max(0, h.get()));
+    const total = values.reduce((a, b) => a + b, 0);
+    bar.innerHTML = '';
+    segments.length = 0;
+    if (total <= 0) {
+      const empty = document.createElement('span');
+      empty.className = 'dist-empty';
+      // Genau das macht SpeedQuantizer.pick() bei lauter Nullen.
+      empty.textContent = 'alle Gewichte 0 – es gilt 1×';
+      bar.appendChild(empty);
+      return;
+    }
+    speed.weights.forEach((weight, i) => {
+      if (values[i] <= 0) { return; }
+      const share = values[i]/total;
+      const seg = document.createElement('span');
+      seg.className = 'dist-seg';
+      seg.style.flexGrow = String(share);
+      seg.style.flexBasis = '0';
+      seg.style.background = trackColor(i);
+      seg.title = weight.label + ': ' + (share*100).toFixed(1) + ' %';
+      seg.textContent = share >= 0.08
+        ? weight.label + ' ' + Math.round(share*100) + '%' : '';
+      bar.appendChild(seg);
+      segments.push(seg);
+    });
+  }
+
+  const weights = document.createElement('div');
+  weights.className = 'mini';
+  speed.weights.forEach((weight, i) => {
+    const handle = miniSlider(weight.label, weight, data.values[weight.address],
+      (v) => v.toFixed(0));
+    handle.element.style.setProperty('--tc', trackColor(i));
+
+    // Der Balken haengt an allen fuenf Reglern, also hier statt in
+    // miniSlider. Umgehaengt wird die set()-METHODE, nicht nur das
+    // input-Event: das Laden eines Presets ruft control.set(wert, true) und
+    // loest dabei bewusst kein input aus - an einem reinen Event-Listener
+    // bliebe der Balken danach auf der alten Verteilung stehen.
+    const innerSet = handle.set;
+    handle.set = (value, silent) => {
+      innerSet(value, silent);
+      redraw();
+    };
+    controls.set(weight.address, handle);
+    handle.element.querySelector('input[type=range]')
+      .addEventListener('input', redraw);
+
+    weightHandles.push(handle);
+    weights.appendChild(handle.element);
+  });
+  body.appendChild(weights);
+
+  if (speed.jitter) {
+    const jitter = miniSlider('Swing', speed.jitter,
+      data.values[speed.jitter.address]);
+    body.appendChild(jitter.element);
+    const note = document.createElement('p');
+    note.className = 'help';
+    note.textContent = speed.jitter.help || '';
+    body.appendChild(note);
+  }
+
+  redraw();
+  section.appendChild(body);
+  host.appendChild(section);
+}
+
+/* SC-Sound-Parameter. Eigener Port (8002), eigene Tabelle, kein Rueckkanal -
+ * die Sektion sagt das selbst, sonst haelt man die Anzeige fuer den
+ * Live-Zustand von SuperCollider. */
+function buildScSection(data) {
+  scHostEl.innerHTML = '';
+  const sc = data.scParams;
+  if (!sc || !sc.groups || !sc.groups.length) { return; }
+
+  const section = document.createElement('section');
+  section.className = 'sc';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Sound (SuperCollider)';
+  section.appendChild(title);
+
+  const note = document.createElement('p');
+  note.className = 'sc-note';
+  note.textContent = 'Geht direkt an sclang auf Port ' + sc.port
+    + ', nicht an imPulse. Es gibt keinen Rueckkanal: die Werte hier sind die '
+    + 'Defaults aus klangnetz_bells.scd, nicht der Live-Zustand – und laeuft '
+    + 'sclang nicht, bleibt eine Aenderung wirkungslos ohne Fehlermeldung.';
+  section.appendChild(note);
+
+  sc.groups.forEach((group) => {
+    const heading = document.createElement('div');
+    heading.className = 'param';
+    heading.style.borderBottom = '1px solid var(--line)';
+    const label = document.createElement('div');
+    label.className = 'track-title';
+    label.textContent = group.title;
+    heading.appendChild(label);
+    section.appendChild(heading);
+
+    group.params.forEach((param) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'param';
+
+      const head = document.createElement('div');
+      head.className = 'param-head';
+      const name = document.createElement('span');
+      name.className = 'param-name';
+      const prefix = document.createElement('span');
+      prefix.className = 'prefix';
+      prefix.textContent = '/klangnetz/param/';
+      name.appendChild(prefix);
+      name.appendChild(document.createTextNode(param.name));
+      const range = document.createElement('span');
+      range.className = 'param-range';
+      range.textContent = param.min + ' … ' + param.max;
+      head.appendChild(name);
+      head.appendChild(range);
+      wrap.appendChild(head);
+
+      const body = document.createElement('div');
+      body.className = 'param-body';
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = param.min;
+      slider.max = param.max;
+      const span = param.max - param.min;
+      slider.step = span > 40 ? 1 : (span > 4 ? 0.05 : 0.01);
+      slider.value = param.default;
+      const out = document.createElement('input');
+      out.type = 'number';
+      out.min = param.min;
+      out.max = param.max;
+      out.step = 'any';
+      out.value = param.default;
+      body.appendChild(slider);
+      body.appendChild(out);
+      wrap.appendChild(body);
+
+      if (param.description) {
+        const help = document.createElement('p');
+        help.className = 'help';
+        help.textContent = param.description;
+        wrap.appendChild(help);
+      }
+
+      let timer = null;
+      function send(value) {
+        if (timer) { clearTimeout(timer); }
+        timer = setTimeout(async () => {
+          timer = null;
+          try {
+            const response = await fetch('/api/sc', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: param.name, value: value }),
+            });
+            const payload = await response.json();
+            if (!payload.ok) {
+              setStatus('SC: ' + (payload.error || 'unbekannter Fehler'), 'err');
+            }
+          } catch (err) {
+            setStatus('SC-Parameter nicht gesendet: ' + err, 'err');
+          }
+        }, DEBOUNCE_MS);
+      }
+
+      function apply(value, fromNumber) {
+        let next = Number(value);
+        if (!isFinite(next)) { return; }
+        next = Math.min(param.max, Math.max(param.min, next));
+        slider.value = next;
+        if (!fromNumber) { out.value = next; }
+        send(next);
+      }
+      slider.addEventListener('input', () => apply(slider.value, false));
+      out.addEventListener('input', () => {
+        if (out.value === '' || out.value === '-') { return; }
+        apply(out.value, true);
+      });
+
+      section.appendChild(wrap);
+    });
+  });
+
+  scHostEl.appendChild(section);
+}
+
+/* Rasteranzeige.
+ *
+ * WICHTIG: das ist die Uhr des BROWSERS, nicht die des Sketches. Es gibt
+ * keinen OSC-Rueckkanal hierher - imPulse sendet nur an Port 8002, und dort
+ * hoert SuperCollider. Die Anzeige zeigt also, in welchem ABSTAND ein Track
+ * feuert (Notenwert mal BPM), nicht WANN genau; ihre Phase kann gegenueber
+ * dem Sketch beliebig verschoben sein. Deshalb heisst sie im UI "Raster" und
+ * behauptet nirgends "feuert jetzt".
+ *
+ * Der Nutzen ist trotzdem echt: beim Einrichten sieht man auf einen Blick,
+ * welcher Track dicht und welcher duenn laeuft.
+ */
+function startPulseClock() {
+  const LIT_MS = 90;
+  function frame(now) {
+    if (pulseRunning && pulseBpm > 0) {
+      const beatMs = 60000/pulseBpm;
+      pulseTracks.forEach((track) => {
+        if (!track.enabled) { return; }
+        // Intervall in Beats wie MusicalClock.beatsPerNote(): 4/noteValue.
+        const periodMs = beatMs*(4/(track.noteValue || 4));
+        const phase = now % periodMs;
+        track.dot.classList.toggle('lit', phase < LIT_MS);
+      });
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
 presetLoadEl.addEventListener('click', loadPreset);
 presetSaveEl.addEventListener('click', savePreset);
 presetNameEl.addEventListener('keydown', (event) => {
@@ -685,3 +1336,4 @@ reloadEl.addEventListener('click', reload);
 
 fillPresets(bootstrap.presets);
 render(bootstrap);
+startPulseClock();
