@@ -73,7 +73,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
@@ -86,6 +86,9 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `ImpulseOscThrottleTest` — Sendetakt (inklusive `rateHz = 0` und NaN) und die Auswahl der energiereichsten Impulse samt Tie-Break
 - `TestPatternsTest` — das Sicherheitsventil der Testbilder: kein Muster gibt einen Kanal über `TestPatterns.PATTERN_LEVEL` aus (siehe „Master-Pegel")
 - `ParameterOscillatorTest` — die Sinus-Formel der Speed-/Lifetime-Randomizer: Phasenlage, Periodizität, Einhalten von min/max, entartete Perioden, Zurücksetzen der Phase beim Wiedereinschalten
+- `SplitVarianceTest` — die Jitter-Formel der Split-Kinder: neutraler Auslieferungswert, Symmetrie um den Ausgangswert, die Untergrenze gegen unsterbliche Impulse, Vorzeichenerhalt bei rückwärts laufenden Kindern
+- `MusicalClockTest` — die akkumulierende Beat-Phase: kein Sprung bei BPM-Wechsel, Notenwert-Intervalle, entartete BPM, Rücksprung der Wanduhr
+- `OriginSequencerTest` — Feuertakt je Notenwert, `repeatCount` hält den Ursprung, `originStripeOverride`, kein Sofort-Feuern beim Wiedereinschalten, kein Nachholen nach einem Hänger, Rasterung der Notenwerte
 - `PresetStoreTest` — Format, Datei, Snapshot und Anwenden eines Presets, inklusive der ausgeschlossenen und still übergangenen Adressen
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
 
@@ -124,7 +127,7 @@ Eingehende OSC-Adressen: `/tube/trigger` (int Stripe, 1-basiert; optional float 
 Ausgehend an Port 8002 (`oscOutput` in `imPulse.pde`, Auslieferungsziel `127.0.0.1`), beide aus `LedNetworkTransportEffect.java`:
 
 - `/net/hitNode <nodeId:int> <energy:float> <x:float> <y:float>` — ein Node hat gefeuert. `x`/`y` sind die Draufsicht-Position des Knotens in Metern (`LedNetworkNode.posX/posY`, gesetzt von `applyPositions`), rein **angehängt**: ein Empfänger, der nur die ersten zwei Argumente liest, bleibt unberührt.
-- `/net/impulse <impulseId:int> <x:float> <y:float> <energy:float>` — gedrosselter Positionsstrom der reisenden Impulse (`sendImpulseStream()`, Takt und Auswahl aus `ImpulseOscThrottle`). **Ein Datagramm je Impuls**, kein Anzahl-Feld, kein Bündel, keine Ende-Markierung — die Empfangsseite kann also nicht feststellen, wieviele Meldungen zu einem Takt gehören und braucht einen Timeout. Filler werden ausdrücklich übersprungen (sie tragen die ID ihres Elternimpulses). Es gibt **kein Todes-Signal**: ein Impuls kann aus der Auswahl der energiereichsten fallen, ohne zu sterben, deshalb deckt derselbe Timeout beides ab (`klangnetz_bells.scd`: 0,4 s, geprüft alle 0,1 s, Obergrenze 32 Drohnen).
+- `/net/impulse <impulseId:int> <x:float> <y:float> <energy:float> <speed:float>` — gedrosselter Positionsstrom der reisenden Impulse (`sendImpulseStream()`, Takt und Auswahl aus `ImpulseOscThrottle`). Das fünfte Argument ist der **Betrag** der Geschwindigkeit in LEDs/Sekunde und kam später dazu — rein angehängt, genau wie seinerzeit `x`/`y` bei `/net/hitNode`: ein Empfänger, der nur die ersten vier liest, bleibt unberührt. Die Klangseite koppelt daran die Filterfrequenz des Travel-Sounds; das Vorzeichen trägt die Richtung und ist für die Klangfarbe bedeutungslos. **Ein Datagramm je Impuls**, kein Anzahl-Feld, kein Bündel, keine Ende-Markierung — die Empfangsseite kann also nicht feststellen, wieviele Meldungen zu einem Takt gehören und braucht einen Timeout. Filler werden ausdrücklich übersprungen (sie tragen die ID ihres Elternimpulses). Es gibt **kein Todes-Signal**: ein Impuls kann aus der Auswahl der energiereichsten fallen, ohne zu sterben, deshalb deckt derselbe Timeout beides ab (`klangnetz_bells.scd`: 0,4 s, geprüft alle 0,1 s, Obergrenze 32 Drohnen).
 
 Die zwei zugehörigen Parameter, beide in `LedNetworkTransportEffect`:
 
@@ -169,6 +172,80 @@ Zwei Mechanismen, die man beim Ändern kennen muss:
 - **nodeDeadTime**: Ein Node feuert erst wieder nach `/net/impulse/nodeDeadTime` Sekunden. Ohne diese Totzeit würde ein Impuls denselben Node in aufeinanderfolgenden Frames endlos neu triggern.
 
 Bei einem Node-Treffer erhält jeder Zweig aktuell die **volle** Energie des Elternimpulses (`childEnergy = curActivation.energy`) — ein bewusster Quick-Fix, jede Aufspaltung vervielfacht also die Gesamtenergie. Die auskommentierte Zeile darüber zeigt die energieerhaltende Variante.
+
+**Split-Varianz** (`SplitVariance.java`, angewandt in `activationEncounteredNode()`):
+jedes Kind einer Aufspaltung kann eine leicht abweichende Geschwindigkeit und
+Lebensdauer bekommen, damit Geschwister nicht synchron sterben und identisch
+wirken. Zwei unabhängige Parameter, beide Auslieferungswert **0** (= exakt das
+vorherige Verhalten):
+
+- `/net/impulse/splitSpeedJitter` (float 0..1) — `childSpeed = speed * (1 + jitter*(rand*2-1))`
+- `/net/impulse/splitLifetimeJitter` (float 0..1) — streut den `decayScale` des Kindes
+
+`decayScale` ist ein **Faktor auf** `/net/impulse/lifetime`, nicht dessen
+Ersatz. Das ist der Punkt, an dem der Entwurf bewusst vom ursprünglichen
+Auftrag abweicht: mit einem absoluten Zerfallswert je Impuls würde jeder
+Impuls den Wert seiner Geburt einfrieren, der Sinus-Randomizer
+(`/net/impulse/lifetime/randomize/*`) erreichte nur noch neu gespawnte Impulse
+und ein Operator, der den Lifetime-Regler zieht, sähe die lebenden Impulse
+unbeeindruckt weiterlaufen — beides ohne Fehlermeldung. Normale Spawns tragen
+`decayScale = 1.0`, Filler erben den ihres Elternimpulses.
+
+Gezogen wird **je Zweig und je Größe einzeln**: ein gemeinsamer Zufallswert
+für alle Zweige eines Treffers würde die Geschwister wieder gleichschalten,
+also genau das nicht lösen, worum es geht.
+
+`SplitVariance.jitter()` klemmt den Faktor nach unten auf `MIN_FACTOR = 0.05`.
+Bei voller Stärke und einem Zufallswert von 0 wäre er sonst exakt 0 — ein Kind
+mit Speed 0 stünde für immer still, eines mit `decayScale` 0 verlöre nie
+Energie und stürbe nie. Zwei unsterbliche Zustände, die das Netz über eine
+Nacht volllaufen lassen.
+
+**Origin-Sequencer** (`MusicalClock.java`, `OriginSequencer.java`, getickt aus
+`drawMe()` über `tickSequencer()`): der strukturierte Spawn-Layer neben dem
+chaotischen `randomSpawn`. Beide laufen unabhängig und sind gleichzeitig
+aktivierbar. Sechs Tracks feuern auf einem gemeinsamen BPM-Raster, jeder von
+einem Ursprungs-Stripe, auf dem er `repeatCount` Zyklen stehen bleibt, bevor er
+neu würfelt — von demselben Ursprung wiederholt spawnen erzeugt (fast) dieselbe
+Melodie, das ist der Zweck.
+
+- `/net/sequencer/enabled` (int 0/1, Default **0**), `/net/sequencer/bpm`
+  (float, 20..200, Default 60)
+- je Track N = 0..5 unter `/net/sequencer/track<N>/`: `enabled` (int 0/1,
+  Default 1 für Track 0 und 1, sonst 0), `noteValue` (int 1..16, gerastet auf
+  1/2/4/8/16), `repeatCount` (int 1..8, Default 3), `energy` (float 0..1,
+  Default 0.6), `swingJitter` (float 0..1, Default **0**),
+  `originStripeOverride` (int, -1 = zufällig)
+
+Vier Dinge, die man beim Ändern kennen muss:
+
+- **`MusicalClock` akkumuliert**, statt `(now - t0)/beatDuration` zu rechnen.
+  Naiv gerechnet springt die Phase bei jeder BPM-Änderung — die seit
+  Sketch-Start verstrichene Beat-Zahl rechnet sich rückwirkend um und alle
+  Tracks feuern schlagartig durcheinander. Akkumuliert ändert ein Tempowechsel
+  nur die Rate, nie die Position.
+- **Die Uhr läuft auch bei `enabled=0` weiter.** Sie ist die gemeinsame Phase;
+  ein Stillstand während der Aus-Phase machte das Wiedereinschalten von der
+  Dauer der Pause abhängig.
+- **Es gibt kein `/net/sequencer/activeTracks`.** Zwei Schalter für dieselbe
+  Sache erzeugen einen stillen Fehlerzustand: der Operator schaltet Track 4
+  ein, es passiert nichts, weil `activeTracks=3` ihn abschneidet — kein Fehler,
+  kein Symptom, nur Stille. `enabled` je Track ist außerdem ausdrucksstärker
+  (jede Teilmenge statt nur ein Präfix), und der grobe Not-Aus existiert schon.
+- **Keine Kopplung an den Preset-Scheduler.** Sequencer-Timing ist BPM und
+  Notenwerte, Preset-Timing bleibt Sekunden und Minuten; die zwei Zeitsysteme
+  wissen nichts voneinander.
+
+`OriginSequencer` baut ausdrücklich **keine** `TravellingActivation` — das
+bleibt im Effekt, der die Objekte, die Geschwindigkeit und die Stripe-Länge
+kennt. Zufall und Beat-Position werden hereingereicht (`RandomSource`), damit
+die Klasse ohne Sketch-Laufzeit prüfbar ist; dasselbe Muster wie
+`ImpulseOscThrottle` und `PresetScheduler`.
+
+**Offen, bewusst nicht gebaut:** eine Selbstregulation, die die Spawn-Rate an
+die aktuelle Netzauslastung koppelt (viele aktive Impulse → Sequencer- und
+RandomSpawn-Rate dämpfen). Vorgeschlagen, aber nie bestätigt; bleibt ein
+Vorschlag, kein deaktivierter Stub.
 
 **Ambient/idle Random-Spawns** (`spawnRandomImpulses()`, aufgerufen aus `drawMe()`):
 unabhängig von `/tube/trigger` und Node-Kettenreaktionen spawnt der Effekt in
@@ -417,10 +494,59 @@ Vierkanal-Kette: Ambisonics 2D erster Ordnung mit Kern-UGens (`PanB2` als Encode
 
 Der Klang selbst ist der vor Ort getunte Stand: Phrygisch ab A2 (`~scaleSteps`), `~minAmp`/`~maxAmp` aus dem +6-dB-Live-Abgleich, Sägezahn-Layer für den Hang-Drum-Attack, `~maxPolyphony = 24` als Voice-Stealing-Deckel gegen „command FIFO full" (der Ausfallmodus dabei ist **Stille ohne Absturz**). Der Hall sitzt **hinter** dem Decoder (`\masterReverb`, je Hardware-Kanal getrennt) und nicht in der Glocke — vor dem Encoder würde er selbst räumlich codiert und wieder zu einer Punktquelle verschmiert; `~reverbMix` steht deshalb auf 0.35 statt auf dem früheren Wert 0.15.
 
+**Klangbias nach Netzregion** (`~regionZone`, `~regionBias`, Parameter
+`/klangnetz/param/regionBiasAmount`, Default 0.6): vier Quadranten,
+Zone = `(x>=0) + 2*(y>=0)`. Je Zone verschieben sich die Notenwahl sowie
+`brightness` und `detune`. Die Zonierung folgt der Lautsprecher-Geometrie —
+die vier Boxen stehen auf den Seitenmitten, jeder Quadrant liegt also zwischen
+zwei Boxen und hat eine eindeutige Richtung, Ortung und Klangfarbe stützen
+sich gegenseitig. Radiale Ringe (Zentrum/Rand) korrelieren mit keiner
+Lautsprecherrichtung, und in der Mitte pannt `~toQuad` ohnehin auf alle vier
+Boxen gleich — die Zone mit dem eigensten Charakter läge dort, wo die Ortung
+am schwächsten ist.
+
+Der Notenoffset zählt in **Skalenstufen**, nicht Halbtönen: er geht auf den
+Skalenindex, bevor `~scaleSteps` nachgeschlagen wird, sonst fielen Töne aus
+Phrygisch heraus. Ein eigener `enabled`-Schalter entfällt — `amount = 0` ist
+aus und klingt bitgleich wie ohne das Feature. `~tilt` und `~decayScale`, die
+in älteren Notizen als Timbre-Regler auftauchen, gibt es in dieser Datei
+nicht; die vorhandenen Äquivalente sind `brightness` und `detune`.
+
+**Travel-Sound** (`/klangnetz/param/travelMix`, Default **0**, plus
+`travelRq`, `travelAmpScale`, `travelFreqMin`, `travelFreqMax`,
+`travelSpeedRef`): eine Wind-/Rauschschicht **innerhalb** von `\impulseDrone`,
+kein zweiter Synth je Impuls. `\impulseDrone` ist bereits eine Stimme pro
+Impuls-ID mit Position, Hüllkurve, `~droneTimeout` und `~droneLimit`; ein
+zweiter Synth bräuchte ein zweites Dictionary, einen zweiten Reaper und ein
+zweites Limit und verdoppelte die Stimmenzahl — für ein Feature, dessen Ziel
+es ist, Klangbrei zu vermeiden. Als Schicht erbt der Wind Position, Lag,
+Hülle, Timeout und Deckel geschenkt.
+
+Der geforderte Lebenszyklus („neue Stimme bei jedem Split") ergibt sich
+dadurch ohne eine Zeile Code: ein Split-Kind ist eine neue
+`TravellingActivation` mit neuer `id`, bekommt also einen neuen
+Dictionary-Eintrag und einen neuen Synth, und die Stimme des Elternimpulses
+läuft nach `~droneTimeout` aus.
+
+Es gibt bewusst **keinen eigenen Throttle** für den Travel-Sound.
+`/net/impulse/oscMaxCount` bestimmt, was überhaupt über den Draht geht; ein
+zweiter, kleinerer Audio-Deckel wäre auf der Java-Seite wirkungslos (die
+Klangseite kann eine Überzahl selbst ignorieren), ein größerer unerfüllbar
+ohne mehr zu senden. Der Deckel, der wirklich gebraucht wird, sitzt dort, wo
+die Rechenlast entsteht, und existiert schon: `~droneLimit`.
+
+Der Klangbias der **Herkunfts**-Region wird einmal beim Anlegen des Synths aus
+der **ersten** gemeldeten Position gerechnet. Die kommt aus dem Takt direkt
+nach der Entstehung des Impulses, liegt also an seinem Spawn- bzw. Splitpunkt
+— das ist die Herkunftsregion, ohne ein weiteres OSC-Feld und ohne
+Ursprungs-Buchführung auf der Processing-Seite. Der Whoosh behält seine
+Klangidentität über seine ganze Lebensdauer, auch wenn er in eine andere
+Region fliegt.
+
 Zwei Dinge, die man kennen muss, bevor man dort etwas anfasst:
 
-- **`~azimuthSign` und `~azimuthOffset` sind ausdrücklich UNGEMESSEN.** Sie brauchen vier angeschlossene Boxen und ein Paar Ohren; ein falsches Vorzeichen spiegelt das Klangbild, ein falscher Offset dreht es, und beides geht ohne Fehlermeldung durch. Die Datei bringt dafür `~testChannels.()`, `~testAzimuth.()` und `~testSweep.()` mit und beschreibt den Ablauf in ihrem Kopfblock. **Die Installation darf nicht öffnen, bevor diese Messung gemacht und mit Datum eingetragen ist.** Die Messsitzung ist interaktiv (IDE oder `sclang`-REPL) — headless unter `sclang -D` gibt es nichts, woraus man die Funktionen aufruft.
-- **`DecodeB2` ignoriert sein `orientation`-Argument** auf SC 3.11.2. Gemessen am 2026-07-30 (scsynth im NRT-Modus, `DC.ar(1)`): bytegleiche Ausgabe für 0 / 0.25 / 0.5 / 1.0, als Graphkonstante wie als Synth-Control, während `PanAz` im selben Aufbau sofort reagiert. Der Decoder setzt seine Boxen damit fest auf ±45°/±135° — gegen unsere Seitenmitten also 45° daneben, und keine Umverkabelung bildet eine Drehung ab. Deshalb wird im **Encoder** gedreht, über `~azimuthOffset`. Derselbe Fall wie bei der ArtNet-Bytefolge: massgeblich ist die Messung, nicht die Herleitung. Die Messung stammt von einer anderen Maschine und ist auf dem Show-Rechner zu wiederholen (`~setOrientation.()` ist genau dafür noch da, und für nichts anderes mehr).
+- **Es gibt kein Ambisonics mehr.** `~azimuthSign`, `~azimuthOffset` und `~decoderOrientation` sind mit dem Umbau auf `Pan4` am 2026-07-31 (Commit `cbb06d7`) **komplett entfallen** — ältere Notizen, die eine ausstehende Azimut-Messung dieser drei Werte fordern, sind überholt. Ambisonics erster Ordnung ist ein Diffusionsverfahren: eine Punktquelle streut bei voller Richtwirkung immer auf alle vier Kanäle (gemessen: dominanter Kanal nur ~43 % der Gesamtenergie, siehe `docs/ambisonics-sharper-panning-optionen.md`). Das lohnt sich nur bei flexiblem Lautsprecher-Layout; unseres ist fest. `Pan4` erreicht in der Boxecke 100 % auf dieser Box und in der Netzmitte exakt 25/25/25/25 %.
+- **Die zwei Korrekturen dahinter sind gemessen, nicht hergeleitet, und gelten nur für dieses Interface.** Erstens die 45-Grad-Rotation in `~toQuad` (`xr = xn - yn`, `yr = xn + yn`, nach achsenweiser Normierung durch `~maxX`/`~maxY`): unsere Boxen stehen auf den Seitenmitten, `Pan4` erwartet sie in den Ecken. Zweitens die Kanal-Permutation in `\masterReverb` (`[sig[1], sig[2], sig[3], sig[0]]`): die Verkabelung des ZOOM AMS-24 ist eine echte Vertauschung, keine Rotation. Beide wurden nach dem Umbau per NRT neu verifiziert und **nicht** aus den alten Ambisonics-Werten übernommen — `Pan4` hat eine andere Kanalkonvention als `DecodeB2`. Bei anderem Interface oder anderer Verkabelung neu messen (`\channelTest`, `~testChannels.()`, und `/klangnetz/test/noise` für Ortungstests ohne REPL-Zugriff vor Ort). Derselbe Fall wie bei der ArtNet-Bytefolge: massgeblich ist die Messung.
 
 ## Konventionen und Fallstricke
 
@@ -443,8 +569,15 @@ Zwei Dinge, die man kennen muss, bevor man dort etwas anfasst:
   live steuerbar ist, ist stattdessen der Sound-Parameter-Layer unter
   `/klangnetz/param/<name>` (Adressliste im Kopf der `.scd`). Wer den
   Preset-Empfang zurückholt, holt ihn aus `e50cd38` und passt ihn an die
-  Ambisonics-Fassung an (`~scaleSteps` statt `~pentatonicSteps`,
-  `decayScale`/`tilt` gibt es in der SynthDef derzeit nicht).
+  heutige Pan4-Fassung an (`~scaleSteps` statt `~pentatonicSteps`,
+  `decayScale`/`tilt` gibt es in der SynthDef derzeit nicht — die
+  vorhandenen Timbre-Regler heissen `brightness` und `detune`).
+  **Nachgeprüft am 2026-07-31** (`git ls-tree -r master`): `PresetManager`,
+  `PresetStore`, `PresetScheduler`, `data/presets/` und beide Testsuiten
+  liegen sehr wohl auf `master` — es fehlt **ausschliesslich** der
+  SC-seitige Empfänger. Eine gegenteilige Notiz („das Preset-System liegt
+  nur auf `feature/preset-system-v2`") ist falsch und meint diesen
+  Empfänger.
   Die `#[...]`-Teilton-Literale in der SynthDef bleiben stehen — kein Rebuild
   beim Preset-Wechsel. Alles liegt weiter in **einem** `(...)`-Block: mehrere
   Top-Level-Blöcke hängen `sclang -D` auf. Für den SC-Teil gibt es **kein**
