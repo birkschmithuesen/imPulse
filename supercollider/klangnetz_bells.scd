@@ -65,7 +65,7 @@
 //
 // Empfängt OSC von imPulse (Processing-Sketch) auf Port 8002:
 //   /net/hitNode <nodeId:int>    <energy:float> <x:float> <y:float>
-//   /net/impulse <impulseId:int> <x:float>      <y:float> <energy:float>
+//   /net/impulse <impulseId:int> <x:float>      <y:float> <energy:float> <speed:float>
 // (siehe LedNetworkTransportEffect.java sendOscMessage() und
 // sendImpulseStream(), Adresse in imPulse.pde:
 // NetAddress oscOutput = new NetAddress("127.0.0.1", 8002))
@@ -166,6 +166,13 @@
 //     25/25/25/25% (siehe ~toQuad-Kommentar). Wirkt nur auf NEU
 //     getriggerte Toene/Drohnen, aus demselben Grund wie brightness.
 //
+//   /klangnetz/param/regionBiasAmount  0.0 .. 1.0   Default 0.6
+//     Staerke des Klangbias nach Netzregion (vier Quadranten, siehe
+//     ~regionZone/~regionBias im Code). 0 = aus, der Klang ist dann
+//     bitgleich dem ohne dieses Feature. Verschiebt je Zone die Notenwahl
+//     (in SKALENSTUFEN, bleibt also in Phrygisch) sowie brightness und
+//     detune. Wirkt auf NEUE Toene, wie brightness/detune selbst.
+//
 //   /klangnetz/param/brightness     0.0 .. 2.0   Default 1.0
 //     \glockenBell: Amp-Faktor auf die VIER oberen Partialtöne (Grundton
 //     bleibt unverändert). 1.0 = aktueller Klang, 0 = reiner Sinuston,
@@ -190,6 +197,26 @@
 //     ~registerParam-Aufruf unten) — anders als brightness/detune, weil
 //     eine Drohne (anders als eine Glocke) über Sekunden gehalten wird
 //     und ein Live-Regler an ihr hörbar Sinn ergibt.
+//
+//   ---- Travel-Sound (Wind-/Rauschschicht der reisenden Impulse) ----
+//   Alle sechs sitzen in \impulseDrone, es gibt KEINEN zweiten Synth je
+//   Impuls -- Begruendung bei den ~registerParam-Aufrufen im Code.
+//
+//   /klangnetz/param/travelMix       0.0 .. 1.0    Default 0.0
+//     Crossfade Tondrohne <-> Windband. 0 = bisheriger Klang, bitgleich.
+//     Wirkt SOFORT auf laufende Drohnen.
+//   /klangnetz/param/travelRq        0.02 .. 1.0   Default 0.35
+//     Bandbreite des Rauschbands. Klein = pfeifend, gross = breit.
+//     Wirkt SOFORT auf laufende Drohnen.
+//   /klangnetz/param/travelAmpScale  0.0 .. 2.0    Default 1.0
+//     Trimm nur der Rauschschicht. Wirkt SOFORT.
+//   /klangnetz/param/travelFreqMin   100 .. 2000   Default 300
+//   /klangnetz/param/travelFreqMax   200 .. 8000   Default 2500
+//   /klangnetz/param/travelSpeedRef  10 .. 1500    Default 200
+//     Mittenfrequenz des Bands, linear zwischen Min und Max ueber die
+//     gemeldete Geschwindigkeit (LEDs/s, fuenftes Argument von
+//     /net/impulse). Wirken erst auf NEUE Drohnen -- die Umrechnung
+//     passiert in sclang beim Anlegen des Synths.
 // =====================================================================
 
 (
@@ -313,6 +340,61 @@ s.options.numInputBusChannels = 2;
 // 25/25/25/25% auf alle vier Boxen, weil 0^x = 0 fuer jeden Exponenten.
 ~panSharpness = 1.0;
 
+// ---- Klangbias nach Netzregion ----------------------------------------
+// Ziel: ein Knoten soll nicht nur rhythmisch, sondern auch klanglich
+// verraten, aus welchem Teil des Netzes er kommt.
+//
+// ZONIERUNG: vier Quadranten, Zone = (x>=0) + 2*(y>=0). Der Grund ist die
+// Lautsprecher-Geometrie: die vier Boxen stehen auf den SEITENMITTEN
+// (0,+4) (+7,0) (0,-4) (-7,0), jeder Quadrant liegt also genau zwischen
+// zwei Boxen und hat eine eindeutige Richtung im Raum. Ortung und
+// Klangfarbe stuetzen sich damit gegenseitig -- man hoert "vorne rechts"
+// UND "die helle Farbe", und beides meint dieselbe Netzregion.
+//
+// Radiale Ringe (Zentrum/Rand) waeren die naheliegende Alternative und
+// scheiden genau daran aus: sie korrelieren mit keiner
+// Lautsprecherrichtung, und in der Mitte pannt ~toQuad ohnehin auf alle
+// vier Boxen gleich (25/25/25/25%) -- die Zone mit dem eigensten Charakter
+// laege dort, wo die Ortung am schwaechsten ist.
+~regionZone = { |px, py|
+    var xi = if (px >= 0) { 1 } { 0 };
+    var yi = if (py >= 0) { 1 } { 0 };
+    xi + (2 * yi)
+};
+
+// Bias je Zone. Der Notenoffset zaehlt in SKALENSTUFEN, nicht Halbtoenen:
+// er wird auf noteIndex addiert, bevor ~scaleSteps nachgeschlagen wird. Ein
+// Halbtonoffset erzeugte Toene ausserhalb von Phrygisch und zerstoerte den
+// vor Ort gewaehlten Modus.
+//
+// brightness und detune sind die vorhandenen Timbre-Regler (siehe
+// ~registerParam unten): brightness skaliert die oberen vier Teiltoene
+// (hell/dumpf), detune blendet zwischen unharmonischen und rein
+// harmonischen Verhaeltnissen (metallisch/orgelartig). Die in aelteren
+// Notizen genannten ~tilt/~decayScale gibt es in dieser Datei nicht.
+//
+//   Zone 0 = hinten links   tief,   dumpf,     metallisch
+//   Zone 1 = hinten rechts  mitte,  neutral,   harmonischer
+//   Zone 2 = vorn links     hoeher, heller,    metallisch
+//   Zone 3 = vorn rechts    hoch,   brillant,  fast rein harmonisch
+~regionNoteOffsets = [-2, 0, 2, 4];
+~regionBrightness  = [0.65, 1.0, 1.35, 1.7];
+~regionDetune      = [1.0, 0.7, 1.0, 0.4];
+
+// Liefert den wirksamen Bias, linear zwischen neutral und vollem Zonenwert
+// interpoliert. Bei ~regionBiasAmount = 0 ist das Ergebnis exakt neutral,
+// der Klang also bitgleich dem ohne dieses Feature.
+~regionBias = { |px, py|
+    var zone = ~regionZone.(px, py);
+    var amt = ~regionBiasAmount ? 0;
+    (
+        zone: zone,
+        noteOffset: (~regionNoteOffsets[zone] * amt).round.asInteger,
+        brightness: 1.0 + ((~regionBrightness[zone] - 1.0) * amt),
+        detune: 1.0 + ((~regionDetune[zone] - 1.0) * amt)
+    )
+};
+
 // ---- OSC-Sound-Parameter-Registry --------------------------------------
 // Kleine, für DIESE Datei gebaute Registry — kein Anspruch auf
 // Wiederverwendbarkeit in anderen Patches. Jeder Eintrag: Environment-
@@ -360,6 +442,72 @@ s.options.numInputBusChannels = 2;
 // 0), ueber 8 ist am realen Setup kaum noch ein Unterschied hoerbar
 // (Ecke ist ohnehin schon bei jedem Wert 100% scharf, siehe ~toQuad).
 ~registerParam.(\panSharpness, 1.0, 0.1, 8.0, nil);
+
+// Staerke des Regionen-Klangbias (siehe ~regionBias oben). 0 = aus, der
+// Klang ist dann bitgleich dem ohne dieses Feature; 1 = voller Zonenwert.
+//
+// Ein eigener enabled-Schalter entfaellt bewusst: amount = 0 IST aus, und
+// ein stufenloser Regler ist live wertvoller als ein harter Schalter, weil
+// sich der Effekt einblenden laesst statt zu springen. Default 0.6 -- der
+// Bias ist rein additiv zur bestehenden Klanglogik und kann nichts stumm
+// schalten.
+//
+// Wirkt auf NEUE Toene: brightness/detune sind Start-Argumente der
+// Glocken-SynthDef (siehe dort), ein spaeteres .set kaeme nie mehr an.
+~registerParam.(\regionBiasAmount, 0.6, 0.0, 1.0, nil);
+
+// ---- Travel-Sound: Wind-/Rauschschicht der reisenden Impulse ----------
+// Setzt auf dem VORHANDENEN gedrosselten Positionsstrom /net/impulse auf
+// und wird eine zweite Klangschicht INNERHALB von \impulseDrone -- kein
+// zweiter Synth je Impuls. Begruendung: \impulseDrone ist schon ein Synth
+// pro Impuls-ID mit Position, Huellkurve, Timeout und ~droneLimit; ein
+// zweiter braeuchte ein zweites Dictionary, einen zweiten Reaper und ein
+// zweites Limit und verdoppelte die Stimmenzahl -- fuer ein Feature, dessen
+// Ziel es ist, Klangbrei zu VERMEIDEN.
+//
+// Der geforderte Lebenszyklus (neue Stimme bei jedem Split) ergibt sich
+// dadurch ohne eine Zeile Code: ein Split-Kind ist ein neuer Impuls mit
+// neuer id, bekommt also einen neuen Eintrag und einen neuen Synth, und die
+// Stimme des Elternimpulses laeuft nach ~droneTimeout aus.
+//
+// Kein eigener Throttle auf der Processing-Seite: oscMaxCount bestimmt, was
+// ueberhaupt ueber den Draht geht, und der Deckel, der wirklich gebraucht
+// wird, sitzt dort, wo die Rechenlast entsteht -- ~droneLimit, direkt
+// darunter.
+//
+// travelMix ist Schalter und Staerkeregler in einem. Default 0 = reine
+// Tondrohne wie bisher, bitgleich.
+~registerParam.(\travelMix, 0.0, 0.0, 1.0, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\travelMix, val);
+    }) };
+});
+// Bandbreite des Rauschbands. Klein = pfeifend/schmal, gross = breites
+// Rauschen. Wirkt wie travelMix sofort auf laufende Drohnen -- eine Drohne
+// wird ueber Sekunden gehalten, ein Live-Regler daran ergibt hoerbar Sinn.
+~registerParam.(\travelRq, 0.35, 0.02, 1.0, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\travelRq, val);
+    }) };
+});
+// Trimm NUR der Rauschschicht. Es gibt ihn, weil Rauschen bei gleichem
+// Pegel lauter wirkt als ein Ton und der Crossfade sonst einen Sprung
+// machte.
+~registerParam.(\travelAmpScale, 1.0, 0.0, 2.0, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\travelAmpScale, val);
+    }) };
+});
+// Die drei Frequenz-Parameter wirken erst auf NEUE Drohnen: die
+// Speed -> Mittenfrequenz-Umrechnung passiert in sclang beim Anlegen des
+// Synths (siehe OSCdef \impulseStream), nicht im SC-Graphen.
+~registerParam.(\travelFreqMin,  300.0, 100.0, 2000.0, nil);
+~registerParam.(\travelFreqMax, 2500.0, 200.0, 8000.0, nil);
+// LEDs/Sekunde, ab der travelFreqMax erreicht ist. Der Arbeitspunkt der
+// Installation liegt bei impulseSpeed = 16, der Randomizer faehrt bis 160 --
+// 200 laesst also Luft nach oben, ohne dass der uebliche Bereich schon am
+// Anschlag steht.
+~registerParam.(\travelSpeedRef, 200.0, 10.0, 1500.0, nil);
 
 s.waitForBoot({
     // ---- Alten Aufbau abräumen ---------------------------------------
@@ -512,8 +660,10 @@ s.waitForBoot({
     // ein schlichter Startpunkt und ausdrücklich zum Ersetzen gedacht — die
     // Mechanik drumherum ist der Teil, der stimmen muss.
     SynthDef(\impulseDrone, { |freq = 220, amp = 0.08, out = 0, x = 0, y = 0, gate = 1,
-            lpfMult = 6|
-        var sig, env, xl, yl, ampl, lpfMultLagged;
+            lpfMult = 6, travelMix = 0, travelFreq = 800, travelRq = 0.35,
+            travelAmpScale = 1.0|
+        var sig, tone, wind, env, xl, yl, ampl, lpfMultLagged, mixLagged,
+            rqLagged, windAmpLagged;
         // Lag VOR der Umrechnung: ein springender Positionswert darf nicht
         // als Klick durchschlagen. Bei 10 Hz Melderate glättet 0.1 s die
         // Sprünge zwischen zwei Meldungen.
@@ -529,9 +679,32 @@ s.waitForBoot({
         // ~registerParam-Aufruf oben) — genauso lagged, sonst knackt ein
         // Regler-Sprung mitten im Filterverlauf.
         lpfMultLagged = Lag.kr(lpfMult, 0.1);
+        // travelMix/travelRq/travelAmpScale kommen ebenfalls live per .set
+        // (siehe die drei onSet-Callbacks bei ~registerParam) und brauchen
+        // dieselbe Glättung: ein Sprung im Crossfade oder in der Filterguete
+        // knackt auf einem gehaltenen Ton genauso wie ein Positionssprung.
+        mixLagged = Lag.kr(travelMix, 0.2);
+        rqLagged = Lag.kr(travelRq, 0.1);
+        windAmpLagged = Lag.kr(travelAmpScale, 0.1);
         env = EnvGen.kr(Env.asr(0.05, 1, 0.3, \sin), gate, doneAction: 2);
-        sig = LFTri.ar(freq) * 0.5 + SinOsc.ar(freq * 2.01, 0, 0.2);
-        sig = LPF.ar(sig, freq * lpfMultLagged);
+
+        // Tonschicht -- unveraendert der bisherige Klang.
+        tone = LFTri.ar(freq) * 0.5 + SinOsc.ar(freq * 2.01, 0, 0.2);
+        tone = LPF.ar(tone, freq * lpfMultLagged);
+
+        // Windschicht: bandpassgefiltertes Rauschen. travelFreq kommt als
+        // Start-Argument und ist bereits aus der gemeldeten Geschwindigkeit
+        // gerechnet (siehe OSCdef \impulseStream) -- ein schneller Impuls
+        // zischt heller als ein langsamer.
+        //
+        // Der Faktor 3 gleicht aus, dass BPF ein schmales Band aus dem
+        // Rauschen herausschneidet und das Ergebnis deutlich leiser ist als
+        // die Tonschicht; ohne ihn waere der Crossfade ein Absacken.
+        wind = BPF.ar(PinkNoise.ar, travelFreq, rqLagged) * 3 * windAmpLagged;
+
+        // Crossfade: 0 = reine Tondrohne (Auslieferungszustand, bitgleich
+        // dem bisherigen Klang), 1 = reines Windband.
+        sig = XFade2.ar(tone, wind, (mixLagged * 2) - 1);
         sig = sig * ampl * env;
         Out.ar(out, ~toQuad.(sig, xl, yl));
     }).add;
@@ -711,11 +884,17 @@ s.waitForBoot({
     // ist hier nicht feststellbar — deshalb der Timeout unten.
     OSCdef(\impulseStream, { |msg|
         var id = msg[1], px = msg[2], py = msg[3], energy = msg[4];
+        // Fuenftes Argument (Betrag der Geschwindigkeit in LEDs/s) kam
+        // spaeter dazu. Die Absicherung laesst die Datei auch mit einem
+        // aelteren Processing-Stand laufen -- dann klingt jeder Whoosh so,
+        // als stuende der Impuls still.
+        var speed = if (msg.size > 5) { msg[5].asFloat } { 0 };
         var entry = ~drones[id];
         // energy ist NICHT durch 1 begrenzt: an einer Kreuzung erbt jeder
         // Zweig die volle Energie des Elternimpulses, sie vervielfacht sich
         // also mit jeder Aufspaltung. Deshalb hier clampen.
         var amp = energy.clip(0, 2) * ~droneAmpScale;
+        var travelFreq, bias;
         if (entry.notNil) {
             entry[\synth].set(\x, px, \y, py, \amp, amp);
             entry[\lastSeen] = Main.elapsedTime;
@@ -725,10 +904,29 @@ s.waitForBoot({
             // mehr, bis wieder Platz frei ist — das ist gewollt: die Grenze
             // soll den Rechner schützen, nicht Stimmen umschichten.
             if (~drones.size < ~droneLimit) {
+                // Speed -> Mittenfrequenz des Windbands, linear zwischen
+                // travelFreqMin und travelFreqMax. Einmal hier gerechnet und
+                // als Start-Argument uebergeben statt im SC-Graphen: die
+                // Geschwindigkeit eines Impulses aendert sich ueber sein
+                // Leben kaum, und so bleibt der Graph schlank.
+                travelFreq = speed.linlin(0, ~travelSpeedRef,
+                    ~travelFreqMin, ~travelFreqMax);
+                // Klangbias der HERKUNFTS-Region (siehe ~regionBias): die
+                // ERSTE gemeldete Position eines Impulses kommt aus dem Takt
+                // direkt nach seiner Entstehung, liegt also nahe an seinem
+                // Spawn- bzw. Splitpunkt -- das IST die Herkunftsregion, ohne
+                // ein weiteres OSC-Feld und ohne Zustand auf der
+                // Processing-Seite. Einmal beim Anlegen gerechnet, damit der
+                // Whoosh seine Klangidentitaet ueber seine ganze Lebensdauer
+                // behaelt, auch wenn er in eine andere Region fliegt.
+                bias = ~regionBias.(px, py);
+                travelFreq = (travelFreq * bias[\brightness]).clip(20, 18000);
                 ~drones[id] = (
                     synth: Synth(\impulseDrone, [
                         \freq, ~droneFreq.(id), \x, px, \y, py,
-                        \amp, amp, \out, ~quadBus.index, \lpfMult, ~droneLpfMult
+                        \amp, amp, \out, ~quadBus.index, \lpfMult, ~droneLpfMult,
+                        \travelMix, ~travelMix, \travelFreq, travelFreq,
+                        \travelRq, ~travelRq, \travelAmpScale, ~travelAmpScale
                     ], ~voices),
                     lastSeen: Main.elapsedTime
                 );
@@ -762,7 +960,7 @@ s.waitForBoot({
     // Abräumblock, zusammen mit allem anderen aus einem früheren Durchlauf.)
     ~netHitNodeOscFunc = OSCFunc({ |msg, time, addr|
         var nodeId, energy, px, py, noteIndex, octave, degree, semitoneOffset,
-            midiNote, freq, amp, newBell;
+            midiNote, freq, amp, newBell, bias;
 
         nodeId = msg[1].asInteger;
         energy = msg[2].asFloat;
@@ -773,8 +971,17 @@ s.waitForBoot({
         px = if (msg.size > 3) { msg[3].asFloat } { 0 };
         py = if (msg.size > 4) { msg[4].asFloat } { 0 };
 
+        // Klangbias nach Netzregion (siehe ~regionBias oben): der Notenoffset
+        // wird auf den SKALENINDEX addiert, nicht auf die MIDI-Note -- so
+        // bleibt jeder Ton in Phrygisch.
+        bias = ~regionBias.(px, py);
+
         // Node-ID auf einen Ton der Tonleiter über mehrere Oktaven abbilden.
-        noteIndex = nodeId % ~notesPerOctaveSet;
+        noteIndex = (nodeId + bias[\noteOffset]) % ~notesPerOctaveSet;
+        // Ein negativer Offset kann noteIndex unter 0 druecken; SCs % liefert
+        // fuer negative Zahlen bereits einen nichtnegativen Rest, die
+        // Absicherung hier ist das Netz darunter.
+        noteIndex = noteIndex.abs;
         octave = noteIndex div: ~scaleSteps.size;
         degree = noteIndex mod: ~scaleSteps.size;
         semitoneOffset = ~scaleSteps[degree] + (octave * 12);
@@ -797,9 +1004,13 @@ s.waitForBoot({
 
         // Die frühere Zufalls-Panoramisierung entfällt: sie war der
         // Platzhalter für genau diese Knotenposition.
+        // brightness/detune sind die globalen Regler MAL dem Zonenfaktor --
+        // der Bias verschiebt die Klangfarbe relativ, statt den vor Ort
+        // eingestellten Grundwert zu ueberschreiben.
         newBell = Synth(\glockenBell, [
             \freq, freq, \amp, amp, \x, px, \y, py, \out, ~quadBus.index,
-            \brightness, ~brightness, \detune, ~detune
+            \brightness, (~brightness * bias[\brightness]).clip(0.0, 2.0),
+            \detune, (~detune * bias[\detune]).clip(0.0, 1.0)
         ], ~voices);
         ~activeBells.add(newBell);
         // Natuerliches Verklingen (doneAction 2 im SynthDef) muss
@@ -809,8 +1020,9 @@ s.waitForBoot({
         // falschen).
         newBell.onFree({ ~activeBells.remove(newBell); });
 
-        ("node % -> % Hz (amp %) bei (%, %) m".format(
-            nodeId, freq.round(0.1), amp.round(0.01), px.round(0.01), py.round(0.01)
+        ("node % -> % Hz (amp %) bei (%, %) m, Zone %".format(
+            nodeId, freq.round(0.1), amp.round(0.01), px.round(0.01), py.round(0.01),
+            bias[\zone]
         )).postln;
     }, '/net/hitNode', recvPort: ~oscListenPort);
 
