@@ -386,6 +386,7 @@ s.waitForBoot({
     // einen Fehler auf nil.
     ~netHitNodeOscFunc !? { |f| f.free };
     ~noiseTestOscFunc !? { |f| f.free };
+    ~noiseTestHardOscFunc !? { |f| f.free };
     OSCdef(\impulseStream) !? { |d| d.free };
     ~droneReaper !? { |r| r.stop };
     ~paramOscDefs !? { |defs| defs.do({ |d| d.free }) };
@@ -637,6 +638,22 @@ s.waitForBoot({
         Out.ar(out, ~toBformat.(sig, x, y));
     }).add;
 
+    // ---- SynthDef: Rausch-Testton HART gepannt (voll gerichtet) --------
+    // Fuer die Testabnahme deutlicher als \noiseBformat: erzwingt
+    // direct = 1 unabhaengig vom Radius, damit auch eine Position nahe
+    // der Netzmitte (kleiner Radius, normalerweise diffus) genauso
+    // scharf geortet werden kann wie eine Position am Rand. Nur fuer
+    // Testzwecke -- Nodes/Drohnen behalten die normale, radiusabhaengige
+    // Richtwirkung ueber ~toBformat.
+    SynthDef(\noiseBformatHard, { |amp = 0.4, out = 0, x = 0, y = 0|
+        var sig, env, azimuth, bf;
+        env = EnvGen.kr(Env.linen(0.05, 1.5, 0.3), doneAction: 2);
+        sig = PinkNoise.ar(1) * amp * env;
+        azimuth = ((x * ~azimuthSign).atan2(y) / pi) + ~azimuthOffset;
+        bf = PanB2.ar(sig, azimuth, 1);
+        Out.ar(out, bf); // direct = 1, kein radiusabhaengiges Daempfen von bf[1]/bf[2]
+    }).add;
+
     s.sync;
 
     // ---- Decoder starten ---------------------------------------------
@@ -796,6 +813,18 @@ s.waitForBoot({
         Synth(\noiseBformat, [\amp, amp, \x, px, \y, py, \out, ~bformatBus.index], ~voices);
         ("testNoise bei (%, %) m, amp %".format(px.round(0.01), py.round(0.01), amp)).postln;
     }, '/klangnetz/test/noise', recvPort: ~oscListenPort);
+
+    // ---- OSC-Empfang: HART gepannter Rausch-Testton --------------------
+    // /klangnetz/test/noiseHard <x:float> <y:float> [amp] — wie
+    // /klangnetz/test/noise, aber mit voll gerichtetem \noiseBformatHard
+    // (direct = 1 immer), fuer eine eindeutigere Testabnahme naeher an
+    // der Netzmitte.
+    ~noiseTestHardOscFunc = OSCFunc({ |msg|
+        var px = msg[1].asFloat, py = msg[2].asFloat;
+        var amp = if (msg.size > 3) { msg[3].asFloat } { 0.4 };
+        Synth(\noiseBformatHard, [\amp, amp, \x, px, \y, py, \out, ~bformatBus.index], ~voices);
+        ("testNoiseHard bei (%, %) m, amp %".format(px.round(0.01), py.round(0.01), amp)).postln;
+    }, '/klangnetz/test/noiseHard', recvPort: ~oscListenPort);
 
     // ---- OSC-Empfang: Sound-Parameter-Layer ---------------------------
     // Ein OSCdef je registriertem Parameter (siehe ~registerParam oben) —
