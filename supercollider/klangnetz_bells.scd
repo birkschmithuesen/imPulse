@@ -385,6 +385,7 @@ s.waitForBoot({
     // diesem Fenster eine Meldung von imPulse, liefe der alte Handler in
     // einen Fehler auf nil.
     ~netHitNodeOscFunc !? { |f| f.free };
+    ~noiseTestOscFunc !? { |f| f.free };
     OSCdef(\impulseStream) !? { |d| d.free };
     ~droneReaper !? { |r| r.stop };
     ~paramOscDefs !? { |defs| defs.do({ |d| d.free }) };
@@ -600,6 +601,18 @@ s.waitForBoot({
         Out.ar(chan, sig);
     }).add;
 
+    // ---- SynthDef: Rausch-Testton DURCH den echten Encoder -------------
+    // Für die Azimuth-Testabnahme per OSC (kein REPL-Zugriff vor Ort
+    // nötig, siehe /klangnetz/test/noise unten). Läuft durch denselben
+    // ~toBformat-Encoder wie Glocken/Drohnen — Rauschen ist deutlich
+    // leichter zu orten als ein Sinuston.
+    SynthDef(\noiseBformat, { |amp = 0.4, out = 0, x = 0, y = 0|
+        var sig, env;
+        env = EnvGen.kr(Env.linen(0.05, 1.5, 0.3), doneAction: 2);
+        sig = PinkNoise.ar(1) * amp * env;
+        Out.ar(out, ~toBformat.(sig, x, y));
+    }).add;
+
     s.sync;
 
     // ---- Decoder starten ---------------------------------------------
@@ -746,6 +759,19 @@ s.waitForBoot({
             nodeId, freq.round(0.1), amp.round(0.01), px.round(0.01), py.round(0.01)
         )).postln;
     }, '/net/hitNode', recvPort: ~oscListenPort);
+
+    // ---- OSC-Empfang: Rausch-Testton fuer die Azimuth-Testabnahme ------
+    // /klangnetz/test/noise <x:float> <y:float>  (optional amp als drittes
+    // Argument, Default 0.4) — spielt PinkNoise durch den echten Encoder
+    // an einer beliebigen Position, ohne REPL-Zugriff vor Ort. Deutlich
+    // leichter zu orten als der Glockenton (siehe klangnetz-remote-control
+    // Skill, "Nimm Rauschen statt Glockenton fuer die Ortungstests").
+    ~noiseTestOscFunc = OSCFunc({ |msg|
+        var px = msg[1].asFloat, py = msg[2].asFloat;
+        var amp = if (msg.size > 3) { msg[3].asFloat } { 0.4 };
+        Synth(\noiseBformat, [\amp, amp, \x, px, \y, py, \out, ~bformatBus.index], ~voices);
+        ("testNoise bei (%, %) m, amp %".format(px.round(0.01), py.round(0.01), amp)).postln;
+    }, '/klangnetz/test/noise', recvPort: ~oscListenPort);
 
     // ---- OSC-Empfang: Sound-Parameter-Layer ---------------------------
     // Ein OSCdef je registriertem Parameter (siehe ~registerParam oben) —
