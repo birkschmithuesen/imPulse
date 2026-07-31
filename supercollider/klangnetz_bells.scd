@@ -210,13 +210,21 @@
 //     Wirkt SOFORT auf laufende Drohnen.
 //   /klangnetz/param/travelAmpScale  0.0 .. 2.0    Default 1.0
 //     Trimm nur der Rauschschicht. Wirkt SOFORT.
-//   /klangnetz/param/travelFreqMin   100 .. 2000   Default 300
-//   /klangnetz/param/travelFreqMax   200 .. 8000   Default 2500
-//   /klangnetz/param/travelSpeedRef  10 .. 1500    Default 200
-//     Mittenfrequenz des Bands, linear zwischen Min und Max ueber die
-//     gemeldete Geschwindigkeit (LEDs/s, fuenftes Argument von
-//     /net/impulse). Wirken erst auf NEUE Drohnen -- die Umrechnung
-//     passiert in sclang beim Anlegen des Synths.
+//   /klangnetz/param/travelFreqBase       50 .. 4000    Default 400
+//   /klangnetz/param/travelSpeedRef        1 .. 1500    Default 16
+//   /klangnetz/param/travelOctavesPerStep  0.25 .. 3    Default 1.0
+//   /klangnetz/param/travelSnap            0 / 1        Default 1
+//   /klangnetz/param/travelFreqMin        20 .. 2000    Default 80
+//   /klangnetz/param/travelFreqMax       200 .. 16000   Default 6000
+//     Mittenfrequenz des Bands, OKTAVBASIERT ueber die gemeldete
+//     Geschwindigkeit (LEDs/s, fuenftes Argument von /net/impulse):
+//       freq = travelFreqBase * 2^(log2(speed/travelSpeedRef) * OctavesPerStep)
+//     Jede Verdopplung der Geschwindigkeit ist damit ein fester
+//     Intervallsprung -- bei den Defaults 200/400/800/1600/3200 Hz fuer die
+//     Speed-Klassen 0.5x/1x/2x/4x/8x. travelSnap rundet auf die Klasse,
+//     damit der Jitter die Zuordenbarkeit nicht verschmiert. Wirken erst
+//     auf NEUE Drohnen -- die Umrechnung passiert in sclang beim Anlegen
+//     des Synths.
 // =====================================================================
 
 (
@@ -498,16 +506,53 @@ s.options.numInputBusChannels = 2;
         entry[\synth].set(\travelAmpScale, val);
     }) };
 });
-// Die drei Frequenz-Parameter wirken erst auf NEUE Drohnen: die
-// Speed -> Mittenfrequenz-Umrechnung passiert in sclang beim Anlegen des
-// Synths (siehe OSCdef \impulseStream), nicht im SC-Graphen.
-~registerParam.(\travelFreqMin,  300.0, 100.0, 2000.0, nil);
-~registerParam.(\travelFreqMax, 2500.0, 200.0, 8000.0, nil);
-// LEDs/Sekunde, ab der travelFreqMax erreicht ist. Der Arbeitspunkt der
-// Installation liegt bei impulseSpeed = 16, der Randomizer faehrt bis 160 --
-// 200 laesst also Luft nach oben, ohne dass der uebliche Bereich schon am
-// Anschlag steht.
-~registerParam.(\travelSpeedRef, 200.0, 10.0, 1500.0, nil);
+// Speed -> Mittenfrequenz des Windbands, OKTAVBASIERT statt linear.
+//
+// Linear (die erste Fassung) lagen die Speed-Klassen 1x und 2x dicht
+// beieinander -- genau der "sanfte Gradient", der die Klassen NICHT
+// unterscheidbar macht. Oktavbasiert ist jede Verdopplung der
+// Geschwindigkeit ein fester Intervallsprung:
+//
+//   octaves = log2(speed / travelSpeedRef)
+//   freq    = travelFreqBase * 2^(octaves * travelOctavesPerStep)
+//
+// Mit den Defaults unten (Basis 400 Hz bei Speed 16):
+//   0.5x -> 200 Hz   1x -> 400   2x -> 800   4x -> 1600   8x -> 3200
+// Das ist unverwechselbar, und genau das ist der Zweck: beim Hoeren soll
+// klar sein, welcher Speed-Klasse (siehe SpeedQuantizer auf der
+// Processing-Seite) ein Impuls angehoert.
+//
+// Alle sechs wirken erst auf NEUE Drohnen: die Umrechnung passiert in
+// sclang beim Anlegen des Synths (siehe OSCdef \impulseStream), nicht im
+// SC-Graphen.
+~registerParam.(\travelFreqBase, 400.0, 50.0, 4000.0, nil);
+// Speed, die auf travelFreqBase abgebildet wird. 16 ist der Arbeitspunkt der
+// Installation (/net/impulse/speed) und damit die 1x-Klasse.
+~registerParam.(\travelSpeedRef, 16.0, 1.0, 1500.0, nil);
+// Oktaven je Verdopplung der Geschwindigkeit. 1.0 = eine Oktave, also
+// "doppelt so schnell klingt eine Oktave hoeher". Groesser = noch
+// deutlicher getrennt, kleiner = subtiler.
+~registerParam.(\travelOctavesPerStep, 1.0, 0.25, 3.0, nil);
+// Rasterung auf die Speed-KLASSE (1 = an). Rundet den Oktavabstand vor der
+// Umrechnung auf eine ganze Zahl, damit jeder Impuls derselben Klasse auf
+// exakt derselben Tonhoehe zischt.
+//
+// Ohne die Rasterung verschmieren die Klassen, sobald
+// /net/impulse/speedQuantize/jitter oder splitSpeedJitter > 0 stehen -- die
+// Zuordenbarkeit haenge dann daran, wie hoch der Jitter gerade steht.
+//
+// GRENZE, die man kennen muss: die Rundung greift auf halbe Oktaven, also
+// bis zu einem Jitter-Faktor von 2^0.5 = 1.41 nach oben und 2^-0.5 = 0.71
+// nach unten. Ein Jitter-Regler ueber etwa 0.29 laesst einzelne Impulse
+// deshalb in die NACHBARKLASSE rutschen (0.7 * 1x liegt naeher an 0.5x als
+// an 1x). Das ist kein Fehler, sondern ehrlich -- der Impuls reist dann ja
+// wirklich mit dieser Geschwindigkeit --, aber wer maximale
+// Zuordenbarkeit will, laesst /net/impulse/speedQuantize/jitter unter 0.29.
+~registerParam.(\travelSnap, 1.0, 0.0, 1.0, nil);
+// Harte Grenzen, damit ein extremer Regler nichts Unhoerbares oder
+// Schmerzhaftes erzeugt. Weit genug fuer 0.5x .. 8x bei den Defaults.
+~registerParam.(\travelFreqMin,   80.0,  20.0,  2000.0, nil);
+~registerParam.(\travelFreqMax, 6000.0, 200.0, 16000.0, nil);
 
 s.waitForBoot({
     // ---- Alten Aufbau abräumen ---------------------------------------
@@ -894,7 +939,7 @@ s.waitForBoot({
         // Zweig die volle Energie des Elternimpulses, sie vervielfacht sich
         // also mit jeder Aufspaltung. Deshalb hier clampen.
         var amp = energy.clip(0, 2) * ~droneAmpScale;
-        var travelFreq, bias;
+        var travelFreq, travelOct, bias;
         if (entry.notNil) {
             entry[\synth].set(\x, px, \y, py, \amp, amp);
             entry[\lastSeen] = Main.elapsedTime;
@@ -904,13 +949,22 @@ s.waitForBoot({
             // mehr, bis wieder Platz frei ist — das ist gewollt: die Grenze
             // soll den Rechner schützen, nicht Stimmen umschichten.
             if (~drones.size < ~droneLimit) {
-                // Speed -> Mittenfrequenz des Windbands, linear zwischen
-                // travelFreqMin und travelFreqMax. Einmal hier gerechnet und
-                // als Start-Argument uebergeben statt im SC-Graphen: die
-                // Geschwindigkeit eines Impulses aendert sich ueber sein
-                // Leben kaum, und so bleibt der Graph schlank.
-                travelFreq = speed.linlin(0, ~travelSpeedRef,
-                    ~travelFreqMin, ~travelFreqMax);
+                // Speed -> Mittenfrequenz des Windbands, OKTAVBASIERT (siehe
+                // die ~registerParam-Aufrufe oben fuer die Begruendung).
+                // Einmal hier gerechnet und als Start-Argument uebergeben
+                // statt im SC-Graphen: die Geschwindigkeit eines Impulses
+                // aendert sich ueber sein Leben kaum, und so bleibt der
+                // Graph schlank.
+                //
+                // max(speed, 0.001): ein alter Processing-Stand ohne das
+                // fuenfte Argument meldet 0, und log2(0) waere -inf.
+                travelOct = (max(speed, 0.001) / ~travelSpeedRef).log2;
+                // Auf die Speed-Klasse rasten, damit Jitter die
+                // Zuordenbarkeit nicht verschmiert.
+                if (~travelSnap > 0.5) { travelOct = travelOct.round };
+                travelFreq = ~travelFreqBase
+                    * (2 ** (travelOct * ~travelOctavesPerStep));
+                travelFreq = travelFreq.clip(~travelFreqMin, ~travelFreqMax);
                 // Klangbias der HERKUNFTS-Region (siehe ~regionBias): die
                 // ERSTE gemeldete Position eines Impulses kommt aus dem Takt
                 // direkt nach seiner Entstehung, liegt also nahe an seinem
