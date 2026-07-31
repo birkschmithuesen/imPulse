@@ -8,7 +8,7 @@ Geschrieben für die Garbicz-Fassung: 15 Controller, 30 Stripes à 600 LEDs, Gru
 
 - **Die Kreuzungen müssen aufgenommen sein.** `data/nodeCrossings.txt` ist die Grundlage: jede Kreuzung wird zu einem Eintrag der Arbeitsliste. Fehlt sie, fehlen die Einträge, und die Positionen der Knoten — also genau die Punkte, die Töne auslösen — wären nur geraten. Zuerst also `docs/kalibrierung-anleitung.md` durcharbeiten.
 - **Der Sketch wird aus der Processing-IDE gestartet.** Wie bei der Kreuzungskalibrierung: `imPulse.pde` öffnen, Play.
-- **Der Master-Pegel bleibt in der Regel bei 0,1, darf für eine Abdeckungsprüfung aber kurz hoch.** Der Positionsmodus läuft anders als die Testbilder auf dem Show-Fader `/master/level` (Auslieferungswert 0,1). Bei diesem Pegel ist die blau/rote Einfärbung der Abdeckung (siehe „Farben im Netz") mit rund 1,5/255 pro Kanal praktisch unsichtbar — die einzige verlässliche Anzeige ist der blinkende weisse Punkt, und der reicht für die eigentliche Aufnahme locker. Will man sich stattdessen einen Überblick verschaffen, wo noch Rot oder Dunkel liegt, `/master/level` kurz hochziehen und danach wieder auf 0,1 zurück; dauerhaft oben lassen sollte man ihn nicht, die Stripes sind nicht für volle Helligkeit ausgelegt.
+- **Der Master-Pegel darf für die Aufnahme hoch.** Der Positionsmodus läuft auf dem Show-Fader `/master/level` (Auslieferungswert 0,1). Bei diesem Pegel ist die blau/rote Einfärbung der Abdeckung (siehe „Farben im Netz") mit rund 1,5/255 pro Kanal praktisch unsichtbar; hochgezogen sieht man auf einen Blick, wo noch Rot oder Dunkel liegt. Seit 2026-07-31 gilt der Fader für jede Betriebsart, auch für den Kalibriermodus — die Testbilder dämpfen sich selbst auf 10 % (`TestPatterns.PATTERN_LEVEL`) und gehen deshalb nicht mit hoch. Nach der Aufnahme wieder herunterziehen: dauerhaft volle Helligkeit ist nichts für die Stripes, und für die Show ist der Fader ohnehin ein gestalterischer Wert.
 - **Ein Meterband oder wenigstens ein Plan der Halle.** Angeklickt wird eine Draufsicht der Grundfläche mit 1-m-Raster; ohne eine Vorstellung davon, wo im Raum die Netzmitte liegt, klickt man ins Blaue.
 - Die Controller müssen erreichbar sein. Kurzprobe: `ping 2.2.2.2`.
 
@@ -24,7 +24,7 @@ Die vier Lautsprecher stehen auf den **Seitenmitten**, nicht in den Ecken: vorn 
 
 Ein **Eintrag** der Arbeitsliste ist ein *physischer Punkt*, nicht eine LED. Eine Kreuzung ist damit ein Eintrag mit zwei (selten mehr) LEDs auf zwei Stripes — sie hängen ja an derselben Stelle. Ein Stripe-Ende ist ein Eintrag mit einer LED.
 
-Der aktuelle Eintrag **blinkt weiss im Netz**, 0,4 s an, 0,4 s aus. Bei einer Kreuzung blinken beide LEDs auf beiden Stripes gleichzeitig; damit man sie im Gewirr überhaupt findet, glimmen die beteiligten Stripes zusätzlich schwach grün auf ihrer ganzen Länge — bei einem Stripe-Ende ist das einer, bei einer Kreuzung zwei.
+Der aktuelle Eintrag **blinkt weiss im Netz**, 0,4 s an, 0,4 s aus. Nicht als einzelne LED, sondern als Abschnitt von 25 LEDs (rund 42 cm) um sie herum — eine einzelne LED ist aus ein paar Metern Entfernung nicht zu finden. Liegt der Punkt am Stripe-Ende, wird der Abschnitt nach innen geschoben statt abgeschnitten, ist also überall gleich gross; der Anker sitzt dann an seinem Rand statt in der Mitte. Bei einer Kreuzung blinken beide Abschnitte auf beiden Stripes gleichzeitig; damit man sie im Gewirr überhaupt findet, glimmen die beteiligten Stripes zusätzlich schwach grün auf ihrer ganzen Länge — bei einem Stripe-Ende ist das einer, bei einer Kreuzung zwei.
 
 Der Ablauf ist dann kurz:
 
@@ -68,7 +68,7 @@ Der Positionsmodus färbt das ganze Netz nach dem Zustand seiner Positionskarte:
 | **rot (schwach)** | Position nur geraten: die LED liegt jenseits des äussersten Ankers ihres Stripes |
 | **blau (schwach)** | Position gestützt: die LED liegt zwischen zwei Ankern (oder genau auf einem) |
 | **grün (schwach)** | Stripe des aktuellen Eintrags — überschreibt blau/rot auf diesem Stripe |
-| **weiss, blinkend** | die LED(s) des aktuellen Eintrags |
+| **weiss, blinkend** | der Abschnitt von 25 LEDs um die LED(s) des aktuellen Eintrags |
 
 Rot verschwindet auf einem Stripe genau dann, wenn beide Enden gesetzt sind. Ein Netz ohne Rot und ohne Dunkel ist die Zielgerade.
 

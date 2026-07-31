@@ -60,7 +60,7 @@ Erwartet: Zuordnungstabelle der Controller, dann `n Positionen geladen`. Solange
 `P` drücken. Erwartet: Rechteck 525 × 300 px bei (10, 10) mit 1-m-Raster; vier orange Quadrate auf den Seitenmitten; LED-Vorschau bei x = 560; fünf HUD-Zeilen ab y = 330. Prüfen, dass alles ins 1400 × 450-Fenster passt und die Vorschau nicht überlappt.
 
 **3. Rückmeldung im Netz prüfen.**
-Bei Pegel 0,1 ist die blau/rote Schattierung rund 1,5/255 und praktisch unsichtbar; nur der blinkende weisse Punkt (26/255) liest sich klar. Für die Abdeckungsprüfung `/master/level` kurz hochziehen, danach zurückstellen.
+Bei Pegel 0,1 ist die blau/rote Schattierung rund 1,5/255 und praktisch unsichtbar; nur der blinkende weisse Abschnitt (25 LEDs, 26/255) liest sich klar. Für die Abdeckungsprüfung `/master/level` hochziehen, danach zurückstellen — seit 2026-07-31 gilt der Fader in jeder Betriebsart, die Testbilder dämpfen sich selbst und gehen nicht mit hoch.
 
 **4. Positionen aufnehmen.**
 **Erst die Kreuzungen vollständig, dann die Positionen** — nicht verschränkt. Wird eine Kreuzung später mit `X` gelöscht, bleiben ihre Anker als unerreichbarer Zustand im Store zurück und steuern weiter die Interpolation.
