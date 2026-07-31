@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     from flask import Flask, jsonify, render_template, request
@@ -140,6 +140,236 @@ SPLIT_GROUP_PREFIXES: List[Tuple[str, str]] = [
     ("/net/sequencer/track4/", "net/sequencer/track4"),
     ("/net/sequencer/track5/", "net/sequencer/track5"),
 ]
+
+# ---------------------------------------------------------------------------
+# Spezial-Sektionen
+#
+# Sequencer, Speed-Klassen und die SC-Sound-Parameter bekommen ein eigenes,
+# handgebautes Bedienfeld statt einer Reihe generischer Regler. Der Server
+# liefert dafuer nur STRUKTUR (welche Adresse ist welches Feld welchen
+# Tracks); wie es aussieht, entscheidet app.js.
+#
+# Die Adressen dieser Sektionen fallen anschliessend aus dem generischen
+# Gruppen-Rendering heraus (siehe sequencer_addresses) -- zwei
+# Bedienelemente fuer denselben Parameter waeren zwei Anzeigen, die
+# auseinanderlaufen koennen.
+# ---------------------------------------------------------------------------
+
+# Notenwerte des Sequencers: Wert, Symbol, Name. Die Symbole sind
+# U+1D15D..U+1D161 (MUSICAL SYMBOL WHOLE NOTE .. SIXTEENTH NOTE). Nicht jede
+# Windows-Schrift hat sie, deshalb steht der Name immer daneben und nie nur
+# das Symbol allein -- ein leeres Kaestchen waere sonst die ganze Beschriftung.
+NOTE_VALUES: List[Tuple[int, str, str]] = [
+    (1, "\U0001D15D", "Ganze"),
+    (2, "\U0001D15E", "Halbe"),
+    (4, "\U0001D15F", "Viertel"),
+    (8, "\U0001D160", "Achtel"),
+    (16, "\U0001D161", "Sechzehntel"),
+]
+
+SEQUENCER_PREFIX = "/net/sequencer/"
+SEQUENCER_TRACK_COUNT = 6
+# Reihenfolge im Track-Panel. noteValue steht bewusst vorn: er bestimmt, wie
+# dicht der Track ueberhaupt laeuft.
+SEQUENCER_TRACK_FIELDS = ["noteValue", "repeatCount", "energy",
+                          "swingJitter", "originStripeOverride"]
+
+# Speed-Klassen aus SpeedQuantizer.MULTIPLIERS, gleiche Reihenfolge.
+# Adress-Suffix und Anzeigename; das Suffix spiegelt die Java-Seite (Punkt
+# vermieden, siehe Kommentar dort).
+SPEED_CLASSES: List[Tuple[str, str]] = [
+    ("0x5", "0,5x"),
+    ("1x", "1x"),
+    ("2x", "2x"),
+    ("4x", "4x"),
+    ("8x", "8x"),
+]
+SPEED_WEIGHT_PREFIX = "/net/impulse/speedQuantize/weight/"
+
+# Kurzerklaerungen fuer Parameter, deren Adresse allein nicht verraet, was sie
+# tun. remoteSettings.txt fuehrt zwar eine Beschreibungsspalte, die steht aber
+# bei fast allen Parametern auf dem Platzhalter "space for descripiton".
+DESCRIPTIONS: Dict[str, str] = {
+    "/net/impulse/splitSpeedJitter":
+        "Streut die Geschwindigkeit der Kinder an einer Kreuzung. "
+        "0 = jeder Zweig exakt so schnell wie der Elternimpuls.",
+    "/net/impulse/splitLifetimeJitter":
+        "Streut die Lebensdauer der Kinder an einer Kreuzung, ohne ihre "
+        "Helligkeit zu aendern. 0 = Geschwister sterben synchron.",
+    "/net/impulse/speedQuantize/enabled":
+        "Laesst neue Impulse mit einem rhythmischen Vielfachen von "
+        "/net/impulse/speed spawnen statt immer mit genau diesem Wert.",
+    "/net/impulse/speedQuantize/jitter":
+        "Swing auf der gezogenen Speed-Klasse. 0 = exakt das Vielfache. "
+        "Ueber 0,29 rutschen einzelne Impulse im Klang in die Nachbarklasse.",
+    "/net/sequencer/enabled":
+        "Not-Aus fuer alle sechs Tracks. Die Taktuhr laeuft weiter, das "
+        "Wiedereinschalten haengt also nicht an der Dauer der Pause.",
+    "/net/sequencer/bpm":
+        "Gemeinsames Tempo aller Tracks. Ein Wechsel aendert die Rate, nicht "
+        "die Position - es gibt keinen Sprung.",
+}
+
+
+def build_sequencer(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
+    """Struktur des Sequencer-Panels, oder None.
+
+    None heisst: dieser imPulse-Stand kennt den Sequencer nicht (aeltere
+    remoteSettings.txt). Dann faellt das UI stillschweigend auf das generische
+    Rendering zurueck, statt eine leere Sektion zu zeigen.
+    """
+    bpm = by_address.get(SEQUENCER_PREFIX + "bpm")
+    enabled = by_address.get(SEQUENCER_PREFIX + "enabled")
+    if bpm is None or enabled is None:
+        return None
+    tracks: List[Dict[str, Any]] = []
+    for i in range(SEQUENCER_TRACK_COUNT):
+        base = "%strack%d/" % (SEQUENCER_PREFIX, i)
+        track_enabled = by_address.get(base + "enabled")
+        if track_enabled is None:
+            continue
+        fields = {}
+        for name in SEQUENCER_TRACK_FIELDS:
+            param = by_address.get(base + name)
+            if param is not None:
+                fields[name] = param.as_dict()
+        tracks.append({
+            "index": i,
+            "enabled": track_enabled.as_dict(),
+            "fields": fields,
+        })
+    if not tracks:
+        return None
+    return {
+        "bpm": bpm.as_dict(),
+        "enabled": enabled.as_dict(),
+        "tracks": tracks,
+        "noteValues": [{"value": v, "symbol": s, "name": n}
+                       for v, s, n in NOTE_VALUES],
+    }
+
+
+def build_speed_classes(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
+    """Struktur der Speed-Klassen-Sektion, oder None wenn unbekannt."""
+    enabled = by_address.get("/net/impulse/speedQuantize/enabled")
+    if enabled is None:
+        return None
+    weights: List[Dict[str, Any]] = []
+    for suffix, label in SPEED_CLASSES:
+        param = by_address.get(SPEED_WEIGHT_PREFIX + suffix)
+        if param is None:
+            continue
+        entry = param.as_dict()
+        entry["label"] = label
+        weights.append(entry)
+    if not weights:
+        return None
+    jitter = by_address.get("/net/impulse/speedQuantize/jitter")
+    return {
+        "enabled": enabled.as_dict(),
+        "jitter": jitter.as_dict() if jitter is not None else None,
+        "weights": weights,
+    }
+
+
+def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
+                        speed: Optional[Dict[str, Any]]) -> Set[str]:
+    """Adressen, die eine Spezial-Sektion selbst rendert."""
+    taken: Set[str] = set()
+    if sequencer:
+        taken.add(sequencer["bpm"]["address"])
+        taken.add(sequencer["enabled"]["address"])
+        for track in sequencer["tracks"]:
+            taken.add(track["enabled"]["address"])
+            for field_entry in track["fields"].values():
+                taken.add(field_entry["address"])
+    if speed:
+        taken.add(speed["enabled"]["address"])
+        if speed.get("jitter"):
+            taken.add(speed["jitter"]["address"])
+        for weight in speed["weights"]:
+            taken.add(weight["address"])
+    return taken
+
+
+# ---------------------------------------------------------------------------
+# SuperCollider-Sound-Parameter
+#
+# Sie laufen NICHT durch remoteSettings.txt -- das ist die Parameterliste von
+# imPulse. SuperCollider hat seine eigene Registry (~registerParam in
+# supercollider/klangnetz_bells.scd) und einen eigenen Port.
+#
+# Diese Tabelle ist eine HANDGEPFLEGTE Kopie davon. Sie kann veralten: wer in
+# der .scd einen Parameter ergaenzt, ergaenzt ihn auch hier. Die Alternative
+# waere, die .scd zu parsen -- dafuer muesste der Server sclang-Syntax lesen,
+# und ein Parser, der bei der naechsten Umformatierung still das Falsche
+# liefert, ist schlechter als eine Liste, deren Pflege sichtbar ist.
+# test_webui.py prueft wenigstens, dass jeder Name hier in der .scd vorkommt.
+#
+# Es gibt KEINEN Rueckkanal von SuperCollider: die Werte hier sind die
+# Defaults aus der .scd, nicht der Live-Zustand. Laeuft sclang nicht, geht die
+# Nachricht ins Leere - fire-and-forget, wie /sc/preset/load.
+# ---------------------------------------------------------------------------
+
+SC_OSC_PORT = 8002
+SC_PARAM_PREFIX = "/klangnetz/param/"
+SC_PARAMS: List[Dict[str, Any]] = [
+    {"name": "masterVolume", "default": 1.0, "min": 0.0, "max": 1.5,
+     "group": "Master", "description": "Gain nach dem Panning, vor dem Limiter."},
+    {"name": "reverbMix", "default": 0.35, "min": 0.0, "max": 1.0,
+     "group": "Master", "description": "Trocken/nass des Halls hinter dem Panning."},
+    {"name": "reverbRoom", "default": 0.5, "min": 0.0, "max": 1.0,
+     "group": "Master", "description": "Gefuehlte Raumgroesse."},
+    {"name": "reverbDamp", "default": 0.5, "min": 0.0, "max": 1.0,
+     "group": "Master", "description": "Hoehendaempfung im Hallschweif."},
+    {"name": "panSharpness", "default": 1.0, "min": 0.1, "max": 8.0,
+     "group": "Master", "description": "Schaerfe der Ortung. 1 = Referenz."},
+    {"name": "brightness", "default": 1.0, "min": 0.0, "max": 2.0,
+     "group": "Glocke", "description": "Amp der oberen vier Teiltoene."},
+    {"name": "detune", "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Glocke", "description": "1 = metallisch, 0 = rein harmonisch."},
+    {"name": "regionBiasAmount", "default": 0.6, "min": 0.0, "max": 1.0,
+     "group": "Glocke", "description":
+     "Klangbias nach Netzregion (vier Quadranten). 0 = aus."},
+    {"name": "droneLpfMult", "default": 6.0, "min": 1.0, "max": 12.0,
+     "group": "Travel-Sound", "description": "Filter der Tonschicht der Drohne."},
+    {"name": "travelMix", "default": 0.0, "min": 0.0, "max": 1.0,
+     "group": "Travel-Sound", "description":
+     "Crossfade Tondrohne zu Windband. 0 = kein Travel-Sound."},
+    {"name": "travelRq", "default": 0.35, "min": 0.02, "max": 1.0,
+     "group": "Travel-Sound", "description": "Bandbreite. Klein = pfeifend."},
+    {"name": "travelAmpScale", "default": 1.0, "min": 0.0, "max": 2.0,
+     "group": "Travel-Sound", "description": "Pegel nur der Rauschschicht."},
+    {"name": "travelFreqBase", "default": 400.0, "min": 50.0, "max": 4000.0,
+     "group": "Travel-Sound", "description": "Frequenz bei der 1x-Speed-Klasse."},
+    {"name": "travelSpeedRef", "default": 16.0, "min": 1.0, "max": 1500.0,
+     "group": "Travel-Sound", "description": "Speed in LEDs/s, die als 1x gilt."},
+    {"name": "travelOctavesPerStep", "default": 1.0, "min": 0.25, "max": 3.0,
+     "group": "Travel-Sound", "description":
+     "Oktaven je Verdopplung der Speed. Groesser = Klassen deutlicher getrennt."},
+    {"name": "travelSnap", "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Travel-Sound", "description":
+     "Rastet die Frequenz auf die Speed-Klasse, damit Jitter sie nicht verschmiert."},
+    {"name": "travelFreqMin", "default": 80.0, "min": 20.0, "max": 2000.0,
+     "group": "Travel-Sound", "description": "Untere harte Grenze."},
+    {"name": "travelFreqMax", "default": 6000.0, "min": 200.0, "max": 16000.0,
+     "group": "Travel-Sound", "description": "Obere harte Grenze."},
+]
+
+
+def sc_param_groups() -> List[Dict[str, Any]]:
+    """Die SC-Parameter nach ihrer group gebuendelt, Reihenfolge wie in SC_PARAMS."""
+    order: List[str] = []
+    by_group: Dict[str, List[Dict[str, Any]]] = {}
+    for entry in SC_PARAMS:
+        group = entry["group"]
+        if group not in by_group:
+            by_group[group] = []
+            order.append(group)
+        item = dict(entry)
+        item["address"] = SC_PARAM_PREFIX + entry["name"]
+        by_group[group].append(item)
+    return [{"title": g, "params": by_group[g]} for g in order]
 
 # Schrittweiten-Leiter fuer Float-Regler (grober Wert zuerst).
 STEP_LADDER = [1.0, 0.5, 0.1, 0.05, 0.01, 0.005, 0.001, 0.0005, 0.0001]
@@ -358,6 +588,10 @@ class Parameter:
             # 0/1-Ints bekommen einen Schalter statt eines Zweipunkt-Reglers
             "widget": "toggle" if (self.is_int and self.minimum == 0
                                    and self.maximum == 1) else "slider",
+            # Kurzerklaerung, wo die Adresse allein nicht reicht. None fuer
+            # alle anderen -- das UI zeigt dann nichts statt einer leeren
+            # Zeile.
+            "help": DESCRIPTIONS.get(self.address),
         }
 
 
@@ -683,10 +917,24 @@ class ParameterStore:
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
-            groups = build_groups(self.parameters)
+            # Erst die Spezial-Sektionen bauen, dann deren Adressen aus dem
+            # generischen Rendering nehmen: sonst stuende jeder
+            # Sequencer-Regler zweimal auf der Seite, einmal im Panel und
+            # einmal als generischer Schieber.
+            sequencer = build_sequencer(self.by_address)
+            speed = build_speed_classes(self.by_address)
+            taken = sequencer_addresses(sequencer, speed)
+            generic = [p for p in self.parameters if p.address not in taken]
+            groups = build_groups(generic)
             return {
                 "groups": groups,
                 "values": dict(self.values),
+                "sequencer": sequencer,
+                "speedClasses": speed,
+                "scParams": {
+                    "port": SC_OSC_PORT,
+                    "groups": sc_param_groups(),
+                },
                 "settings": {
                     "path": self.path,
                     "mtime": self.mtime,
@@ -786,9 +1034,15 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
     store = ParameterStore(path=settings_path)
     store.refresh(force=True)
     sender = OscSender(osc_host, osc_port)
+    # Zweiter Sender fuer die Sound-Parameter: die /klangnetz/param/*-Adressen
+    # gehoeren zur SC-Registry und hoeren auf 8002, nicht auf 8001. Derselbe
+    # Host -- SuperCollider laeuft auf derselben Maschine wie imPulse und
+    # dieses UI.
+    sc_sender = OscSender(osc_host, SC_OSC_PORT)
 
     app.config["IMPULSE_STORE"] = store
     app.config["IMPULSE_SENDER"] = sender
+    app.config["IMPULSE_SC_SENDER"] = sc_sender
 
     def apply_value(param: Parameter, value: float) -> Applied:
         coerced = param.coerce(value)
@@ -832,6 +1086,31 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         snapshot = store.snapshot()
         snapshot["osc"] = {"host": osc_host, "port": osc_port}
         return jsonify(snapshot)
+
+    @app.route("/api/sc", methods=["POST"])
+    def api_sc():
+        """Einen Sound-Parameter an SuperCollider schicken (Port 8002).
+
+        Eigener Sender, eigener Port, eigene Adresstabelle: das hier gehoert
+        nicht zu imPulses remoteSettings.txt. Fire-and-forget -- es gibt
+        keinen Rueckkanal, laeuft sclang nicht, merkt das UI es nicht.
+        """
+        body = request.get_json(silent=True) or {}
+        name = str(body.get("name", ""))
+        entry = next((p for p in SC_PARAMS if p["name"] == name), None)
+        if entry is None:
+            return jsonify({"ok": False,
+                            "error": "unbekannter SC-Parameter: %r" % name}), 400
+        try:
+            value = float(body.get("value"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Wert ist keine Zahl"}), 400
+        if value != value:  # NaN
+            return jsonify({"ok": False, "error": "Wert ist keine Zahl"}), 400
+        value = max(entry["min"], min(entry["max"], value))
+        address = SC_PARAM_PREFIX + name
+        sc_sender.send(address, value)
+        return jsonify({"ok": True, "address": address, "value": value})
 
     @app.route("/api/set", methods=["POST"])
     def api_set():

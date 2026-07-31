@@ -613,5 +613,165 @@ class RealSettingsFileTest(unittest.TestCase):
             self.assertLessEqual(value, max(param.minimum, param.maximum))
 
 
+class SequencerSectionTest(unittest.TestCase):
+    """build_sequencer/build_speed_classes und die Adress-Entnahme.
+
+    Die Parameterliste wird hier selbst gebaut statt aus einer Datei gelesen -
+    remoteSettings.txt liegt nicht im Repo und haengt am zuletzt gestarteten
+    imPulse.
+    """
+
+    def _params(self):
+        lines = [
+            "float\t/net/sequencer/bpm\tx\t60\t20\t200",
+            "int\t/net/sequencer/enabled\tx\t0\t0\t1",
+        ]
+        for i in range(server.SEQUENCER_TRACK_COUNT):
+            base = "/net/sequencer/track%d/" % i
+            lines += [
+                "int\t%senabled\tx\t0\t0\t1" % base,
+                "int\t%snoteValue\tx\t4\t1\t16" % base,
+                "int\t%srepeatCount\tx\t3\t1\t8" % base,
+                "float\t%senergy\tx\t0.6\t0\t1" % base,
+                "float\t%sswingJitter\tx\t0\t0\t1" % base,
+                "int\t%soriginStripeOverride\tx\t-1\t-1\t29" % base,
+            ]
+        lines += [
+            "int\t/net/impulse/speedQuantize/enabled\tx\t0\t0\t1",
+            "float\t/net/impulse/speedQuantize/jitter\tx\t0\t0\t1",
+        ]
+        for suffix, _label in server.SPEED_CLASSES:
+            lines.append("float\t%s%s\tx\t0\t0\t100"
+                         % (server.SPEED_WEIGHT_PREFIX, suffix))
+        return {p.address: p for p in parse_settings("\n".join(lines))}
+
+    def test_sequencer_has_all_six_tracks(self):
+        seq = server.build_sequencer(self._params())
+        self.assertIsNotNone(seq)
+        self.assertEqual(len(seq["tracks"]), server.SEQUENCER_TRACK_COUNT)
+        self.assertEqual([t["index"] for t in seq["tracks"]],
+                         list(range(server.SEQUENCER_TRACK_COUNT)))
+
+    def test_every_track_carries_all_its_fields(self):
+        seq = server.build_sequencer(self._params())
+        for track in seq["tracks"]:
+            self.assertEqual(sorted(track["fields"]),
+                             sorted(server.SEQUENCER_TRACK_FIELDS),
+                             "Track %d" % track["index"])
+
+    def test_note_values_carry_symbol_and_name(self):
+        seq = server.build_sequencer(self._params())
+        self.assertEqual([n["value"] for n in seq["noteValues"]],
+                         [1, 2, 4, 8, 16])
+        for note in seq["noteValues"]:
+            # Das Symbol allein reicht nicht: nicht jede Windows-Schrift hat
+            # U+1D15D..U+1D161, der Name ist der Rueckfall.
+            self.assertTrue(note["symbol"])
+            self.assertTrue(note["name"])
+
+    def test_missing_sequencer_yields_none_not_an_empty_panel(self):
+        # Aelterer imPulse-Stand: das UI soll auf das generische Rendering
+        # zurueckfallen, nicht eine leere Sektion zeigen.
+        by_address = {p.address: p for p in
+                      parse_settings("float\t/net/impulse/speed\tx\t16\t1\t1500")}
+        self.assertIsNone(server.build_sequencer(by_address))
+        self.assertIsNone(server.build_speed_classes(by_address))
+
+    def test_speed_classes_keep_the_java_order(self):
+        speed = server.build_speed_classes(self._params())
+        self.assertEqual([w["label"] for w in speed["weights"]],
+                         [label for _s, label in server.SPEED_CLASSES])
+
+    def test_special_addresses_are_removed_from_generic_groups(self):
+        by_address = self._params()
+        seq = server.build_sequencer(by_address)
+        speed = server.build_speed_classes(by_address)
+        taken = server.sequencer_addresses(seq, speed)
+        self.assertIn("/net/sequencer/bpm", taken)
+        self.assertIn("/net/sequencer/track5/energy", taken)
+        self.assertIn("/net/impulse/speedQuantize/weight/8x", taken)
+        # bpm + enabled, sechs Tracks a sechs Felder, quantize enabled+jitter,
+        # ein Gewicht je Klasse. Aus den Konstanten gerechnet, nicht als
+        # Literal - die Trackzahl steht im Server.
+        expected = (2
+                    + server.SEQUENCER_TRACK_COUNT
+                    * (1 + len(server.SEQUENCER_TRACK_FIELDS))
+                    + 2 + len(server.SPEED_CLASSES))
+        self.assertEqual(len(taken), expected)
+
+    def test_snapshot_does_not_render_a_parameter_twice(self):
+        """Der eigentliche Zweck der Entnahme: kein doppeltes Bedienelement."""
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, "remoteSettings.txt")
+        params = self._params()
+        with open(path, "w", encoding="utf-8") as handle:
+            for address, param in params.items():
+                handle.write("%s\t%s\tx\t%g\t%g\t%g\n"
+                             % (param.type, address, param.value,
+                                param.minimum, param.maximum))
+        store = ParameterStore(path=path)
+        store.refresh(force=True)
+        snapshot = store.snapshot()
+        rendered = set()
+        for group in snapshot["groups"]:
+            for control in group["controls"]:
+                if control.get("address"):
+                    rendered.add(control["address"])
+        overlap = rendered & server.sequencer_addresses(
+            snapshot["sequencer"], snapshot["speedClasses"])
+        self.assertEqual(overlap, set())
+        self.assertIsNotNone(snapshot["sequencer"])
+        self.assertIsNotNone(snapshot["speedClasses"])
+
+
+class ScParamTest(unittest.TestCase):
+    """Die handgepflegte Spiegelung der SC-Registry."""
+
+    def test_every_default_is_inside_its_range(self):
+        for entry in server.SC_PARAMS:
+            self.assertGreaterEqual(entry["default"], entry["min"], entry["name"])
+            self.assertLessEqual(entry["default"], entry["max"], entry["name"])
+
+    def test_names_are_unique(self):
+        names = [p["name"] for p in server.SC_PARAMS]
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_groups_keep_insertion_order(self):
+        groups = server.sc_param_groups()
+        self.assertEqual([g["title"] for g in groups],
+                         ["Master", "Glocke", "Travel-Sound"])
+        for group in groups:
+            for param in group["params"]:
+                self.assertTrue(param["address"].startswith("/klangnetz/param/"))
+
+    def test_table_has_not_drifted_from_the_scd(self):
+        """Der haeufigste Fehler waere eine Tabelle, die von der .scd abdriftet."""
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "supercollider", "klangnetz_bells.scd")
+        if not os.path.exists(path):
+            self.skipTest("klangnetz_bells.scd nicht gefunden")
+        with open(path, encoding="utf-8") as handle:
+            scd = handle.read()
+        for entry in server.SC_PARAMS:
+            self.assertIn("~registerParam.(\\%s" % entry["name"], scd,
+                          "%s steht in SC_PARAMS, aber nicht in der .scd"
+                          % entry["name"])
+
+    def test_scd_has_no_parameter_the_table_is_missing(self):
+        """Die Gegenrichtung: ein neuer .scd-Parameter faellt sonst still weg."""
+        import re
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "supercollider", "klangnetz_bells.scd")
+        if not os.path.exists(path):
+            self.skipTest("klangnetz_bells.scd nicht gefunden")
+        with open(path, encoding="utf-8") as handle:
+            scd = handle.read()
+        in_scd = set(re.findall(r"~registerParam\.\(\\(\w+)", scd))
+        in_table = {p["name"] for p in server.SC_PARAMS}
+        self.assertEqual(in_scd - in_table, set(),
+                         "in der .scd registriert, fehlt aber in SC_PARAMS")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
