@@ -73,7 +73,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`, `SpeedQuantizer`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
@@ -89,6 +89,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `SplitVarianceTest` — die Jitter-Formel der Split-Kinder: neutraler Auslieferungswert, Symmetrie um den Ausgangswert, die Untergrenze gegen unsterbliche Impulse, Vorzeichenerhalt bei rückwärts laufenden Kindern
 - `MusicalClockTest` — die akkumulierende Beat-Phase: kein Sprung bei BPM-Wechsel, Notenwert-Intervalle, entartete BPM, Rücksprung der Wanduhr
 - `OriginSequencerTest` — Feuertakt je Notenwert, `repeatCount` hält den Ursprung, `originStripeOverride`, kein Sofort-Feuern beim Wiedereinschalten, kein Nachholen nach einem Hänger, Rasterung der Notenwerte
+- `SpeedQuantizerTest` — die gewichtete Auswahl der Speed-Klasse: die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, Normalisierung nicht-prozentualer Gewichte, entartete Gewichte (alle 0, negativ, NaN)
 - `PresetStoreTest` — Format, Datei, Snapshot und Anwenden eines Presets, inklusive der ausgeschlossenen und still übergangenen Adressen
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
 
@@ -148,6 +149,50 @@ Zwei Dinge, die man beim Ändern kennen muss:
 - **Die Liste kommt vom Dateisystem, nicht per OSC.** `server.py` läuft auf derselben Maschine wie imPulse und liest `data/presets/` direkt (`--presets`, Vorgabe `presets/` neben `--settings`). Ein OSC-Rückkanal wäre neu zu bauen — die einzige Ausgangsadresse des Sketches ist 8002. Geschrieben wird der Ordner weiterhin ausschliesslich von imPulse; deshalb gibt es im UI auch kein Löschen.
 - **Nach dem Laden zieht der Server die Regleranzeige nach**, indem er dieselbe Preset-Datei mit `parse_settings()` liest — das geht, weil Preset- und `remoteSettings.txt`-Format identisch sind. Die Werte gehen in der HTTP-Antwort zurück und werden im Browser *still* gesetzt (kein zweites OSC); geklemmt wird auf die Range aus `remoteSettings.txt`, nicht auf die aus der Preset-Datei — dieselbe Regel wie `PresetStore.applyPreset()`. Adressen, die der Dump nicht kennt, und Werte ausserhalb der verengten UI-Range (`UI_RANGE_OVERRIDES`) nennt die Statuszeile, statt sie zu verschlucken.
 - **Speichern wartet auf die Datei.** `/preset/save` ist asynchron (imPulse schreibt erst im nächsten `draw()`), also pollt der Endpoint bis zu 1 s auf eine geänderte `mtime` und antwortet sonst mit 504 statt Erfolg zu behaupten — der häufigste Fehlerfall ist „Web-UI läuft, imPulse nicht". `valid_preset_name()` in `server.py` und die Regex im JS spiegeln `PresetStore.isValidName()`; Autorität bleibt Java, dort geht es um Pfad-Traversal.
+
+**Drei Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
+flache Liste aus 38 Sequencer-Reglern unbedienbar wäre. Der Server liefert
+dafür Struktur statt einer Reglerliste (`build_sequencer`,
+`build_speed_classes`, `sc_param_groups` in `server.py`), das Aussehen macht
+`app.js`:
+
+- **Sequencer** — BPM als große Ziffer, eigener Not-Aus, sechs Track-Karten
+  mit je eigener Spurfarbe; Notenwerte als segmentierte Leiste mit **Symbol
+  und Kürzel** (nicht jede Windows-Schrift hat U+1D15D..U+1D161, ein Symbol
+  allein wäre dort ein leeres Kästchen).
+- **Speed-Klassen** — die fünf Gewichte plus ein Verteilungsbalken, der sie
+  normiert zeigt; die Gewichte selbst summieren sich bewusst nicht auf 100.
+- **Sound (SuperCollider)** — die `/klangnetz/param/*`-Adressen, die
+  **nicht** durch `remoteSettings.txt` laufen.
+
+Vier Dinge, die man beim Ändern kennen muss:
+
+- **`sequencer_addresses()` nimmt die Adressen der Spezial-Sektionen aus dem
+  generischen Rendering.** Ohne das stünde jeder Sequencer-Regler zweimal auf
+  der Seite — zwei Bedienelemente für denselben Parameter, die auseinander
+  laufen können. `test_webui.py` prüft das an einem echten Snapshot.
+- **`SC_PARAMS` ist eine handgepflegte Kopie der `~registerParam`-Registry
+  aus der `.scd`** und geht über einen **zweiten** `OscSender` auf Port
+  **8002**. Zwei Tests vergleichen die Tabelle in beide Richtungen mit der
+  Datei, damit sie nicht abdriftet. Es gibt **keinen Rückkanal**: die
+  angezeigten Werte sind die `.scd`-Defaults, nicht der Live-Zustand — die
+  Sektion sagt das selbst im Warnhinweis.
+- **Die Rasteranzeige je Track ist die Uhr des Browsers**, gerechnet aus BPM
+  und Notenwert, **nicht** eine Rückmeldung aus dem Sketch: dafür gäbe es
+  keinen Kanal, imPulse sendet nur an 8002 und dort hört SuperCollider. Sie
+  heißt deshalb im UI „Raster" und behauptet nirgends „feuert jetzt". Ihre
+  Phase kann gegenüber dem Sketch beliebig verschoben sein; was sie zeigt,
+  ist der *Abstand* — welcher Track dicht und welcher dünn läuft.
+- **Der Verteilungsbalken hängt an der `set()`-Methode der Regler, nicht am
+  `input`-Event.** Das Laden eines Presets ruft `control.set(wert, true)` und
+  löst bewusst kein `input` aus; an einem reinen Event-Listener bliebe der
+  Balken danach auf der alten Verteilung stehen.
+
+Für die UI-Schicht selbst gibt es **kein** Testgerüst im Repo — `webui/` soll
+ohne Node/npm auskommen, und ein jsdom-Test würde genau das einführen. Geprüft
+ist die Server-Seite (`webui/test_webui.py`, ohne Fremdabhängigkeiten); das
+Rendering wurde einmalig headless mit jsdom gegengeprüft, ohne den Test
+aufzunehmen.
 
 Start (Details, Windows-Scheduled-Task `WebUiRun` und Firewall-Hinweise in `webui/README.md`):
 
@@ -241,6 +286,40 @@ bleibt im Effekt, der die Objekte, die Geschwindigkeit und die Stripe-Länge
 kennt. Zufall und Beat-Position werden hereingereicht (`RandomSource`), damit
 die Klasse ohne Sketch-Laufzeit prüfbar ist; dasselbe Muster wie
 `ImpulseOscThrottle` und `PresetScheduler`.
+
+**Quantisierte Spawn-Geschwindigkeit** (`SpeedQuantizer.java`, angewandt in
+`spawnSpeed()`): nicht nur *wann* gespawnt wird ist rhythmisch, sondern auch
+*wie schnell* der einzelne Impuls reist. Fünf Klassen im Verhältnis
+1:2:4:8:16 — **0.5x, 1x, 2x, 4x, 8x** — dieselben Abstände wie die Notenwerte
+des Sequencers, nur auf der Geschwindigkeit. Gezogen wird je Spawn nach
+Gewichten, sodass ein 8x-Ausreißer selten und dadurch besonders ist.
+
+- `/net/impulse/speedQuantize/enabled` (int 0/1, Default **0**) — bei 0
+  bekommt jeder Spawn exakt `impulseSpeed` wie bisher, ohne Ziehung
+- `/net/impulse/speedQuantize/weight/{0x5,1x,2x,4x,8x}` (float 0..100,
+  Defaults 0/85/10/4/1) — die Summe muss **nicht** 100 sein, normalisiert wird
+  in `SpeedQuantizer.pick()`
+- `/net/impulse/speedQuantize/jitter` (float 0..1, Default **0**) — Swing auf
+  der gezogenen Klasse, gleiche Formel wie überall (`SplitVariance.jitter`)
+
+Vier Dinge, die man beim Ändern kennen muss:
+
+- **Referenz der 1x-Klasse ist `/net/impulse/speed` selbst**, kein eigener
+  Parameter. Ein zweiter Referenzregler daneben hieße zwei Zahlen, die beide
+  „die Geschwindigkeit" heißen, und die Zeitbasis-Kopplung (`lifetime`,
+  `nodeDeadTime`, `randomSpawn/interval` ziehen im Web-UI an `impulseSpeed`
+  mit) hätte einen zweiten, unbeteiligten Bezugspunkt.
+- **`spawnSpeed()` ist der einzige Ort, an dem eine Spawn-Geschwindigkeit
+  entsteht.** Alle fünf Spawn-Pfade gehen hindurch: `/tube/trigger`,
+  `/net/activateStripe`, `/net/activateNode`, `spawnRandomImpulses()`,
+  `tickSequencer()`. Ein sechster Pfad, der `impulseSpeed` direkt liest, wäre
+  ein Impuls, den die Klangseite falsch einordnet.
+- **Split-Kinder ziehen nicht neu.** Sie erben die schon vervielfachte
+  Geschwindigkeit ihres Elternimpulses und bekommen obendrauf
+  `splitSpeedJitter` — ein 4x-Impuls bleibt beim Aufspalten ein 4x-Impuls.
+- **Gezogen wird je Impuls, nicht je Ereignis** — außer bei
+  `/net/activateNode`, wo die zwei Richtungen desselben Anstoßes
+  zusammengehören und deshalb eine gemeinsame Ziehung teilen.
 
 **Offen, bewusst nicht gebaut:** eine Selbstregulation, die die Spawn-Rate an
 die aktuelle Netzauslastung koppelt (viele aktive Impulse → Sequencer- und
@@ -514,7 +593,8 @@ nicht; die vorhandenen Äquivalente sind `brightness` und `detune`.
 
 **Travel-Sound** (`/klangnetz/param/travelMix`, Default **0**, plus
 `travelRq`, `travelAmpScale`, `travelFreqMin`, `travelFreqMax`,
-`travelSpeedRef`): eine Wind-/Rauschschicht **innerhalb** von `\impulseDrone`,
+`travelFreqBase`, `travelSpeedRef`, `travelOctavesPerStep`, `travelSnap`,
+`travelFreqMin`, `travelFreqMax`): eine Wind-/Rauschschicht **innerhalb** von `\impulseDrone`,
 kein zweiter Synth je Impuls. `\impulseDrone` ist bereits eine Stimme pro
 Impuls-ID mit Position, Hüllkurve, `~droneTimeout` und `~droneLimit`; ein
 zweiter Synth bräuchte ein zweites Dictionary, einen zweiten Reaper und ein
@@ -534,6 +614,31 @@ zweiter, kleinerer Audio-Deckel wäre auf der Java-Seite wirkungslos (die
 Klangseite kann eine Überzahl selbst ignorieren), ein größerer unerfüllbar
 ohne mehr zu senden. Der Deckel, der wirklich gebraucht wird, sitzt dort, wo
 die Rechenlast entsteht, und existiert schon: `~droneLimit`.
+
+**Die Speed→Frequenz-Abbildung ist oktavbasiert, nicht linear** — das ist es,
+was die Speed-Klassen hörbar auseinanderhält:
+
+```
+octaves = log2(speed / travelSpeedRef)
+freq    = travelFreqBase * 2^(octaves * travelOctavesPerStep)
+```
+
+Mit den Defaults (Basis 400 Hz bei Speed 16) ergibt das
+**200 / 400 / 800 / 1600 / 3200 Hz** für 0.5x / 1x / 2x / 4x / 8x. Linear
+gerechnet lägen 1x und 2x dicht beieinander — ein sanfter Gradient, an dem
+sich keine Klasse zuordnen lässt. Genau das war die erste, verworfene Fassung.
+
+`travelSnap` (Default **1**) rundet den Oktavabstand vor der Umrechnung auf
+eine ganze Zahl, damit jeder Impuls einer Klasse auf **exakt derselben**
+Tonhöhe zischt; ohne die Rasterung hinge die Zuordenbarkeit daran, wie hoch
+`speedQuantize/jitter` gerade steht. Die Grenze davon: die Rundung greift auf
+halbe Oktaven, ein Jitter über etwa **0,29** lässt einzelne Impulse in die
+Nachbarklasse rutschen. Das ist kein Fehler — der Impuls reist dann wirklich
+so schnell —, aber wer maximale Zuordenbarkeit will, bleibt darunter.
+
+Hörbar ist die Klasse nur über die **Wind**schicht: die Tonschicht der Drohne
+holt ihre Tonhöhe weiterhin aus der Impuls-ID (`~droneFreq`), nicht aus der
+Geschwindigkeit. Bei `travelMix = 0` gibt es also keinen Speed-Klang.
 
 Der Klangbias der **Herkunfts**-Region wird einmal beim Anlegen des Synths aus
 der **ersten** gemeldeten Position gerechnet. Die kommt aus dem Takt direkt
