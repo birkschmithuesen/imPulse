@@ -230,6 +230,25 @@
 // ohne Fehlermeldung.
 s.options.numOutputBusChannels = 4;
 
+// GEMESSEN 2026-07-31 (Show-Rechner, Birk vor Ort, per Hardware-Kanaltest
+// ohne Ambisonics-Encoder/Decoder isoliert): ohne explizite Device-Wahl
+// bootet scsynth per Windows-Default-Geraeteauswahl auf den MME-Treiber
+// ("MME : Line (ZOOM AMS-24 Audio)"). Symptom: Server bootet fehlerfrei,
+// alle vier Kanaele erscheinen im Boot-Log, Glockentoene sind klar
+// hoerbar — aber alle vier Testpositionen (vorn/rechts/hinten/links)
+// kamen aus nur ZWEI Boxen (Kanal 0/2 -> eine Box, Kanal 1/3 -> die
+// andere). Root cause: MME dupliziert/faltet die 4 Kanaele auf ein
+// 2-Kanal-Ausgabegeraet, statt echte 4-Kanal-Hardware anzusprechen. Nach
+// Umstellung auf den ASIO-Treiber (zweiter Eintrag im selben Boot-Log)
+// wurden alle vier Kanaele eindeutig unterschiedlichen Boxen zugeordnet:
+//   "ASIO : ZOOM AMS-24 ASIO Driver   (device #18 with 2 ins 4 outs)"
+// Deshalb hier fest auf ASIO verdrahtet statt der Windows-Default-Wahl zu
+// vertrauen. Bricht das Booten mit "device not found", exakten Namen aus
+// dem eigenen Boot-Log ("Device options:") neu eintragen — der Name ist
+// vom genauen Windows-Treiber-String abhaengig, kann bei Interface-
+// Wechsel oder Treiber-Update abweichen.
+s.options.device = "ASIO : ZOOM AMS-24 ASIO Driver";
+
 // Halbe Diagonale der Grundfläche 14 × 8 m. Ab diesem Radius ist ein Klang
 // vollständig gerichtet.
 ~maxRadiusM = 8.062;
