@@ -303,7 +303,7 @@ s.options.device = "ASIO : ZOOM AMS-24 ASIO Driver";
 // Prüfen mit ~testAzimuth.() und ~testSweep.(). Nach dem Ändern MUSS die
 // Datei komplett neu ausgewertet werden, aus demselben Grund wie bei
 // ~azimuthSign: der Wert steht fest im SynthDef-Graphen.
-~azimuthOffset = 0;
+~azimuthOffset = -0.25;
 
 // GEMESSEN 2026-07-30 (scsynth NRT, SC 3.11.2, Entwicklungsrechner):
 // das orientation-Argument von DecodeB2 ist WIRKUNGSLOS — der Ausgang ist
@@ -556,7 +556,7 @@ s.waitForBoot({
     // bewusst dichten/lauten Moment), kein Fehler.
     SynthDef(\masterReverb, { |in = 0, out = 0,
             masterVolume = 1.0, reverbMix = 0.15, reverbRoom = 0.5, reverbDamp = 0.5|
-        var dry, wet, sig;
+        var dry, wet, sig, permuted;
         dry = In.ar(in, 4);
         // FreeVerb ist ein Standard-SC-Core-UGen (kein Quark nötig).
         // .ar mit einem 4-Kanal-Signal expandiert automatisch zu vier
@@ -589,7 +589,31 @@ s.waitForBoot({
         // verzögert damit den GESAMTEN Ausgang um 10 ms — gleichmässig über
         // alle vier Kanäle, das Klangbild bleibt also unberührt.
         sig = Limiter.ar(sig, 0.95, 0.01);
-        Out.ar(out, sig);
+        // GEMESSEN 2026-07-31 (Show-Rechner, Birk vor Ort): die Hardware-
+        // Verkabelung des ZOOM AMS-24 ist KEINE einfache Rotation der
+        // Decoder-Kanal-Reihenfolge, sondern eine echte Vertauschung.
+        // Gemessene Kabel-Zuordnung (per \channelTest auf jedem
+        // Hardware-Kanal einzeln, Birk hat pro Kanal die klingende Box
+        // benannt): hw0=rechts, hw1=links, hw2=hinten, hw3=vorn.
+        // Bei ~azimuthOffset = -0.25 liefert der Decoder seine vier
+        // logischen Kanaele in der Reihenfolge D0=vorn, D1=rechts,
+        // D2=hinten, D3=links (siehe ~azimuthOffset-Kommentar oben, per
+        // NRT-Sweep auf dem Hermes-vServer bestaetigt). Diese zwei
+        // Zuordnungen zusammen ergeben eine reine Kanal-Permutation vor
+        // dem Hardware-Output — kein weiterer Dreh-Offset kann das
+        // abbilden, weil hw0/hw1 und D0/D1 in UNTERSCHIEDLICHER
+        // Reihenfolge um den Kreis laufen:
+        //   hw0 (rechts) <- D1
+        //   hw1 (links)  <- D3
+        //   hw2 (hinten) <- D2
+        //   hw3 (vorn)   <- D0
+        // AUF EINEM ANDEREN INTERFACE/BEI ANDERER VERKABELUNG NEU MESSEN
+        // (siehe klangnetz-remote-control Skill, Abschnitt "Schicht 0" für
+        // den Kanaltest-Workflow) — diese Permutation ist an das ZOOM
+        // AMS-24 und seine aktuelle Verkabelung gebunden, keine
+        // allgemeine Ambisonics-Eigenschaft.
+        permuted = [sig[1], sig[3], sig[2], sig[0]];
+        Out.ar(out, permuted);
     }).add;
 
     // ---- SynthDef: Messhilfe -----------------------------------------
