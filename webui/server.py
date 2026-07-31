@@ -100,6 +100,13 @@ GROUP_ORDER = [
     "net/impulse/randomize",
     "net/impulse/color",
     "net/randomSpawn",
+    "net/sequencer",
+    "net/sequencer/track0",
+    "net/sequencer/track1",
+    "net/sequencer/track2",
+    "net/sequencer/track3",
+    "net/sequencer/track4",
+    "net/sequencer/track5",
     "net",
     "nodes",
     "nodes/radius",
@@ -123,6 +130,15 @@ SPLIT_GROUP_PREFIXES: List[Tuple[str, str]] = [
     ("/net/impulse/lifetime/randomize/", "net/impulse/randomize"),
     ("/net/impulse/color/", "net/impulse/color"),
     ("/net/impulse/fadeOut/", "net/impulse/color"),
+    # Je Sequencer-Track eine eigene Sektion. Ohne diese sechs Eintraege
+    # schneidet die generische Praefix-Regel nach zwei Segmenten ab und alle
+    # 36 Track-Regler landen unsortiert in einer einzigen Gruppe.
+    ("/net/sequencer/track0/", "net/sequencer/track0"),
+    ("/net/sequencer/track1/", "net/sequencer/track1"),
+    ("/net/sequencer/track2/", "net/sequencer/track2"),
+    ("/net/sequencer/track3/", "net/sequencer/track3"),
+    ("/net/sequencer/track4/", "net/sequencer/track4"),
+    ("/net/sequencer/track5/", "net/sequencer/track5"),
 ]
 
 # Schrittweiten-Leiter fuer Float-Regler (grober Wert zuerst).
