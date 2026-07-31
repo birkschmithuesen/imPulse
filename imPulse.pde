@@ -82,6 +82,15 @@ int counter=0;
 NodeCalibration nodeCalibration;
 boolean calibrationMode = false;
 
+// Preset-System. Der Scheduler laeuft in imPulse (Master) und leitet den
+// Namen an SuperCollider weiter, damit Licht und Klang nicht auseinanderlaufen.
+PresetManager presetManager;
+// Transport, nicht Inhalt: diese zwei Parameter sind bewusst von jedem Preset
+// ausgeschlossen (siehe PresetStore.EXCLUDED), sonst koennte ein Preset den
+// Auto-Changer abschalten und die Installation einfrieren.
+RemoteControlledIntParameter presetSchedulerEnabled;
+RemoteControlledFloatParameter presetSchedulerInterval;
+
 // Sicherheitsventil ausschliesslich fuer die Testbilder (TestPatterns 1-5,
 // siehe drawPattern()/calibrationMode) - unabhaengig vom Show-Fader
 // masterLevel, der seit 2026-07-30 bis 1.0 gehen darf. TestPatterns 3/5
@@ -164,6 +173,23 @@ void setup() {
   mixer.addEffect(ledNetworkTransportEffect);
   mixer.addEffect(ledNetworkNodeEffects);
 
+  // Default 0: das Start-Preset (Weg 2) bestimmt die Szene, ein automatisch
+  // mitlaufender Wechsler wuerde sie nach zehn Minuten wegnehmen.
+  presetSchedulerEnabled = new RemoteControlledIntParameter("/preset/scheduler/enabled", 0, 0, 1);
+  presetSchedulerInterval = new RemoteControlledFloatParameter("/preset/scheduler/interval", 600f, 5f, 3600f);
+  presetManager = new PresetManager(dataPath("presets"), oscP5, oscOutput);
+
+  // Start-Preset: Sketch-Argument hat Vorrang, sonst die Umgebungsvariable.
+  // Beide Wege, weil processing-java die Weitergabe von Argumenten nicht
+  // zusichert, eine Umgebungsvariable aus einer .bat dagegen immer geht.
+  //
+  // Der Aufruf steht bewusst hier: nach dem Anlegen aller Effekte, sonst sind
+  // die Parameter noch nicht registriert - und vor dem Schreiben von
+  // remoteSettings.txt, damit diese Datei danach den wirklich gefahrenen Stand
+  // zeigt statt der Code-Defaults.
+  String bootPreset = (args != null && args.length > 0) ? args[0] : System.getenv("IMPULSE_PRESET");
+  presetManager.loadBootPreset(bootPreset, System.currentTimeMillis());
+
   //to save the osc-adresses
   try {
     System.out.println(dataPath("remoteSettings.txt"));
@@ -178,6 +204,9 @@ void setup() {
 
 void draw() {
   OscMessageDistributor.distributeMessages();
+  presetManager.update(System.currentTimeMillis(),
+      presetSchedulerEnabled.getValue() != 0,
+      presetSchedulerInterval.getValue());
   //createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
   if (calibrationMode) {
     nodeCalibration.update();

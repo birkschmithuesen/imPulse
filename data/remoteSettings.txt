@@ -20,11 +20,10 @@ float	/net/impulse/fadeOut/r	space for descripiton	0.97	0.0	1.0
 float	/nodes/colors/central/fired/Hue	space for descripiton	1.0	0	1
 float	/nodes/colors/central/fired/Sat	space for descripiton	1.0	0	1
 float	/nodes/colors/central/fired/Bright	space for descripiton	1.0	0	1
-float	/net/impulse/energyDecayfactor	space for descripiton	0.02	1.0E-4	1.0
+float	/net/impulse/lifetime	space for descripiton	0.02	1.0E-4	1.0
 float	/net/randomSpawn/directionBias	space for descripiton	1.0	0.0	1.0
 float	/nodes/times/recover	space for descripiton	4.0	0.0	10.0
 float	/nodes/pulseFreqRandFrac	space for descripiton	0.5	0.0	1.0
-float	/net/impulse/energyDecay	space for descripiton	0.001	1.0E-4	0.5
 float	/net/impulse/fadeOut/b	space for descripiton	0.56	0.0	1.0
 float	/nodes/pulseFrequency	space for descripiton	1.0	0.1	10.0
 float	/net/impulse/nodeDeadTime	space for descripiton	5.0	0.0	10.0

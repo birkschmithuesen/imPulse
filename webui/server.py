@@ -22,6 +22,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -44,6 +45,16 @@ DEFAULT_OSC_PORT = 8001
 DEFAULT_HTTP_HOST = "0.0.0.0"
 DEFAULT_HTTP_PORT = 8080
 
+# data/presets liegt neben data/remoteSettings.txt; ohne --presets wird der
+# Ordner daraus abgeleitet.
+DEFAULT_PRESETS_DIRNAME = "presets"
+
+# /preset/save ist asynchron -- imPulse schreibt die Datei erst im naechsten
+# draw()-Durchlauf (40 Hz, also ueblicherweise nach ~25 ms). So lange wartet
+# der Speichern-Endpoint darauf, dass die Datei erscheint.
+PRESET_SAVE_TIMEOUT_S = 1.0
+PRESET_SAVE_POLL_S = 0.05
+
 # ---------------------------------------------------------------------------
 # Speed-Kopplung
 #
@@ -51,12 +62,16 @@ DEFAULT_HTTP_PORT = 8080
 # impulseSpeed = 160 gehoeren die untenstehenden Werte zusammen. Aendert Birk
 # die Geschwindigkeit, wird
 #     faktor = neuer_speed / SPEED_REFERENCE
-# gebildet und die gekoppelten Parameter proportional (energyDecay*) bzw.
+# gebildet und die gekoppelten Parameter proportional (lifetime) bzw.
 # invers (nodeDeadTime, randomSpawn/interval) mitskaliert.
 #
+# /net/impulse/lifetime hiess bis 2026-07-31 /net/impulse/energyDecayfactor;
+# das damalige zweite /net/impulse/energyDecay war im Sketch wirkungslos und
+# ist ersatzlos entfallen.
+#
 # Achtung: die Konstruktor-Defaults in LedNetworkTransportEffect.java stehen
-# aktuell auf einem anderen Arbeitspunkt (speed 16, energyDecay 0.001,
-# energyDecayfactor 0.02, nodeDeadTime 5.0, randomSpawn/interval 30.0). Die
+# aktuell auf einem anderen Arbeitspunkt (speed 16, lifetime 0.02,
+# nodeDeadTime 5.0, randomSpawn/interval 30.0). Die
 # Kopplung bezieht sich bewusst auf den hier notierten Referenzpunkt -- wer
 # stattdessen den Sketch-Arbeitspunkt koppeln will, aendert nur diesen Block.
 # ---------------------------------------------------------------------------
@@ -66,8 +81,7 @@ SPEED_REFERENCE = 160.0
 
 # address -> (Referenzwert bei SPEED_REFERENCE, "proportional" | "invers")
 SPEED_COUPLED: Dict[str, Tuple[float, str]] = {
-    "/net/impulse/energyDecay": (0.01, "proportional"),
-    "/net/impulse/energyDecayfactor": (0.2, "proportional"),
+    "/net/impulse/lifetime": (0.2, "proportional"),
     "/net/impulse/nodeDeadTime": (1.0, "invers"),
     "/net/randomSpawn/interval": (3.0, "invers"),
 }
@@ -83,6 +97,7 @@ GROUP_ORDER = [
     "Master",
     "Master/opacity",
     "net/impulse",
+    "net/impulse/randomize",
     "net/impulse/color",
     "net/randomSpawn",
     "net",
@@ -94,14 +109,18 @@ GROUP_ORDER = [
 
 # Adress-Praefixe, die aus ihrer regulaeren group_key()-Gruppe herausgezogen
 # und in eine eigene Gruppe verschoben werden -- unabhaengig von der
-# generischen Praefix-Regel. Bisher nur fuer die Trennung Impuls/Impuls-Farbe
-# gebraucht: /net/impulse/color/* und /net/impulse/fadeOut/* landen sonst in
-# derselben Gruppe wie speed/nodeDeadTime/energyDecay (reine Adress-Praefix-
-# Gruppierung wuerde alles unter /net/impulse zusammenwerfen). Reihenfolge
-# wichtig: laengster/spezifischster Praefix zuerst, damit z.B.
-# "/net/impulse/color/gamma" nicht faelschlich unter einem kuerzeren
+# generischen Praefix-Regel. Gebraucht fuer die Trennung Impuls/Impuls-Farbe
+# (/net/impulse/color/* und /net/impulse/fadeOut/* landen sonst in derselben
+# Gruppe wie speed/nodeDeadTime/lifetime) und fuer die Sinus-Randomizer: die
+# generische Regel schneidet nach zwei Segmenten ab, /net/impulse/speed/
+# randomize/enabled bekaeme also ebenfalls den Schluessel "net/impulse" und
+# die acht Randomizer-Regler stuenden zwischen den vier Reglern, die sie
+# steuern. Reihenfolge wichtig: laengster/spezifischster Praefix zuerst, damit
+# z.B. "/net/impulse/color/gamma" nicht faelschlich unter einem kuerzeren
 # "/net/impulse"-Eintrag landet, falls der je hinzukaeme.
 SPLIT_GROUP_PREFIXES: List[Tuple[str, str]] = [
+    ("/net/impulse/speed/randomize/", "net/impulse/randomize"),
+    ("/net/impulse/lifetime/randomize/", "net/impulse/randomize"),
     ("/net/impulse/color/", "net/impulse/color"),
     ("/net/impulse/fadeOut/", "net/impulse/color"),
 ]
@@ -145,12 +164,11 @@ UI_RANGE_OVERRIDES: Dict[str, Tuple[float, float]] = {
     # ab ~6 kollabiert jede Energie <1 durch wiederholtes Quadrieren
     # (energy *= energy, exponent-mal) praktisch auf 0
     "/net/impulse/energyExponent": (1, 5),
-    # 2026-07-30, Birk: volle Java-Range (0.0001..0.5) macht den Regler am
-    # unteren, tatsaechlich genutzten Ende zu grobstufig -- 0.01 deckt den
+    # 2026-07-30, Birk: volle Java-Range (0.0001..1.0) macht den Regler am
+    # unteren, tatsaechlich genutzten Ende zu grobstufig -- 0.1 deckt den
     # Live-Tuning-Bereich ab (per Speed-Kopplung ohnehin an /net/impulse/speed
-    # gebunden, siehe SPEED_COUPLED oben). Nachjustiert von 0.05 auf 0.01.
-    "/net/impulse/energyDecay": (0.0001, 0.01),
-    "/net/impulse/energyDecayfactor": (0.0001, 0.1),
+    # gebunden, siehe SPEED_COUPLED oben).
+    "/net/impulse/lifetime": (0.0001, 0.1),
     # bei 30 (alle Stripes gleichzeitig) wird "Ambient" zum Flaechenblitz,
     # kein Ambient-Charakter mehr
     "/net/randomSpawn/count": (1, 8),
@@ -169,13 +187,20 @@ def _osc_string(text: str) -> bytes:
 
 
 def build_osc_message(address: str, value: Any) -> bytes:
-    """Baut ein OSC-Paket mit genau einem Argument (int -> 'i', float -> 'f')."""
+    """Baut ein OSC-Paket mit genau einem Argument.
+
+    int -> 'i', float -> 'f', str -> 's'. Der String-Zweig wird fuer die
+    Preset-Kommandos gebraucht (``/preset/load <name>``), die als einziges
+    Argument einen Namen tragen.
+    """
     if isinstance(value, bool):
         raise TypeError("bool ist kein gueltiges OSC-Argument")
     if isinstance(value, int):
         return _osc_string(address) + _osc_string(",i") + struct.pack(">i", value)
     if isinstance(value, float):
         return _osc_string(address) + _osc_string(",f") + struct.pack(">f", value)
+    if isinstance(value, str):
+        return _osc_string(address) + _osc_string(",s") + _osc_string(value)
     raise TypeError("nicht unterstuetzter OSC-Argumenttyp: %r" % type(value))
 
 
@@ -363,6 +388,103 @@ def parse_settings(text: str) -> List[Parameter]:
     return parameters
 
 
+# ---------------------------------------------------------------------------
+# Presets
+#
+# Der Server laeuft auf derselben Maschine wie imPulse und liest data/presets/
+# deshalb direkt vom Dateisystem -- es braucht keinen OSC-Rueckkanal, um die
+# Liste zu erfahren. Geschrieben wird der Ordner ausschliesslich von imPulse:
+# nur dort ist bekannt, welche Werte gerade tatsaechlich laufen.
+# ---------------------------------------------------------------------------
+
+PRESET_NAME_MAX_LENGTH = 64
+PRESET_NAME_ALLOWED = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
+
+# Adressen, die beim Anwenden eines Presets uebergangen werden -- Spiegel von
+# PresetStore.SILENTLY_IGNORED (Kommandos, kein Zustand) und
+# PresetStore.EXCLUDED (Scheduler ist Transport, nicht Inhalt). Java ignoriert
+# sie beim Laden; das UI darf danach also keine Regler bewegen, die der Sketch
+# gar nicht gesetzt hat.
+PRESET_IGNORED_ADDRESSES = set(TRIGGER_ADDRESSES) | {
+    "/preset/scheduler/enabled",
+    "/preset/scheduler/interval",
+}
+
+
+def valid_preset_name(name: Any) -> Optional[str]:
+    """Wortgleicher Spiegel von PresetStore.isValidName() in Java.
+
+    Rueckgabe: Fehlermeldung oder None. Java bleibt die Autoritaet -- dort geht
+    es um Pfad-Traversal ("/preset/load ../../../etc/passwd"), hier nur darum,
+    ungueltige Eingaben gar nicht erst rauszuschicken. Grossbuchstaben sind
+    ausgeschlossen, weil zwei Presets, die sich nur in der Schreibweise
+    unterscheiden, auf Windows dieselbe Datei waeren.
+    """
+    if not isinstance(name, str) or not name:
+        return "Preset-Name ist leer"
+    if len(name) > PRESET_NAME_MAX_LENGTH:
+        return "Preset-Name laenger als %d Zeichen" % PRESET_NAME_MAX_LENGTH
+    for char in name:
+        if char not in PRESET_NAME_ALLOWED:
+            return ("Preset-Name enthaelt unzulaessiges Zeichen %r -- erlaubt "
+                    "sind a-z, 0-9, Unterstrich und Bindestrich" % char)
+    return None
+
+
+def list_presets(directory: str) -> Tuple[List[str], Optional[str]]:
+    """Namen aller Preset-Dateien, alphabetisch, ohne die Endung .txt.
+
+    Spiegel von PresetStore.list(): Dateien mit unzulaessigem Namen werden
+    uebergangen -- sie liessen sich ohnehin nicht laden. Ein unlesbarer Ordner
+    ist kein Abbruch, sondern eine leere Liste plus Meldung: das uebrige UI
+    soll bedienbar bleiben.
+    """
+    try:
+        entries = os.listdir(directory)
+    except OSError as exc:
+        return [], "Preset-Ordner nicht lesbar: %s" % exc
+    names: List[str] = []
+    for entry in entries:
+        if not entry.endswith(".txt"):
+            continue
+        if not os.path.isfile(os.path.join(directory, entry)):
+            continue
+        bare = entry[:-len(".txt")]
+        if valid_preset_name(bare) is None:
+            names.append(bare)
+    names.sort()
+    return names, None
+
+
+def default_presets_path(settings_path: str) -> str:
+    """Preset-Ordner neben der Parameterdatei: <dir von settings>/presets."""
+    return os.path.join(os.path.dirname(os.path.abspath(settings_path)),
+                        DEFAULT_PRESETS_DIRNAME)
+
+
+def wait_for_preset_file(path: str, previous_mtime: Optional[float],
+                         timeout: float = PRESET_SAVE_TIMEOUT_S,
+                         step: float = PRESET_SAVE_POLL_S) -> bool:
+    """Wartet darauf, dass imPulse die Preset-Datei geschrieben hat.
+
+    Verglichen wird die mtime, nicht nur die Existenz -- sonst waere das
+    Ueberschreiben eines vorhandenen Presets nicht von "nichts passiert" zu
+    unterscheiden. Laeuft der Sketch nicht, laeuft die Frist ab und der
+    Aufrufer kann das ehrlich melden, statt Erfolg zu behaupten.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            current = os.path.getmtime(path)
+            if previous_mtime is None or current != previous_mtime:
+                return True
+        except OSError:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(step)
+
+
 def group_key(address: str) -> str:
     """Gruppenschluessel aus dem Adress-Praefix.
 
@@ -403,6 +525,7 @@ def group_sort_key(key: str) -> Tuple[int, str]:
 # als Titel hergeben (z.B. "net/impulse/color" statt "/net/impulse/color").
 GROUP_TITLE_OVERRIDES = {
     "net/impulse/color": "Impuls-Farbe",
+    "net/impulse/randomize": "Impuls-Randomizer (Sinus)",
 }
 
 
@@ -565,6 +688,50 @@ class ParameterStore:
             self.values[address] = value
 
 
+def apply_preset_entries(store: ParameterStore,
+                         entries: List[Parameter]) -> Dict[str, Any]:
+    """Uebernimmt die Werte einer geparsten Preset-Datei in den Store.
+
+    Preset-Dateien haben dasselbe Format wie remoteSettings.txt, ``entries``
+    kommt also aus ``parse_settings()``.
+
+    Geklemmt wird auf die Range aus remoteSettings.txt, nicht auf die aus der
+    Preset-Datei -- dieselbe Regel wie in ``PresetStore.applyPreset()`` auf der
+    Java-Seite, damit aeltere Presets nach einer Bereichsaenderung korrekt
+    bleiben.
+
+    Die Werte gehen bewusst NICHT als OSC raus: das Anwenden macht imPulse
+    selbst nach ``/preset/load``, hier wird nur die Anzeige nachgezogen.
+
+    Zwei Sonderfaelle werden gemeldet statt verschluckt:
+    ``unknown`` sind Adressen, die es in remoteSettings.txt nicht gibt (Preset
+    und Dump aus verschiedenen Codestaenden), ``outOfRange`` sind Werte
+    ausserhalb der verengten UI-Range (UI_RANGE_OVERRIDES) -- dort klemmt der
+    Regler sichtbar und darf nicht stillschweigend etwas anderes behaupten als
+    der Sketch faehrt.
+    """
+    values: Dict[str, Any] = {}
+    unknown: List[str] = []
+    out_of_range: List[Dict[str, Any]] = []
+    for entry in entries:
+        if entry.address in PRESET_IGNORED_ADDRESSES:
+            continue
+        param = store.get(entry.address)
+        if param is None:
+            unknown.append(entry.address)
+            continue
+        value = param.coerce(entry.value)
+        ui_min, ui_max = param.ui_range()
+        low, high = min(ui_min, ui_max), max(ui_min, ui_max)
+        shown = max(low, min(high, value))
+        if shown != value:
+            out_of_range.append({"address": entry.address, "value": value,
+                                 "shown": shown})
+        values[entry.address] = value
+        store.store(entry.address, value)
+    return {"values": values, "unknown": unknown, "outOfRange": out_of_range}
+
+
 def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Parameter, float]],
                                                                  List[Dict[str, str]]]:
     """Berechnet die an die Geschwindigkeit gekoppelten Werte.
@@ -594,7 +761,8 @@ def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Para
 # ---------------------------------------------------------------------------
 
 
-def create_app(settings_path: str, osc_host: str, osc_port: int):
+def create_app(settings_path: str, osc_host: str, osc_port: int,
+               presets_path: str):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
@@ -613,6 +781,14 @@ def create_app(settings_path: str, osc_host: str, osc_port: int):
         store.store(param.address, coerced)
         return Applied(param.address, coerced, payload)
 
+    def preset_file(name: str) -> str:
+        return os.path.join(presets_path, name + ".txt")
+
+    def preset_list_payload() -> Dict[str, Any]:
+        names, error = list_presets(presets_path)
+        return {"ok": True, "presets": names, "dir": presets_path,
+                "error": error}
+
     @app.route("/")
     def index() -> str:
         store.refresh()
@@ -630,6 +806,7 @@ def create_app(settings_path: str, osc_host: str, osc_port: int):
                         for a, (r, m) in SPEED_COUPLED.items()
                     ],
                 },
+                "presets": preset_list_payload(),
             }),
         )
 
@@ -684,6 +861,61 @@ def create_app(settings_path: str, osc_host: str, osc_port: int):
             "skipped": skipped,
         })
 
+    @app.route("/api/presets")
+    def api_presets():
+        return jsonify(preset_list_payload())
+
+    @app.route("/api/preset/load", methods=["POST"])
+    def api_preset_load():
+        body = request.get_json(silent=True) or {}
+        name = body.get("name")
+        problem = valid_preset_name(name)
+        if problem is not None:
+            return jsonify({"ok": False, "error": problem}), 400
+        path = preset_file(name)
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError as exc:
+            return jsonify({"ok": False,
+                            "error": "Preset nicht lesbar: %s" % exc}), 404
+        entries = parse_settings(text)
+        if not entries:
+            return jsonify({"ok": False,
+                            "error": "Preset %s enthaelt keine gueltige Zeile"
+                                     % name}), 400
+        # Erst senden, dann die Anzeige nachziehen: das Anwenden macht imPulse
+        # selbst, hier werden nur die Regler nachgefuehrt.
+        sender.send("/preset/load", name)
+        result = apply_preset_entries(store, entries)
+        result.update({"ok": True, "name": name})
+        return jsonify(result)
+
+    @app.route("/api/preset/save", methods=["POST"])
+    def api_preset_save():
+        body = request.get_json(silent=True) or {}
+        name = body.get("name")
+        problem = valid_preset_name(name)
+        if problem is not None:
+            return jsonify({"ok": False, "error": problem}), 400
+        path = preset_file(name)
+        try:
+            previous = os.path.getmtime(path)
+            existed = True
+        except OSError:
+            previous = None
+            existed = False
+        sender.send("/preset/save", name)
+        if not wait_for_preset_file(path, previous):
+            return jsonify({
+                "ok": False,
+                "error": "imPulse hat %s.txt nicht geschrieben -- laeuft der "
+                         "Sketch?" % name,
+            }), 504
+        payload = preset_list_payload()
+        payload.update({"name": name, "overwritten": existed})
+        return jsonify(payload)
+
     return app
 
 
@@ -693,6 +925,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--settings",
                         default=os.environ.get("IMPULSE_SETTINGS", DEFAULT_SETTINGS_PATH),
                         help="Pfad zu remoteSettings.txt (Vorgabe: %(default)s)")
+    parser.add_argument("--presets",
+                        default=os.environ.get("IMPULSE_PRESETS"),
+                        help="Ordner mit den Preset-Dateien "
+                             "(Vorgabe: presets/ neben --settings)")
     parser.add_argument("--osc-host",
                         default=os.environ.get("IMPULSE_OSC_HOST", DEFAULT_OSC_HOST),
                         help="Ziel-Host fuer OSC (Vorgabe: %(default)s)")
@@ -710,9 +946,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     settings_path = os.path.abspath(args.settings)
-    app = create_app(settings_path, args.osc_host, args.osc_port)
+    presets_path = (os.path.abspath(args.presets) if args.presets
+                    else default_presets_path(settings_path))
+    app = create_app(settings_path, args.osc_host, args.osc_port, presets_path)
 
     print("[webui] remoteSettings: %s" % settings_path)
+    print("[webui] Presets:        %s" % presets_path)
     print("[webui] OSC-Ziel:       %s:%d" % (args.osc_host, args.osc_port))
     print("[webui] HTTP:           http://%s:%d" % (args.host, args.port))
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

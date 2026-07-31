@@ -9,8 +9,10 @@ remoteSettings.txt und dem OSC-Paket schiefgehen kann:
 """
 
 import os
+import shutil
 import struct
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,15 +20,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import server  # noqa: E402
 from server import (ADVANCED_ADDRESSES, ADVANCED_GROUP_KEY, Parameter, ParameterStore,  # noqa: E402
                     TRIGGER_ADDRESSES, build_groups, build_osc_message,
-                    coupled_values, group_key, parse_settings)
+                    coupled_values, group_key, list_presets, parse_settings,
+                    valid_preset_name)
 
 
 # Ausschnitt aus einem echten Dump (Tabs!), inklusive der Eigenheiten:
 # wissenschaftliche Notation, Farbtripel, Adressen ohne fuehrenden Slash.
 SAMPLE = "\n".join([
     "int\t/net/impulse/speed\tspace for descripiton\t160\t1\t1500",
-    "float\t/net/impulse/energyDecay\tspace for descripiton\t0.01\t1.0E-4\t0.5",
-    "float\t/net/impulse/energyDecayfactor\tspace for descripiton\t0.2\t1.0E-4\t1.0",
+    "float\t/net/impulse/lifetime\tspace for descripiton\t0.2\t1.0E-4\t1.0",
     "float\t/net/impulse/nodeDeadTime\tspace for descripiton\t1.0\t0.0\t10.0",
     "float\t/net/randomSpawn/interval\tspace for descripiton\t3.0\t0.05\t40.0",
     "int\t/net/randomSpawn/enabled\tspace for descripiton\t1\t0\t1",
@@ -46,14 +48,14 @@ def by_address(parameters):
 class ParseTest(unittest.TestCase):
     def test_reads_all_lines(self):
         params = parse_settings(SAMPLE)
-        self.assertEqual(len(params), 12)
+        self.assertEqual(len(params), 11)
 
     def test_fields(self):
-        param = by_address(parse_settings(SAMPLE))["/net/impulse/energyDecay"]
+        param = by_address(parse_settings(SAMPLE))["/net/impulse/lifetime"]
         self.assertEqual(param.type, "float")
-        self.assertAlmostEqual(param.value, 0.01)
+        self.assertAlmostEqual(param.value, 0.2)
         self.assertAlmostEqual(param.minimum, 1.0e-4)  # wissenschaftliche Notation
-        self.assertAlmostEqual(param.maximum, 0.5)
+        self.assertAlmostEqual(param.maximum, 1.0)
 
     def test_int_type(self):
         param = by_address(parse_settings(SAMPLE))["/net/impulse/speed"]
@@ -62,14 +64,14 @@ class ParseTest(unittest.TestCase):
 
     def test_crlf_and_blank_lines(self):
         text = SAMPLE.replace("\n", "\r\n") + "\r\n   \r\n"
-        self.assertEqual(len(parse_settings(text)), 12)
+        self.assertEqual(len(parse_settings(text)), 11)
 
     def test_broken_lines_are_skipped_not_fatal(self):
         text = ("kaputt\n"
                 "float\t/a/b\td\tnichtszahl\t0\t1\n"
                 "quatsch\t/c/d\td\t1\t0\t1\n"
                 + SAMPLE)
-        self.assertEqual(len(parse_settings(text)), 12)
+        self.assertEqual(len(parse_settings(text)), 11)
 
     def test_duplicate_address_wins_first(self):
         text = SAMPLE + "float\tMaster/trace\tzweitfassung\t0.5\t0.0\t1.0\n"
@@ -129,6 +131,13 @@ class GroupingTest(unittest.TestCase):
         # docs/webui-parameter-review-2026-07-30.md Abschnitt 2)
         self.assertEqual(group_key("/net/impulse/color/gamma"), "net/impulse/color")
         self.assertEqual(group_key("/net/impulse/fadeOut/r"), "net/impulse/color")
+        # dasselbe fuer die Sinus-Randomizer: ohne den Sonderfall schneidet
+        # group_key() nach zwei Segmenten ab und sie landeten unter
+        # "net/impulse", zwischen den Reglern, die sie steuern
+        self.assertEqual(group_key("/net/impulse/speed/randomize/enabled"),
+                         "net/impulse/randomize")
+        self.assertEqual(group_key("/net/impulse/lifetime/randomize/period"),
+                         "net/impulse/randomize")
         self.assertEqual(group_key("/net/randomSpawn/interval"), "net/randomSpawn")
         self.assertEqual(group_key("/net/activateNode"), "net")
         self.assertEqual(group_key("/nodes/colors/outer/fired/Hue"), "nodes/colors")
@@ -151,6 +160,43 @@ class GroupingTest(unittest.TestCase):
         self.assertEqual(color_addrs, {"/net/impulse/color/r", "/net/impulse/fadeOut/r"})
         # speed bleibt in der Bewegungs-Gruppe, nicht in Impuls-Farbe
         self.assertNotIn("/net/impulse/speed", color_addrs)
+
+    def test_randomizer_group_is_separate_and_keeps_its_toggles(self):
+        text = "\n".join([
+            "int\t/net/impulse/speed\td\t16\t1\t1500",
+            "float\t/net/impulse/lifetime\td\t0.02\t0.0001\t1",
+            "int\t/net/impulse/speed/randomize/enabled\td\t0\t0\t1",
+            "int\t/net/impulse/speed/randomize/min\td\t16\t1\t1500",
+            "int\t/net/impulse/speed/randomize/max\td\t160\t1\t1500",
+            "float\t/net/impulse/speed/randomize/period\td\t30\t1\t300",
+            "int\t/net/impulse/lifetime/randomize/enabled\td\t0\t0\t1",
+            "float\t/net/impulse/lifetime/randomize/min\td\t0.005\t0.0001\t1",
+            "float\t/net/impulse/lifetime/randomize/max\td\t0.05\t0.0001\t1",
+            "float\t/net/impulse/lifetime/randomize/period\td\t20\t1\t300",
+        ])
+        groups = {g["key"]: g for g in build_groups(parse_settings(text))}
+        self.assertIn("net/impulse/randomize", groups)
+        self.assertEqual(groups["net/impulse/randomize"]["title"],
+                         "Impuls-Randomizer (Sinus)")
+        widgets = {c["address"]: c["widget"]
+                   for c in groups["net/impulse/randomize"]["controls"]}
+        self.assertEqual(len(widgets), 8)
+        self.assertEqual(widgets["/net/impulse/speed/randomize/enabled"], "toggle")
+        self.assertEqual(widgets["/net/impulse/lifetime/randomize/enabled"], "toggle")
+        self.assertEqual(widgets["/net/impulse/speed/randomize/max"], "slider")
+        # die gesteuerten Parameter selbst bleiben in der Bewegungs-Gruppe
+        moved = {c["address"] for c in groups["net/impulse"]["controls"]}
+        self.assertEqual(moved, {"/net/impulse/speed", "/net/impulse/lifetime"})
+
+    def test_randomizer_group_sorts_between_impuls_and_impuls_farbe(self):
+        text = "\n".join([
+            "int\t/net/impulse/speed\td\t16\t1\t1500",
+            "float\t/net/impulse/color/r\td\t1.0\t0\t1",
+            "int\t/net/impulse/speed/randomize/enabled\td\t0\t0\t1",
+        ])
+        keys = [g["key"] for g in build_groups(parse_settings(text))]
+        self.assertEqual(keys, ["net/impulse", "net/impulse/randomize",
+                                "net/impulse/color"])
 
     def test_color_triple_becomes_one_control(self):
         groups = {g["key"]: g for g in build_groups(parse_settings(SAMPLE))}
@@ -234,20 +280,13 @@ class GroupingTest(unittest.TestCase):
         self.assertEqual(d["min"], 1)
         self.assertEqual(d["max"], 100)
 
-    def test_energy_decay_ui_ranges_are_narrowed(self):
-        # 2026-07-30, Birk: energyDecay/energyDecayfactor auf 0.01/0.1
-        # verengt (volle Java-Range 0.0001..0.5/1.0 war am unteren, tatsaechlich
-        # genutzten Ende zu grobstufig fuer den Slider; energyDecay nachtraeglich
-        # von 0.05 auf 0.01 weiter verengt).
-        text = "\n".join([
-            "float\t/net/impulse/energyDecay\td\t0.01\t0.0001\t0.5",
-            "float\t/net/impulse/energyDecayfactor\td\t0.02\t0.0001\t1.0",
-        ])
-        params = {p.address: p for p in parse_settings(text)}
-        decay = params["/net/impulse/energyDecay"].as_dict()
-        factor = params["/net/impulse/energyDecayfactor"].as_dict()
-        self.assertEqual(decay["max"], 0.01)
-        self.assertEqual(factor["max"], 0.1)
+    def test_lifetime_ui_range_is_narrowed(self):
+        # 2026-07-30, Birk: Energiezerfall auf 0.1 verengt (volle Java-Range
+        # 0.0001..1.0 war am unteren, tatsaechlich genutzten Ende zu grobstufig
+        # fuer den Slider). Adresse seit 2026-07-31 /net/impulse/lifetime.
+        text = "float\t/net/impulse/lifetime\td\t0.02\t0.0001\t1.0"
+        param = parse_settings(text)[0]
+        self.assertEqual(param.as_dict()["max"], 0.1)
 
     def test_ui_range_override_never_exceeds_actual_range(self):
         # Ein aelterer/kleinerer Dump koennte eine engere Java-Range als der
@@ -285,33 +324,29 @@ class SpeedCouplingTest(unittest.TestCase):
     def test_reference_speed_reproduces_reference_values(self):
         values, skipped = self.applied(160)
         self.assertEqual(skipped, [])
-        self.assertAlmostEqual(values["/net/impulse/energyDecay"], 0.01)
-        self.assertAlmostEqual(values["/net/impulse/energyDecayfactor"], 0.2)
+        self.assertAlmostEqual(values["/net/impulse/lifetime"], 0.2)
         self.assertAlmostEqual(values["/net/impulse/nodeDeadTime"], 1.0)
         self.assertAlmostEqual(values["/net/randomSpawn/interval"], 3.0)
 
     def test_double_speed(self):
         values, _ = self.applied(320)
-        self.assertAlmostEqual(values["/net/impulse/energyDecay"], 0.02)
-        self.assertAlmostEqual(values["/net/impulse/energyDecayfactor"], 0.4)
+        self.assertAlmostEqual(values["/net/impulse/lifetime"], 0.4)
         self.assertAlmostEqual(values["/net/impulse/nodeDeadTime"], 0.5)
         self.assertAlmostEqual(values["/net/randomSpawn/interval"], 1.5)
 
     def test_half_speed(self):
         values, _ = self.applied(80)
-        self.assertAlmostEqual(values["/net/impulse/energyDecay"], 0.005)
-        self.assertAlmostEqual(values["/net/impulse/energyDecayfactor"], 0.1)
+        self.assertAlmostEqual(values["/net/impulse/lifetime"], 0.1)
         self.assertAlmostEqual(values["/net/impulse/nodeDeadTime"], 2.0)
         self.assertAlmostEqual(values["/net/randomSpawn/interval"], 6.0)
 
     def test_results_are_clamped_to_the_files_ranges(self):
-        # Speed 1 = Faktor 1/160: energyDecay liefe unter das Minimum,
-        # nodeDeadTime und interval weit ueber ihr Maximum.
+        # Speed 1 = Faktor 1/160: nodeDeadTime und interval laufen weit ueber
+        # ihr Maximum.
         values, _ = self.applied(1)
-        self.assertAlmostEqual(values["/net/impulse/energyDecay"], 1.0e-4)
-        # energyDecayfactor: 0.2 * (1/160) = 0.00125, liegt noch innerhalb
-        # ihres eigenen Bereichs [1e-4, 1.0] -- keine Klemmung noetig.
-        self.assertAlmostEqual(values["/net/impulse/energyDecayfactor"], 0.00125)
+        # lifetime: 0.2 * (1/160) = 0.00125, liegt noch innerhalb ihres
+        # eigenen Bereichs [1e-4, 1.0] -- keine Klemmung noetig.
+        self.assertAlmostEqual(values["/net/impulse/lifetime"], 0.00125)
         self.assertAlmostEqual(values["/net/impulse/nodeDeadTime"], 10.0)
         self.assertAlmostEqual(values["/net/randomSpawn/interval"], 40.0)
 
@@ -337,9 +372,10 @@ class SpeedCouplingTest(unittest.TestCase):
 
 class OscEncodingTest(unittest.TestCase):
     def test_float_message_layout(self):
-        packet = build_osc_message("/net/impulse/energyDecay", 0.25)
+        # Adresslaenge 24 = Vielfaches von 4, also ein volles Null-Wort Padding
+        packet = build_osc_message("/net/impulse/color/gamma", 0.25)
         self.assertEqual(len(packet) % 4, 0)
-        self.assertTrue(packet.startswith(b"/net/impulse/energyDecay\x00\x00\x00\x00"))
+        self.assertTrue(packet.startswith(b"/net/impulse/color/gamma\x00\x00\x00\x00"))
         self.assertIn(b",f\x00\x00", packet)
         self.assertEqual(struct.unpack(">f", packet[-4:])[0], 0.25)
 
@@ -361,6 +397,18 @@ class OscEncodingTest(unittest.TestCase):
         self.assertTrue(packet.startswith(b"/abc\x00\x00\x00\x00"))
         self.assertEqual(len(packet), 8 + 4 + 4)
 
+    def test_string_message_layout(self):
+        packet = build_osc_message("/preset/load", "standby")
+        self.assertEqual(len(packet) % 4, 0)
+        self.assertTrue(packet.startswith(b"/preset/load\x00\x00\x00\x00"))
+        self.assertIn(b",s\x00\x00", packet)
+        self.assertTrue(packet.endswith(b"standby\x00"))
+
+    def test_string_padding_multiple_of_four(self):
+        # "acht" -> 4 Zeichen, also vier Nullbytes, nicht eines
+        packet = build_osc_message("/preset/load", "acht")
+        self.assertTrue(packet.endswith(b"acht\x00\x00\x00\x00"))
+
     def test_bool_is_rejected(self):
         with self.assertRaises(TypeError):
             build_osc_message("/x", True)
@@ -370,11 +418,172 @@ class OscEncodingTest(unittest.TestCase):
             from pythonosc import osc_message_builder
         except ImportError:
             self.skipTest("python-osc nicht installiert")
-        for address, value in (("/a/b", 0.25), ("/a/b", 7), ("/laengere/adresse", 1.5)):
+        for address, value in (("/a/b", 0.25), ("/a/b", 7), ("/laengere/adresse", 1.5),
+                               ("/preset/load", "standby"), ("/preset/save", "acht")):
             builder = osc_message_builder.OscMessageBuilder(address=address)
             builder.add_arg(value)
             self.assertEqual(build_osc_message(address, value),
                              builder.build().dgram, address)
+
+
+class PresetNameTest(unittest.TestCase):
+    """Spiegel von PresetStore.isValidName() -- siehe PresetStore.java."""
+
+    def test_accepts_plain_name(self):
+        self.assertIsNone(valid_preset_name("standby"))
+        self.assertIsNone(valid_preset_name("hang_drum_slow"))
+        self.assertIsNone(valid_preset_name("abend-2"))
+        self.assertIsNone(valid_preset_name("a"))
+        self.assertIsNone(valid_preset_name("x" * 64))
+
+    def test_rejects_empty(self):
+        self.assertIsNotNone(valid_preset_name(""))
+        self.assertIsNotNone(valid_preset_name(None))
+
+    def test_rejects_too_long(self):
+        self.assertIsNotNone(valid_preset_name("x" * 65))
+
+    def test_rejects_uppercase(self):
+        # Windows unterscheidet Standby und standby nicht -- waeren dieselbe Datei
+        self.assertIsNotNone(valid_preset_name("Standby"))
+
+    def test_rejects_path_traversal(self):
+        for name in ("..", "../etc/passwd", "a/b", "a\\b", "a.txt", " a", "a b",
+                     "aä"):
+            self.assertIsNotNone(valid_preset_name(name), name)
+
+
+class PresetListTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir)
+
+    def write(self, filename):
+        with open(os.path.join(self.dir, filename), "w", encoding="utf-8") as handle:
+            handle.write("float\t/master/level\tx\t0.1\t0.0\t1.0\n")
+
+    def test_sorted_without_extension(self):
+        self.write("standby.txt")
+        self.write("abend.txt")
+        names, error = list_presets(self.dir)
+        self.assertEqual(names, ["abend", "standby"])
+        self.assertIsNone(error)
+
+    def test_ignores_other_files_and_directories(self):
+        self.write("standby.txt")
+        self.write("notizen.md")
+        os.mkdir(os.path.join(self.dir, "unterordner.txt"))
+        names, _ = list_presets(self.dir)
+        self.assertEqual(names, ["standby"])
+
+    def test_skips_invalid_names(self):
+        # koennte man ohnehin nicht laden -- PresetStore.list() uebergeht sie auch
+        self.write("standby.txt")
+        self.write("Gross.txt")
+        names, _ = list_presets(self.dir)
+        self.assertEqual(names, ["standby"])
+
+    def test_missing_directory_reports_error(self):
+        names, error = list_presets(os.path.join(self.dir, "gibtsnicht"))
+        self.assertEqual(names, [])
+        self.assertIsNotNone(error)
+
+
+class PresetApplyTest(unittest.TestCase):
+    """Uebernahme einer geparsten Preset-Datei in die Regleranzeige."""
+
+    def setUp(self):
+        self.store = ParameterStore(path="egal")
+        self.store.parameters = parse_settings(SAMPLE)
+        self.store.by_address = {p.address: p for p in self.store.parameters}
+        self.store.values = {p.address: p.coerce(p.value)
+                             for p in self.store.parameters}
+
+    def apply(self, text):
+        return server.apply_preset_entries(self.store, parse_settings(text))
+
+    def test_sets_known_addresses(self):
+        result = self.apply("float\t/nodes/times/recover\tx\t7.5\t0.0\t10.0\n")
+        self.assertAlmostEqual(result["values"]["/nodes/times/recover"], 7.5)
+        self.assertAlmostEqual(self.store.values["/nodes/times/recover"], 7.5)
+
+    def test_int_stays_int(self):
+        result = self.apply("int\t/net/impulse/speed\tx\t42\t1\t1500\n")
+        self.assertEqual(result["values"]["/net/impulse/speed"], 42)
+        self.assertIsInstance(result["values"]["/net/impulse/speed"], int)
+
+    def test_unknown_address_is_reported_not_applied(self):
+        result = self.apply("float\t/gibt/es/nicht\tx\t1.0\t0.0\t2.0\n")
+        self.assertEqual(result["unknown"], ["/gibt/es/nicht"])
+        self.assertEqual(result["values"], {})
+
+    def test_value_outside_ui_range_is_reported(self):
+        # /net/impulse/speed: Java-Range 1..1500, UI-Range 1..100
+        result = self.apply("int\t/net/impulse/speed\tx\t160\t1\t1500\n")
+        self.assertEqual(result["values"]["/net/impulse/speed"], 160)
+        self.assertEqual(result["outOfRange"],
+                         [{"address": "/net/impulse/speed", "value": 160,
+                           "shown": 100}])
+
+    def test_value_inside_ui_range_is_not_reported(self):
+        result = self.apply("int\t/net/impulse/speed\tx\t16\t1\t1500\n")
+        self.assertEqual(result["outOfRange"], [])
+
+    def test_clamps_to_settings_range_not_to_file_range(self):
+        # Die min/max-Spalten der Datei werden ignoriert -- es gelten die
+        # Grenzen aus remoteSettings.txt, genau wie in PresetStore.applyPreset
+        result = self.apply("float\t/nodes/times/recover\tx\t99.0\t0.0\t1000.0\n")
+        self.assertAlmostEqual(result["values"]["/nodes/times/recover"], 10.0)
+
+    def test_ignored_addresses_are_skipped_silently(self):
+        text = ("int\t/net/activateNode\tx\t5\t0\t100\n"
+                "int\t/preset/scheduler/enabled\tx\t0\t0\t1\n")
+        result = self.apply(text)
+        self.assertEqual(result["values"], {})
+        self.assertEqual(result["unknown"], [])
+
+
+class PresetSaveWaitTest(unittest.TestCase):
+    """Warten auf die Datei, die imPulse nach /preset/save schreibt."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.path = os.path.join(self.dir, "neu.txt")
+
+    def test_returns_false_when_nothing_appears(self):
+        # der haeufigste Fehlerfall: Web-UI laeuft, imPulse nicht
+        self.assertFalse(server.wait_for_preset_file(self.path, None,
+                                                     timeout=0.1, step=0.01))
+
+    def test_returns_true_when_file_appears(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        self.assertTrue(server.wait_for_preset_file(self.path, None,
+                                                    timeout=0.1, step=0.01))
+
+    def test_unchanged_mtime_counts_as_not_written(self):
+        # sonst waere das Ueberschreiben nicht von "nichts passiert" zu
+        # unterscheiden
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        mtime = os.path.getmtime(self.path)
+        self.assertFalse(server.wait_for_preset_file(self.path, mtime,
+                                                     timeout=0.1, step=0.01))
+
+    def test_changed_mtime_counts_as_written(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        mtime = os.path.getmtime(self.path)
+        os.utime(self.path, (mtime + 5, mtime + 5))
+        self.assertTrue(server.wait_for_preset_file(self.path, mtime,
+                                                    timeout=0.1, step=0.01))
+
+    def test_default_directory_sits_next_to_settings(self):
+        settings = os.path.join("a", "data", "remoteSettings.txt")
+        self.assertEqual(
+            server.default_presets_path(settings),
+            os.path.join(os.path.abspath(os.path.join("a", "data")), "presets"))
 
 
 class RealSettingsFileTest(unittest.TestCase):

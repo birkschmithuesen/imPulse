@@ -49,10 +49,34 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   //settings
   RemoteControlledFloatParameter nodeDeadTime; // Time between two activations of a node
-  RemoteControlledFloatParameter impulseDecay; // loss of energy/second
-  RemoteControlledFloatParameter impulseDecayFactor; // impulseEnergy -= factor*time 
+  // Energiezerfall pro Sekunde, also umgekehrt proportional zur Lebensdauer eines
+  // Impulses: impulseEnergy -= lifetime*time. Trotz des Namens ist der Wert der
+  // Zerfallsfaktor selbst, keine Sekundenangabe - klein = langlebig.
+  RemoteControlledFloatParameter impulseLifetime;
   RemoteControlledIntParameter impulseEnergyExponent; // Exponent applied to input volume provided by /tube/trigger
   RemoteControlledIntParameter impulseSpeed; // speed (leds/second)
+
+  // Optionaler Sinus-Randomizer je Parameter (Speed und Lifetime unabhaengig,
+  // kein gemeinsamer Takt). Bei enabled=1 UEBERSCHREIBT der Oszillator den
+  // manuell gesetzten Wert in jedem Frame:
+  //   wert = min + (max-min) * (0.5 + 0.5*sin(2*PI*t/period))
+  // t laeuft ab dem Einschalten, period ist die Dauer eines vollen Auf-Ab-
+  // Zyklus in Sekunden (nicht Hz). Bei enabled=0 passiert gar nichts, der
+  // Parameter bleibt wie bisher rein manuell steuerbar.
+  //
+  // Die min/max-Ranges sind bewusst dieselben wie die des jeweiligen
+  // Zielparameters - deshalb kann der Oszillatorwert nicht ausserhalb von
+  // dessen Bereich landen und braucht beim setValue() keine zweite Klemmung.
+  RemoteControlledIntParameter speedRandomizeEnabled;
+  RemoteControlledIntParameter speedRandomizeMin;
+  RemoteControlledIntParameter speedRandomizeMax;
+  RemoteControlledFloatParameter speedRandomizePeriod;
+  RemoteControlledIntParameter lifetimeRandomizeEnabled;
+  RemoteControlledFloatParameter lifetimeRandomizeMin;
+  RemoteControlledFloatParameter lifetimeRandomizeMax;
+  RemoteControlledFloatParameter lifetimeRandomizePeriod;
+  final ParameterOscillator speedOscillator = new ParameterOscillator();
+  final ParameterOscillator lifetimeOscillator = new ParameterOscillator();
 
   RemoteControlledFloatParameter impulseGamma= new RemoteControlledFloatParameter("/net/impulse/color/gamma", 0f, 0.1f, 5f);
 
@@ -94,14 +118,25 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // urspruengliche Auslieferungswert, alle davon abhaengigen Zeit-Parameter
     // proportional mitskaliert (siehe scripts/tune_speed.py in der Skill
     // devops/klangnetz-remote-control fuer die Herleitung). Bei Aenderung von
-    // impulseSpeed IMMER auch diese vier mitziehen, sonst reissen die Impulse
+    // impulseSpeed IMMER auch diese drei mitziehen, sonst reissen die Impulse
     // (zu kurze Lebensdauer) oder das Netz verstopft (zu haeufige Kreuzungs-
     // Feuerung / Ambient-Spawns).
     nodeDeadTime= new RemoteControlledFloatParameter("/net/impulse/nodeDeadTime", 5f, 0.0f, 10);
-    impulseDecay= new RemoteControlledFloatParameter("/net/impulse/energyDecay", 0.001f, 0.0001f, 0.5f);
-    impulseDecayFactor= new RemoteControlledFloatParameter("/net/impulse/energyDecayfactor", 0.02f, 0.0001f, 1f);
+    impulseLifetime= new RemoteControlledFloatParameter("/net/impulse/lifetime", 0.02f, 0.0001f, 1f);
     impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 16, 1, 1500);
     impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
+
+    // Randomizer: Auslieferungszustand aus (0), ein Operator schaltet ihn live
+    // per OSC/Web-UI ein. Die Defaults spannen einen Bereich um den jeweiligen
+    // Arbeitspunkt (speed 16, lifetime 0.02) auf.
+    speedRandomizeEnabled= new RemoteControlledIntParameter("/net/impulse/speed/randomize/enabled", 0, 0, 1);
+    speedRandomizeMin= new RemoteControlledIntParameter("/net/impulse/speed/randomize/min", 16, 1, 1500);
+    speedRandomizeMax= new RemoteControlledIntParameter("/net/impulse/speed/randomize/max", 160, 1, 1500);
+    speedRandomizePeriod= new RemoteControlledFloatParameter("/net/impulse/speed/randomize/period", 30f, 1f, 300f);
+    lifetimeRandomizeEnabled= new RemoteControlledIntParameter("/net/impulse/lifetime/randomize/enabled", 0, 0, 1);
+    lifetimeRandomizeMin= new RemoteControlledFloatParameter("/net/impulse/lifetime/randomize/min", 0.005f, 0.0001f, 1f);
+    lifetimeRandomizeMax= new RemoteControlledFloatParameter("/net/impulse/lifetime/randomize/max", 0.05f, 0.0001f, 1f);
+    lifetimeRandomizePeriod= new RemoteControlledFloatParameter("/net/impulse/lifetime/randomize/period", 20f, 1f, 300f);
 
     impulseUseRemoteCol = new RemoteControlledIntParameter("/net/impulse/color/useRemoteCol", 1, 0, 1);
     impulseR= new RemoteControlledFloatParameter("/net/impulse/color/r", 1, 0, 1); // color of travelling impulse
@@ -252,8 +287,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     double currentTime=(double)System.currentTimeMillis()/1000;
     float timeStep=(float) (currentTime-lastCyclePos);
     lastCyclePos=currentTime;
+    // vor jeder Nutzung von impulseSpeed/impulseLifetime in diesem Frame -
+    // auch spawnRandomImpulses() liest impulseSpeed
+    applyRandomizers(currentTime);
     float speed=impulseSpeed.getValue();
-    float energyLoss=impulseDecay.getValue();
 
     spawnRandomImpulses(currentTime);
 
@@ -265,7 +302,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // let each activation travel a bit in it's direction
       curActivation.ledIdxPos+=curActivation.speed*timeStep;
       // loose energy
-      curActivation.energy -= timeStep*impulseDecayFactor.getValue();
+      curActivation.energy -= timeStep*impulseLifetime.getValue();
       // if the activation hasn't fallen off the end of the stripe...
       int activationLedIdx=curActivation.getLedIndex(); // global led position
       int direction;// needed to reuse loop for positive and negative speeds
@@ -279,14 +316,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           if ( !activationIsValid(activationLedIdx, curActivation)) {
             break;
           }
-          if (activationEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime, energyLoss)) {
+          if (activationEncounteredNode(curActivationLedIdx, curActivation, newActivations, currentTime)) {
             break;
           }
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
           newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy, curActivation.id));
         }
       }
-      if (activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime, energyLoss))) {
+      if (activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime))) {
         newActivations.add(curActivation);
       }
     }
@@ -327,7 +364,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       curActivation.energy>0;
   }
 
-  private boolean activationEncounteredNode(Integer activationLedIdx, TravellingActivation curActivation, LinkedList<TravellingActivation> newActivations, double currentTime, float energyLoss) {
+  private boolean activationEncounteredNode(Integer activationLedIdx, TravellingActivation curActivation, LinkedList<TravellingActivation> newActivations, double currentTime) {
     int nLeds=ledNetInfo.length;
     // should the activation survive this round?
     //if activation hits a stripe crossing, create a new activation for each of the branches
@@ -339,7 +376,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         //send osc Notification
         sendOscMessage(hitNode, curActivation);
         float nActivations=hitNode.ledIndices.size();
-        //float childEnergy=curActivation.energy/nActivations/2.0f-energyLoss;
+        //energieerhaltende Variante, bewusst nicht aktiv (siehe CLAUDE.md):
+        //float childEnergy=curActivation.energy/nActivations/2.0f;
         //curActivation.setEnergy(childEnergy);
         float childEnergy=curActivation.energy;
         for (Integer nodeLedIdx : hitNode.ledIndices) {
@@ -426,6 +464,31 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       myMessage.add(positionMap.y(ledIndex));
       myMessage.add(a.energy);
       oscP5.send(myMessage, remoteLocation);
+    }
+  }
+
+  // Sinus-Randomizer fuer Speed und Lifetime, siehe /net/impulse/*/randomize/*
+  // in CLAUDE.md und ParameterOscillator.
+  //
+  // Gesetzt wird bewusst der zugrundeliegende Parameter selbst, nicht ein
+  // Schattenwert nur fuer diesen Frame: nur so steht der gerade gefahrene Wert
+  // auch in remoteSettings.txt und in einem gespeicherten Preset. Ein manuelles
+  // Nachjustieren waehrend enabled=1 wird dadurch im naechsten Frame wieder
+  // ueberschrieben - gewollt.
+  private void applyRandomizers(double currentTime) {
+    if (speedRandomizeEnabled.getValue() == 1) {
+      float value=speedOscillator.value(currentTime, speedRandomizePeriod.getValue(),
+          speedRandomizeMin.getValue(), speedRandomizeMax.getValue());
+      impulseSpeed.setValue(Math.round(value)); // runden, nicht abschneiden
+    } else {
+      speedOscillator.reset(); // Wiedereinschalten faengt einen frischen Zyklus an
+    }
+    if (lifetimeRandomizeEnabled.getValue() == 1) {
+      impulseLifetime.setValue(lifetimeOscillator.value(currentTime,
+          lifetimeRandomizePeriod.getValue(), lifetimeRandomizeMin.getValue(),
+          lifetimeRandomizeMax.getValue()));
+    } else {
+      lifetimeOscillator.reset();
     }
   }
 

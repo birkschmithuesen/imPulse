@@ -53,11 +53,51 @@ defensive fallback.
 
 ## parameters
 * /net/impulse/speed
-* /net/impulse/energyDecay
+* /net/impulse/lifetime
 * /net/impulse/nodeDeadTime
 * /nodes/times/fire
 * /nodes/times/recover
 * /master/level (see "master level" above - show fader, 0..1)
+* /preset/scheduler/enabled, /preset/scheduler/interval (see "Presets" below)
+
+## Presets
+
+A preset holds the complete parameter set of visuals and sound under one name.
+Files: `data/presets/<name>.txt` (visuals) and `supercollider/presets/<name>.txt`
+(sound). Same six tab-separated columns as `remoteSettings.txt`, so a scene
+snapshot can be turned into a preset by copying it.
+
+Load and save over OSC on port 8001:
+
+```
+/preset/load hang_drum_slow
+/preset/save mein_neues_preset
+/preset/next
+```
+
+At startup - sketch argument first, environment variable as a fallback:
+
+```bash
+IMPULSE_PRESET=standby processing-java --sketch=$PWD --run
+```
+
+Automatic change every ten minutes:
+
+```
+/preset/scheduler/interval 600
+/preset/scheduler/enabled 1
+```
+
+Order is alphabetical by file name, the list is read fresh on every change, and
+switching the scheduler on does **not** jump immediately - the interval starts
+from that moment. imPulse forwards the name to SuperCollider as
+`/sc/preset/load <name>` on port 8002; there is only one scheduler, so light and
+sound cannot drift apart. Fire-and-forget: if sclang isn't running, the visual
+show carries on.
+
+Preset names are restricted to `[a-z0-9_-]`, 1 to 64 characters. The name
+arrives over OSC from outside, so without that check `/preset/load
+../../../etc/passwd` would be a file access of the sender's choosing.
 
 ## libraries to be imported into Processing
 * [oscP5](http://www.sojamo.de/libraries/oscP5/) (also provides `netP5`)
