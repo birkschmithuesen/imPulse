@@ -1,6 +1,6 @@
 // =====================================================================
 // KlangNetz / imPulse — Vierkanal-Klang: Glocken an Knoten, Drohnen für
-// reisende Impulse, Ambisonics 2D erster Ordnung auf vier Lautsprecher
+// reisende Impulse, Pan4 (SC-Core-UGen) auf vier feste Lautsprecher
 // =====================================================================
 //
 // KANONISCHE DATEI (2026-07-31): dies ist die EINZIGE SC-Sound-Datei fürs
@@ -11,9 +11,34 @@
 // lud. Der Windows-Task läuft jetzt direkt aus diesem Repo-Pfad.
 // Details/Änderungshistorie: klangnetz_bells.README.md.
 //
+// ---- UMBAU Ambisonics -> Pan4 (2026-07-31, Birk vor Ort) ---------------
+// Nach der erfolgreichen Azimuth-Testabnahme der Ambisonics-Kette
+// (PanB2-Encoder + DecodeB2-Decoder, siehe Git-Historie dieser Datei fuer
+// die vollstaendige Messdokumentation) stellte sich vor Ort heraus: die
+// gewuenschte Praezision ("bei einer Note NAH an einem Lautsprecher soll
+// wirklich NUR dieser Lautsprecher klingen") ist mit Ambisonics 1. Ordnung
+// PRINZIPIELL nicht erreichbar -- gemessen selbst bei voller Richtwirkung
+// nur ~43% Energieanteil im dominanten Kanal (Verfahrensgrenze, kein Bug,
+// siehe docs/ambisonics-sharper-panning-optionen.md fuer die Optionsanalyse).
+//
+// Ersetzt durch SCs Core-UGen Pan4 (SIEHE ~toQuad WEITER UNTEN fuer die
+// vollstaendige Begruendung + NRT-Verifikation): kein B-Format-Zwischen-
+// schritt mehr, kein Decoder-Synth, direkter X/Y-Panner fuer genau 4 feste
+// Lautsprecher. Verifiziert per NRT-Messung (Hermes-vServer,
+// Score.recordNRT, Methodik siehe Skill supercollider-sound-design):
+//   Boxposition exakt in einer Ecke -> 100% auf genau dieser Box
+//   Netzmitte -> exakt 25/25/25/25% (automatisch, kein Diffus-Crossfade)
+// Die alte Ambisonics-Messdokumentation (Azimut-Vorzeichen, 45-Grad-
+// Offset, DecodeB2-orientation-Bug) ist NICHT mehr relevant fuer den
+// aktuellen Code -- bei Bedarf per `git log`/`git show` auf einen Commit
+// vor 2026-07-31 einsehbar. Die Kernlektion bleibt gueltig: MASSGEBLICH
+// IST DIE MESSUNG, NICHT DIE HERLEITUNG (galt fuer Ambisonics genauso wie
+// fuer die neue Pan4-Rotation+Permutation, beide wurden frisch per NRT
+// verifiziert statt aus der alten Messung uebernommen).
+//
 // ---- Zusammenführung der zwei Entwicklungslinien (2026-07-31) --------
-// Diese Datei vereint die Ambisonics-/Spatialisierungsarbeit (Encoder
-// PanB2 + EIN DecodeB2, Drohnen am Impulsstrom, Sound-Parameter-Layer,
+// Diese Datei vereint die Spatialisierungsarbeit (urspruenglich Ambisonics,
+// seit UMBAU oben Pan4; Drohnen am Impulsstrom, Sound-Parameter-Layer,
 // Messhilfen) mit dem Live-Tuning-Stand des Laptops (Skala, Grundton,
 // Lautstärken, Sägezahn-Layer, Polyphonie-Obergrenze). Drei Punkte, an
 // denen die zwei Linien dasselbe verschieden lösten, und wie entschieden
@@ -21,17 +46,17 @@
 //
 //  * KANALVERTEILUNG: die Laptop-Fassung schickte jeden Knoten per
 //    `outCh = nodeId % 4` auf einen festen Hardware-Ausgang — ein
-//    Platzhalter ohne Ortsbezug. Das ersetzt die Ambisonics-Kette
+//    Platzhalter ohne Ortsbezug. Das ersetzt die Spatialisierungs-Kette
 //    vollständig: der Ort kommt jetzt aus den Koordinaten in
 //    /net/hitNode bzw. /net/impulse.
 //  * HALL: die Laptop-Fassung hatte einen FreeVerb IN jeder Glocke
-//    (mix 0.42). Ein Hall VOR dem Encoder wird selbst räumlich codiert
-//    und vom Decoder wieder zu einer Punktquelle verschmiert (Begründung
-//    ausführlich beim \masterReverb-SynthDef). Der Hall sitzt deshalb
-//    jetzt NACH dem Decoder, je Hardware-Kanal getrennt. Damit der von
-//    Birk gewünschte Hallanteil erhalten bleibt, ist der Default von
-//    ~reverbMix von 0.15 auf 0.35 angehoben — live nachstellbar über
-//    /klangnetz/param/reverbMix, ohne die Datei anzufassen.
+//    (mix 0.42). Ein Hall VOR dem Panning wird selbst räumlich positioniert
+//    und zu einer Punktquelle verschmiert (Begründung ausführlich beim
+//    \masterReverb-SynthDef). Der Hall sitzt deshalb NACH dem Panning, je
+//    Hardware-Kanal getrennt. Damit der von Birk gewünschte Hallanteil
+//    erhalten bleibt, ist der Default von ~reverbMix von 0.15 auf 0.35
+//    angehoben — live nachstellbar über /klangnetz/param/reverbMix, ohne
+//    die Datei anzufassen.
 //  * SUMMEN-LIMITER: die Laptop-Fassung hatte dafür einen eigenen
 //    \klangLimiter hinter einem privaten 4-Kanal-Bus. Denselben Dienst
 //    tut hier der Limiter am Ende von \masterReverb (ebenfalls 0.95, je
@@ -67,6 +92,8 @@
 //  2026-07-31: Skala von natürlicher Moll (D Kurd) auf Phrygisch geändert
 //    (kleine statt große Sekund als zweite Stufe), Grundton A2 unverändert.
 //  2026-07-31: Polyphonie-Obergrenze gegen Server-Überlast (~maxPolyphony).
+//  2026-07-31: Panning von Ambisonics (PanB2/DecodeB2) auf Pan4 umgebaut
+//    (~panSharpness ersetzt ~directHardness), siehe UMBAU-Abschnitt oben.
 //
 // Setup: sclang Instanz muss auf demselben Rechner laufen wie imPulse
 // (oder oscOutput in imPulse.pde entsprechend auf die SC-Rechner-IP
@@ -83,140 +110,12 @@
 // und nicht als eigene Top-Level-Blöcke: sie laufen headless nicht von
 // selbst los und sind trotzdem mit einem Aufruf startbar.
 //
-// Die Messsitzung für die ungemessenen Werte weiter unten ist dagegen
-// eine INTERAKTIVE: ~testChannels.(), ~testAzimuth.() und ~testSweep.()
-// werden von Hand aufgerufen, also aus der SuperCollider-IDE oder aus
-// einer sclang-REPL. Im headless-Betrieb (`sclang -D`) gibt es keine
-// Eingabezeile, aus der man sie aufrufen könnte — dort läuft die Datei
-// nur als Empfänger.
-//
-// =====================================================================
-// AZIMUTH-MESSUNG: ERLEDIGT (2026-07-31, Birk vor Ort am Show-Rechner)
-// =====================================================================
-//
-// Gemessen: ~azimuthSign = 1, ~azimuthOffset = -0.25 (Werte im
-// Konfigurationsteil unten). Zusätzlich zwei Hardware-Probleme gefunden
-// und behoben, die anfangs zu falschen/wirren Positionszuordnungen
-// führten (NICHT die Ambisonics-Mathematik selbst — die war schon
-// vorher korrekt, siehe NRT-Messungen unten):
-//
-//   1. scsynth bootete auf den MME- statt den ASIO-Treiber des ZOOM
-//      AMS-24 (Windows-Default-Geräteauswahl griff daneben) — dadurch
-//      fielen alle vier logischen Kanäle auf nur zwei physische Boxen.
-//      Fix: s.options.device explizit auf den ASIO-Treiber gesetzt
-//      (siehe Konfigurationsteil unten).
-//   2. Die Kabel-Reihenfolge des Interfaces ist keine einfache Rotation
-//      der Decoder-Kanal-Reihenfolge (gemessen: hw0=rechts, hw1=links,
-//      hw2=hinten, hw3=vorn) — ein reiner azimuthOffset kann das nicht
-//      abbilden. Fix: Kanal-Permutation in \masterReverb (siehe dort).
-//
-// Alle vier Positionen (vorn/rechts/hinten/links) wurden danach am
-// Show-Rechner per Ohr bestätigt korrekt zugeordnet — sowohl über den
-// direkten Rausch-Testton (/klangnetz/test/noiseHard) als auch über
-// echte Node-Treffer (/net/hitNode).
-//
-// Verbleibende, dokumentierte Einschränkung (keine offene Messung mehr,
-// sondern eine Verfahrensgrenze von Ambisonics 1. Ordnung): selbst bei
-// voller Richtwirkung (~directHardness = 1) streut eine Punktquelle
-// hörbar auf die Nachbarkanäle — per NRT-Test gemessen, der dominante
-// Kanal trägt nur ~43% der Gesamtenergie einer Quelle direkt an einer
-// Lautsprecherposition. Das ist keine Fehlkonfiguration, sondern eine
-// Eigenschaft von B-Format 1. Ordnung mit nur 4 Lautsprechern. Optionen
-// für schärferes Panning (Higher-Order Ambisonics, direktes
-// Nächster-Nachbar-Paar-Panning, Post-Decoder-Schärfung):
-// docs/ambisonics-sharper-panning-optionen.md.
-//
-// ---- GEMESSEN 2026-07-30: DecodeB2 ignoriert sein orientation --------
-//
-// Aufbau: scsynth im NRT-Modus (`Score.recordNRT`, kein Audiogerät, kein
-// Netz), SC 3.11.2, konstantes Eingangssignal DC.ar(1), Rendern nach
-// Datei, Abgreifen eines Samples je Messfenster.
-//
-// Ergebnis: das orientation-Argument von DecodeB2 hat KEINE beobachtbare
-// Wirkung. DecodeB2.ar(4, w, x, y, orientation) liefert bei Azimut 0 für
-// orientation = 0, 0.25, 0.5 und 1.0 bytegleich
-//     [0.8536, 0.8536, 0.1464, 0.1464]
-// — und zwar sowohl, wenn der Wert als Konstante im Graphen steht, als
-// auch, wenn er als Synth-Control gesetzt wird.
-//
-// Gegenprobe im GLEICHEN Messaufbau, damit „kein Unterschied" nicht mit
-// „misst gar nichts" verwechselt wird: PanAz reagiert sofort auf sein
-// orientation. PanAz.ar(4, DC.ar(1), 0, 1, 2, orientation) liefert
-//     orientation = 0    ->  [1.0, 0.0, 0.0, 0.0008]
-//     orientation = 0.5  ->  [0.7076, 0.7066, 0.0, 0.0]
-//
-// Daraus folgt die feste Lautsprecheranordnung von DecodeB2 (ebenfalls
-// gemessen, durch Abfahren des Azimuts):
-//     Azimut -0.25 -> [1.0, 0.5, 0.0, 0.5]     Kanal 0 liegt bei -45°
-//     Azimut +0.25 -> [0.5, 1.0, 0.5, 0.0]     Kanal 1 liegt bei +45°
-//     Azimut +0.75 -> [0.0, 0.5, 1.0, 0.5]     Kanal 2 liegt bei +135°
-//     Azimut -0.75 -> [0.5, 0.0, 0.5, 1.0]     Kanal 3 liegt bei -135°
-// Die Boxen des Decoders stehen also bei ±45° und ±135° Halbzyklen — die
-// FRONT halbiert eine Seite des Quadrats, sie trifft keine Box.
-//
-// Am Show-Rechner bestätigt (2026-07-31): dieselbe DecodeB2-Konstruktion
-// gilt auch dort, ~azimuthOffset = -0.25 gleicht den 45°-Versatz aus
-// (siehe Messung unten).
-//
-// ---- Was das für diese Installation bedeutet -------------------------
-//
-// Unsere Boxen stehen auf den SEITENMITTEN: vorn, rechts, hinten, links.
-// Gegen einen Decoder mit Boxen bei ±45°/±135° sitzt damit jede Quelle
-// um 45° daneben — ein Ton, der „vorn" gemeint ist, kommt zu gleichen
-// Teilen aus der vorderen und der rechten Box. Umstecken hilft dagegen
-// NICHT: eine Drehung um 45° ist keine Vertauschung von Kanälen, kein
-// Kabelwechsel bildet sie ab.
-//
-// Deshalb wird gedreht, wo es nachweislich wirkt: im ENCODER.
-// ~azimuthOffset wird in ~toBformat auf den Azimut addiert, bevor PanB2
-// ihn zu sehen bekommt. (PanB2 wickelt den Azimut selbst um ±1 herum —
-// im selben Lauf gemessen: Azimut 1.25 liefert dasselbe wie -0.75. Ein
-// zusätzliches wrap ist also unnötig.)
-//
-// Dass das wirkt, ist ebenfalls gemessen (gleicher NRT-Aufbau, ganze
-// Encoder-Zeile nachgebaut, Quelle bei (0, +4) m — also „vorn"):
-//     ~azimuthOffset =  0     ->  [0.675, 0.675, 0.325, 0.325]
-//                                 zu gleichen Teilen auf Kanal 0 und 1,
-//                                 genau der beschriebene 45°-Fehler
-//     ~azimuthOffset = -0.25  ->  [0.748, 0.5,   0.252, 0.5  ]  Gipfel Kanal 0
-//     ~azimuthOffset = +0.25  ->  [0.5,   0.748, 0.5,   0.252]  Gipfel Kanal 1
-// Dass „vorn" auch bei richtigem Offset noch auf die Nachbarkanäle
-// streut, ist kein Fehler: direct = 4/8.062 ≈ 0.50, vorn und hinten sind
-// absichtlich nur halb gerichtet (siehe die Anmerkung bei ~testAzimuth).
-//
-// ---- Warum die zwei übrigen Werte trotzdem ungemessen bleiben --------
-//
-// Die Hilfedateien von PanB2 und DecodeB2 machen zu Vorzeichen und
-// Nullpunkt eine Aussage (sie steht als Erwartung bei den Variablen),
-// aber das ist eine HERLEITUNG, keine Messung. In CLAUDE.md steht für die
-// ArtNet-Bytefolge derselbe Fall: zwei unabhängige Ableitungen aus der
-// Dokumentation kamen zum falschen Ergebnis, erst die Messung am Aufbau
-// hat es geklärt — „Massgeblich ist die Messung, nicht die Herleitung."
-//
-// Ein falsches Azimut-Vorzeichen spiegelt das ganze Klangbild links/
-// rechts, ein falscher ~azimuthOffset dreht es. Beides geht ohne Fehler
-// und ohne Meldung durch und fällt erfahrungsgemäss erst zur Eröffnung
-// auf.
-//
-// ZU TUN, BEVOR DIE INSTALLATION ZUM ERSTEN MAL SPIELT — Reihenfolge
-// einhalten, Ablauf im Detail bei den Funktionen ganz unten. Die ganze
-// Sitzung läuft interaktiv (IDE oder sclang-REPL), nicht headless:
-//
-//   1. Diese Datei auswerten (Server bootet mit vier Ausgangskanälen).
-//   2. ~testChannels.()  — welche Box klingt bei Kanal 0, 1, 2, 3?
-//   3. ~testAzimuth.()   — sitzt jeder Ton IN der genannten Box?
-//   4. Sitzen alle vier Töne ZWISCHEN zwei Boxen: ~azimuthOffset auf
-//      +0.25 bzw. -0.25 setzen (welches von beiden, entscheidet 3. —
-//      siehe die Anleitung bei ~testAzimuth), Datei neu auswerten,
-//      3. wiederholen.
-//   5. ~testSweep.()     — wandert der Klang vorn → rechts → hinten → links?
-//      Wandert er andersherum, ~azimuthSign = -1 und zurück zu 3.
-//   6. Ergebnis in ~azimuthSign / ~azimuthOffset eintragen, Datei neu
-//      auswerten, 3. und 5. gegenprüfen.
-//   7. Die zwei Zeilen „UNGEMESSEN" durch das Messergebnis MIT DATUM
-//      ersetzen, damit der nächste nicht wieder von vorn anfängt.
-// =====================================================================
-//
+// Die Messsitzung für eine neue/geaenderte Hardware-Verkabelung ist
+// dagegen eine INTERAKTIVE: ~testChannels.(), ~testAzimuth.() und
+// ~testSweep.() werden von Hand aufgerufen, also aus der SuperCollider-IDE
+// oder aus einer sclang-REPL. Im headless-Betrieb (`sclang -D`) gibt es
+// keine Eingabezeile, aus der man sie aufrufen könnte — dort läuft die
+// Datei nur als Empfänger.
 // =====================================================================
 // OSC-STEUERBARER SOUND-PARAMETER-LAYER  (Stand 2026-07-30)
 // =====================================================================
@@ -237,7 +136,7 @@
 // (~oscListenPort, derselbe wie /net/hitNode und /net/impulse):
 //
 //   /klangnetz/param/masterVolume   0.0 .. 1.5   Default 1.0
-//     Globaler Gain NACH dem Decoder (DecodeB2), VOR dem Limiter — sitzt
+//     Globaler Gain NACH dem Panning (Pan4), VOR dem Limiter — sitzt
 //     im neuen \masterReverb-Synth (siehe unten), der genau an dieser
 //     Stelle in der Kette hängt. 1.5 statt 1.0 als Obergrenze, damit sich
 //     eine bewusst leise gemischte Szene noch anheben lässt; der Limiter
@@ -246,18 +145,26 @@
 //   /klangnetz/param/reverbMix      0.0 .. 1.0   Default 0.15
 //   /klangnetz/param/reverbRoom     0.0 .. 1.0   Default 0.5
 //   /klangnetz/param/reverbDamp     0.0 .. 1.0   Default 0.5
-//     Hall als FreeVerb NACH dem Decoder, auf den vier fertig decodierten
+//     Hall als FreeVerb NACH dem Panning, auf den vier fertigen
 //     Hardware-Kanälen (Begründung: siehe Kommentar bei \masterReverb
-//     weiter unten — kurz zusammengefasst, ein Hall VOR dem Decoder auf
-//     dem 3-kanaligen B-Format-Bus würde selbst wieder räumlich codiert
-//     und vom Decoder zu einer Phantomquelle verschmiert statt zu einem
-//     diffusen Raumklang; FreeVerb je Hardware-Kanal — durch SCs
-//     Multichannel-Expansion automatisch vier UNABHÄNGIGE Hallfahnen —
-//     ergibt eine echte, dekorrelierte Umhüllung, wie man sie von einem
-//     realen Raum erwartet). reverbMix ist der trocken/nass-Regler von
-//     FreeVerb selbst (0 = trocken, 1 = nur Hall), reverbRoom die
-//     gefühlte Raumgrösse/Nachhallzeit, reverbDamp die Höhendämpfung im
-//     Hallschweif (0 = hell/lang nachklingend, 1 = dumpf/kurz).
+//     weiter unten — kurz zusammengefasst, ein Hall VOR dem Panning
+//     würde selbst räumlich positioniert und zu einer Phantomquelle
+//     verschmiert statt zu einem diffusen Raumklang; FreeVerb je
+//     Hardware-Kanal — durch SCs Multichannel-Expansion automatisch
+//     vier UNABHÄNGIGE Hallfahnen — ergibt eine echte, dekorrelierte
+//     Umhüllung, wie man sie von einem realen Raum erwartet). reverbMix
+//     ist der trocken/nass-Regler von FreeVerb selbst (0 = trocken, 1 =
+//     nur Hall), reverbRoom die gefühlte Raumgrösse/Nachhallzeit,
+//     reverbDamp die Höhendämpfung im Hallschweif (0 = hell/lang
+//     nachklingend, 1 = dumpf/kurz).
+//
+//   /klangnetz/param/panSharpness   0.1 .. 8.0   Default 1.0
+//     Schaerfe des Panning fuer Nodes/Drohnen (~toQuad): 1.0 = reines
+//     Pan4-Verhalten (Referenzwert), > 1.0 = schaerfer/fokussierter
+//     (Boxen jenseits der Mitte werden frueher voll erreicht), < 1.0 =
+//     weicher/diffuser. Netzmitte bleibt bei JEDEM Wert exakt
+//     25/25/25/25% (siehe ~toQuad-Kommentar). Wirkt nur auf NEU
+//     getriggerte Toene/Drohnen, aus demselben Grund wie brightness.
 //
 //   /klangnetz/param/brightness     0.0 .. 2.0   Default 1.0
 //     \glockenBell: Amp-Faktor auf die VIER oberen Partialtöne (Grundton
@@ -318,14 +225,17 @@ s.options.device = "ASIO : ZOOM AMS-24 ASIO Driver";
 // einer Treiber-Vorgabe abhängt (aus der Laptop-Fassung übernommen).
 s.options.numInputBusChannels = 2;
 
-// Halbe Diagonale der Grundfläche 14 × 8 m. Ab diesem Radius ist ein Klang
-// vollständig gerichtet.
+// Halbe Diagonale der Grundfläche 14 × 8 m. Nur noch fuer ~testSweep
+// (Umlauftest) als Radius des Testkreises genutzt -- die eigentliche
+// Normierung fuer ~toQuad macht ~maxX/~maxY (siehe dort), weil Pan4 pro
+// Achse eine eigene Skalierung braucht (Rechteck, nicht Quadrat).
 ~maxRadiusM = 8.062;
 
 // Lautsprecher auf den SEITENMITTEN, nicht in den Ecken:
 //   (0, +4) vorn   (+7, 0) rechts   (0, -4) hinten   (-7, 0) links
-// Die Zuordnung zu den Hardware-Kanälen 0..3 macht DecodeB2 und ist mit
-// ~testChannels/~testAzimuth zu messen, nicht hier zu behaupten.
+// Die Zuordnung zu den Hardware-Kanälen 0..3 macht die Permutation in
+// \masterReverb und ist mit ~testChannels/~testAzimuth zu messen, nicht
+// hier zu behaupten.
 
 // Obergrenze gleichzeitiger Drohnen, als Netz unter dem oscMaxCount der
 // Processing-Seite: kommt der Strom aus einer falsch konfigurierten Quelle,
@@ -337,44 +247,19 @@ s.options.numInputBusChannels = 2;
 // durch oscMaxCount ohnehin lückenhaft ist.
 ~droneTimeout = 0.4;
 
-// ---- Die zwei gemessenen Werte (erledigt 2026-07-31) -----------------
-// Beide stehen bewusst nebeneinander, wie sie gemeinsam eingetragen
-// wurden. (~decoderOrientation weiter unten gehört NICHT dazu: gemessen
-// wirkungslos, siehe Kopf der Datei.)
+// ---- Ehemals "die zwei gemessenen Werte" (~azimuthSign/~azimuthOffset)
+// UND ~decoderOrientation ENTFALLEN KOMPLETT (UMGEBAUT 2026-07-31) --------
+// Waren Ambisonics-Encoder/Decoder-Parameter (PanB2-Azimut-Vorzeichen/
+// -Offset, DecodeB2-orientation). Mit dem Umbau auf Pan4 (siehe ~toQuad
+// weiter unten) gibt es keinen Azimut mehr -- die frueher per
+// ~azimuthOffset=-0.25 gemessene 45-Grad-Drehung UND die Hardware-Kabel-
+// Permutation sind jetzt als FESTE Formel in ~toQuad (Rotation) bzw. als
+// feste Kanal-Reihenfolge in \masterReverb (Permutation, siehe dort)
+// eingerechnet -- beide wurden nach dem Umbau per NRT-Messung NEU
+// verifiziert (nicht aus den alten Ambisonics-Werten uebernommen, weil
+// Pan4 eine andere Kanalkonvention hat als DecodeB2, siehe Skill
+// supercollider-sound-design).
 
-// GEMESSEN 2026-07-31 (Show-Rechner, Birk vor Ort). Vorzeichen des
-// Azimut von PanB2: +1 bestätigt richtig (kein Spiegel nötig).
-// Prüfen mit ~testAzimuth.() und ~testSweep.(). Nach dem Ändern MUSS die
-// Datei komplett neu ausgewertet werden: der Wert wird beim Bauen der
-// SynthDefs fest in den Graphen gerechnet, ein .set auf laufende Synths
-// erreicht ihn nicht.
-~azimuthSign = 1;
-
-// GEMESSEN 2026-07-31 (Show-Rechner, Birk vor Ort). Drehung des ganzen
-// Klangbildes, in HALBZYKLEN, addiert in ~toBformat auf den Azimut vor
-// PanB2. Nötig, weil DecodeB2 seine vier Boxen fest bei ±45°/±135°
-// annimmt (GEMESSEN 2026-07-30, siehe Kopf der Datei) und sich das über
-// sein orientation-Argument nicht verstellen lässt. Unsere Boxen stehen
-// aber auf den Seitenmitten. Also dreht der Encoder.
-//   -0.25 bestätigt richtig: "vorn" landet auf Decoder-Kanal 0, dann
-//   weiter über Kanal 1 (rechts), 2 (hinten), 3 (links) — siehe Kopf
-//   der Datei für die vollständige Messung inkl. Hardware-Kabel-
-//   Permutation (die zusätzlich zu diesem Offset nötig war).
-// Geprüft mit ~testAzimuth.() und ~testSweep.() am Show-Rechner.
-~azimuthOffset = -0.25;
-
-// GEMESSEN 2026-07-30 (scsynth NRT, SC 3.11.2, Entwicklungsrechner):
-// das orientation-Argument von DecodeB2 ist WIRKUNGSLOS — der Ausgang ist
-// für 0, 0.25, 0.5 und 1.0 bytegleich, als Graphkonstante wie als
-// Synth-Control. Gegenprobe im selben Aufbau: PanAz reagiert sofort.
-// Ausführlich mit Zahlen im Kopf der Datei.
-// Der Wert bleibt hier nur als Rückfallwert stehen, falls eine andere
-// SuperCollider-Version das Argument doch auswertet; die Drehung des
-// Klangbildes macht ~azimuthOffset oben. AUF DEM SHOW-RECHNER IST DIE
-// MESSUNG ZU WIEDERHOLEN, bevor man sich dort darauf verlässt — sie
-// stammt von einer anderen Maschine und einer möglicherweise anderen
-// SC-Version.
-~decoderOrientation = 0;
 
 // Phrygisch (Halbtonabstaende von der Grundnote): kleine Sekund statt
 // grosser Sekund als zweite Stufe -- der markanteste Unterschied zur
@@ -419,12 +304,14 @@ s.options.numInputBusChannels = 2;
 // steht meist allein.
 ~droneAmpScale = 0.06;
 
-// Haerte der Richtwirkung fuer Nodes/Drohnen (0 = normale radiusabhaengige
-// Richtwirkung, Mitte diffus/Rand gerichtet; 1 = IMMER voll gerichtet).
-// Birk vor Ort 2026-07-31: erst mal auf maximale Haerte fuer die
-// Azimuth-Testabnahme, spaeter per /klangnetz/param/directHardness live
-// zuruecknehmbar (siehe ~registerParam unten).
-~directHardness = 1.0;
+// Schaerfe des Panning fuer Nodes/Drohnen (Nachfolger von ~directHardness,
+// UMGEBAUT 2026-07-31 von Ambisonics/PanB2+DecodeB2 auf Pan4, siehe
+// ~toQuad unten fuer die Begruendung). 1.0 = reines Pan4-Verhalten
+// (Referenzwert, per NRT verifiziert), > 1.0 = schaerfer/fokussierter,
+// < 1.0 = weicher/diffuser. Wirkt ueber eine Radius-Verzerrung VOR Pan4
+// (r' = r^(1/panSharpness)) -- die Mitte bleibt bei JEDEM Wert exakt
+// 25/25/25/25% auf alle vier Boxen, weil 0^x = 0 fuer jeden Exponenten.
+~panSharpness = 1.0;
 
 // ---- OSC-Sound-Parameter-Registry --------------------------------------
 // Kleine, für DIESE Datei gebaute Registry — kein Anspruch auf
@@ -464,12 +351,15 @@ s.options.numInputBusChannels = 2;
         entry[\synth].set(\lpfMult, val);
     }) };
 });
-// directHardness wirkt nur auf NEU gestartete Synths (das Encoder-
-// Lambda ~toBformat liest die Environment-Variable bei jedem Aufruf neu,
-// aber ein bereits laufender Drohnen-Synth hat den Wert schon in seinen
-// SC-Graphen eingerechnet) -- kein onSet-Callback noetig/moeglich, wirkt
-// wie brightness/detune erst beim naechsten Treffer/neuer Drohne.
-~registerParam.(\directHardness, 1.0, 0.0, 1.0, nil);
+// panSharpness wirkt nur auf NEU gestartete Synths (das Encoder-Lambda
+// ~toQuad liest die Environment-Variable bei jedem Aufruf neu, aber ein
+// bereits laufender Drohnen-Synth hat den Wert schon in seinen SC-Graphen
+// eingerechnet) -- kein onSet-Callback noetig/moeglich, wirkt wie
+// brightness/detune erst beim naechsten Treffer/neuer Drohne. Range 0.1..8:
+// unter 0.1 wird die Radius-Verzerrung numerisch instabil (r^10 bei r nahe
+// 0), ueber 8 ist am realen Setup kaum noch ein Unterschied hoerbar
+// (Ecke ist ohnehin schon bei jedem Wert 100% scharf, siehe ~toQuad).
+~registerParam.(\panSharpness, 1.0, 0.1, 8.0, nil);
 
 s.waitForBoot({
     // ---- Alten Aufbau abräumen ---------------------------------------
@@ -479,7 +369,7 @@ s.waitForBoot({
     // alte B-Format-Bus bliebe belegt.
     //
     // Die zwei OSC-Empfänger ZUERST abmelden: sie werden weiter unten neu
-    // angelegt, und dazwischen sind ~drones und ~bformatBus nil. Käme in
+    // angelegt, und dazwischen sind ~drones und ~quadBus nil. Käme in
     // diesem Fenster eine Meldung von imPulse, liefe der alte Handler in
     // einen Fehler auf nil.
     ~netHitNodeOscFunc !? { |f| f.free };
@@ -489,10 +379,8 @@ s.waitForBoot({
     ~droneReaper !? { |r| r.stop };
     ~paramOscDefs !? { |defs| defs.do({ |d| d.free }) };
     ~masterReverbSyn !? { |syn| syn.free };
-    ~decoderSyn  !? { |syn| syn.free };
     ~voices      !? { |g| g.free };   // frei macht auch alle Stimmen darin
-    ~bformatBus  !? { |b| b.free };
-    ~decodedBus  !? { |b| b.free };
+    ~quadBus     !? { |b| b.free };
     ~drones = nil;
     // Liste aktiver Glocken zuruecksetzen: ~voices.free oben hat alle
     // Stimmen mitgenommen, die Synth-Referenzen darin sind also ungueltig.
@@ -500,52 +388,59 @@ s.waitForBoot({
     // verschwundene Nodes freizugeben.
     ~activeBells = List.new;
 
-    // B-Format-Bus: 2D erster Ordnung, drei Kanäle W X Y. Alle Klangobjekte
-    // schreiben hier hinein, EIN Decoder-Synth am Ende macht daraus die vier
-    // Lautsprecherkanäle.
-    ~bformatBus = Bus.audio(s, 3);
-    // 4-kanaliger Zwischenbus zwischen \b2Decoder und \masterReverb — siehe
-    // Begründung der Kettenreihenfolge beim \masterReverb-SynthDef.
-    ~decodedBus = Bus.audio(s, 4);
+    // Vier-Kanal-Bus: Pan4 schreibt direkt darauf, kein Zwischen-B-Format
+    // mehr noetig (UMGEBAUT 2026-07-31, siehe ~toQuad unten). Vorher gab es
+    // hier einen 3-kanaligen B-Format-Bus (W/X/Y) plus einen separaten
+    // \b2Decoder-Synth, der daraus die vier Lautsprecherkanaele machte --
+    // beides entfaellt, weil Pan4 schon die vier fertigen Kanaele liefert.
+    ~quadBus = Bus.audio(s, 4);
     ~voices = Group.new;
 
-    // ---- Position -> B-Format ----------------------------------------
-    // Aus einer Position in Metern wird B-Format. Zwei Grössen:
+    // ---- Position -> Vierkanal-Pan (Pan4) -----------------------------
+    // UMGEBAUT 2026-07-31 (Birk vor Ort, nach der Azimuth-Testabnahme):
+    // ersetzt die Ambisonics-Kette (PanB2-Encoder + EIN DecodeB2-Decoder,
+    // 3-kanaliger B-Format-Bus) durch SCs Core-UGen Pan4. Grund: Ambisonics
+    // 1. Ordnung ist ein DIFFUSIONS-Verfahren -- eine Punktquelle streut bei
+    // voller Richtwirkung IMMER auf alle vier Kanaele (gemessen: dominanter
+    // Kanal nur ~43% der Gesamtenergie, siehe Kopf der Datei und
+    // docs/ambisonics-sharper-panning-optionen.md). Das lohnt sich nur bei
+    // FLEXIBLEM Lautsprecher-Layout -- unser Setup ist fest, 4 Boxen, feste
+    // Positionen. Pan4 ist SCs eingebauter Vierkanal-Panner fuer genau
+    // diesen Fall, verifiziert per NRT-Messung (Hermes-vServer, 2026-07-31,
+    // siehe Skill supercollider-sound-design fuer die Methodik):
+    //   Position exakt in einer Boxecke -> 100% auf genau dieser Box
+    //   Position exakt in der Netzmitte -> exakt 25/25/25/25% (automatisch,
+    //     kein separater Diffus-Crossfade noetig, reiner Nebeneffekt der
+    //     Equal-Power-Geometrie von Pan4)
     //
-    //   azimuth in Halbzyklen, 0 = vorn. Unser System hat X nach rechts und
-    //   Y nach vorn, PanB2 zählt von vorn — daher x.atan2(y), NICHT
-    //   y.atan2(x). Vorzeichen und Nullpunkt sind ungemessen, siehe
-    //   ~azimuthSign oben.
+    // Pan4 erwartet xpos/ypos NORMIERT auf -1..1, mit den vier Kanaelen an
+    // den ECKEN eines Quadrats (LeftFront, RightFront, LeftBack, RightBack
+    // -- eine ANDERE Konvention als DecodeB2s azimutbasierte Kanaele!).
+    // Unsere Boxen stehen aber auf den SEITENMITTEN eines 14x8m-Rechtecks,
+    // nicht in den Ecken. Fix, verifiziert per NRT (siehe Skill): erst
+    // JE ACHSE durch die halbe Boxdistanz normieren (7m bzw. 4m, siehe
+    // ~maxX/~maxY unten), DANN eine 45-Grad-Rotation OHNE zusaetzliche
+    // Normierung (xr = xn - yn, yr = xn + yn) -- das dreht eine Box exakt
+    // in Pan4s Eckenkoordinatensystem (Betrag erreicht dabei automatisch
+    // +-1, keine sqrt(2)-Korrektur noetig, das war eine erste Fehlannahme
+    // beim Verifizieren und ist in der NRT-Messung dokumentiert).
     //
-    //   ~azimuthOffset dreht das ganze Klangbild, hier und nur hier. Die
-    //   Drehung gehört in den ENCODER, weil das orientation-Argument des
-    //   Decoders gemessen wirkungslos ist (siehe Kopf der Datei). Kein
-    //   wrap nötig: PanB2 wickelt den Azimut selbst um ±1 herum, ebenfalls
-    //   gemessen.
-    //
-    //   direct = Richtwirkung. Bei erster Ordnung IST die Richtwirkung das
-    //   Verhältnis der X/Y-Anteile zum W-Anteil, eine Multiplikation genügt
-    //   also. Bei direct = 0 bleibt nur der omnidirektionale Anteil und der
-    //   Klang kommt aus allen vier Boxen — genau richtig für einen Knoten
-    //   senkrecht über der Netzmitte, der nicht aus einer Richtung kommen
-    //   soll, sondern von überall. Am Rand wird er zur ebenen Welle.
-    //
-    //   Keine Abstandsdämpfung: ein Knoten am Netzrand soll nicht leiser
-    //   sein als einer in der Mitte, die Lautstärke kommt allein aus energy.
-    ~toBformat = { |sig, px, py|
-        var azimuth, radius, direct, bf;
-        azimuth = ((px * ~azimuthSign).atan2(py) / pi) + ~azimuthOffset;
-        radius  = px.hypot(py);
-        // ~directHardness: 0 = normale radiusabhaengige Richtwirkung
-        // (Mitte diffus, Rand voll gerichtet, urspruengliches Verhalten),
-        // 1 = IMMER voll gerichtet (direct=1), egal wie nah an der
-        // Netzmitte. Birk vor Ort 2026-07-31: "erst mal mit maximaler
-        // Haerte" fuer die Testabnahme -- linear interpoliert per
-        // ~registerParam, damit spaeter live zwischen beiden Extremen
-        // gefahren werden kann (siehe /klangnetz/param/directHardness).
-        direct  = ((radius / ~maxRadiusM).clip(0, 1)).blend(1, ~directHardness);
-        bf = PanB2.ar(sig, azimuth, 1);
-        [bf[0], bf[1] * direct, bf[2] * direct]
+    // ~panSharpness (Nachfolger von ~directHardness) verzerrt den Radius
+    // VOR der Rotation: r' = r^(1/panSharpness). Bei r=0 (Netzmitte) bleibt
+    // das Ergebnis bei jedem Sharpness-Wert 0 -- die automatische
+    // Diffusitaet in der Mitte bleibt also in jedem Fall erhalten.
+    ~maxX = 7.0;  // halbe Breite der Grundflaeche (rechts/links-Boxabstand)
+    ~maxY = 4.0;  // halbe Tiefe der Grundflaeche (vorn/hinten-Boxabstand)
+    ~toQuad = { |sig, px, py|
+        var xn, yn, r, angle, rWarped, xw, yw;
+        xn = px / ~maxX;
+        yn = py / ~maxY;
+        r = xn.hypot(yn);
+        angle = xn.atan2(yn);
+        rWarped = r.pow(1.0 / ~panSharpness);
+        xw = rWarped * angle.sin;
+        yw = rWarped * angle.cos;
+        Pan4.ar(sig, (xw - yw), (xw + yw), 1.0)
     };
 
     // ---- SynthDef: Glockenspiel-Ton ----------------------------------
@@ -609,7 +504,7 @@ s.waitForBoot({
 
         sig = (bellSig + grit) * amp;
         // Position je Ton fest — eine Glocke wandert nicht. Kein Lag nötig.
-        Out.ar(out, ~toBformat.(sig, x, y));
+        Out.ar(out, ~toQuad.(sig, x, y));
     }).add;
 
     // ---- SynthDef: Drohne eines reisenden Impulses --------------------
@@ -638,35 +533,23 @@ s.waitForBoot({
         sig = LFTri.ar(freq) * 0.5 + SinOsc.ar(freq * 2.01, 0, 0.2);
         sig = LPF.ar(sig, freq * lpfMultLagged);
         sig = sig * ampl * env;
-        Out.ar(out, ~toBformat.(sig, xl, yl));
+        Out.ar(out, ~toQuad.(sig, xl, yl));
     }).add;
 
-    // ---- SynthDef: der eine Decoder ----------------------------------
-    // Genau EIN Decoder am Ende der Kette. Das orientation-Argument ist auf
-    // SC 3.11.2 gemessen WIRKUNGSLOS (siehe Kopf der Datei) — es bleibt
-    // verdrahtet, damit sich die Messung vor Ort mit ~setOrientation.() in
-    // einem Aufruf nachhören lässt. Gedreht wird das Klangbild woanders,
-    // nämlich mit ~azimuthOffset im Encoder.
-    //
-    // Schreibt NICHT mehr direkt auf die Hardware-Kanäle (Out.ar(0, ...)),
-    // sondern auf ~decodedBus — dazwischen hängt jetzt \masterReverb (Hall +
-    // Master-Volume + Limiter), siehe dort für die Begründung der Reihenfolge.
-    SynthDef(\b2Decoder, { |in = 0, orientation = 0, amp = 1, out = 0|
-        var bf, sig;
-        bf  = In.ar(in, 3);
-        sig = DecodeB2.ar(4, bf[0], bf[1], bf[2], orientation) * amp;
-        Out.ar(out, sig);
-    }).add;
+    // \b2Decoder ENTFAELLT (UMGEBAUT 2026-07-31): war der Ambisonics-
+    // Decoder (DecodeB2), der aus dem 3-kanaligen B-Format vier
+    // Lautsprecherkanaele machte. Pan4 liefert die vier Kanaele bereits
+    // direkt (siehe ~toQuad), ein separater Decoder-Synth ist ueberfluessig.
 
     // ---- SynthDef: Master-Volume + Reverb + Limiter --------------------
-    // Fester Anschlusspunkt NACH dem Decoder, auf den vier fertig
-    // decodierten Hardware-Kanälen — bewusst NICHT auf dem 3-kanaligen
-    // B-Format-Bus davor. Zwei Gründe:
+    // Fester Anschlusspunkt auf den vier fertigen Lautsprecherkanaelen
+    // (~quadBus, direkt von Pan4 beschrieben) — bewusst NICHT VOR dem
+    // Panning. Zwei Gründe:
     //
-    //  1. Ein Hall VOR dem Decoder würde selbst als B-Format kodiert
-    //     (PanB2 kennt nur Punktquellen, kein FreeVerb-Ausgang ist eine
-    //     solche) und beim Decodieren wieder zu einer einzigen Phantom-
-    //     richtung verschmiert statt zu einem diffusen, allseitigen
+    //  1. Ein Hall VOR dem Panning würde selbst räumlich positioniert
+    //     (Pan4 kennt nur Punktquellen, kein FreeVerb-Ausgang ist eine
+    //     solche) und dadurch zu einer einzigen Phantomrichtung
+    //     verschmiert statt zu einem diffusen, allseitigen
     //     Raumklang — das Gegenteil von dem, was ein Hall leisten soll.
     //  2. NACH dem Decoder liegen schon vier UNABHÄNGIGE Kanäle vor. Ein
     //     FreeVerb je Kanal (durch SCs Multichannel-Expansion automatisch
@@ -718,28 +601,30 @@ s.waitForBoot({
         sig = Limiter.ar(sig, 0.95, 0.01);
         // GEMESSEN 2026-07-31 (Show-Rechner, Birk vor Ort): die Hardware-
         // Verkabelung des ZOOM AMS-24 ist KEINE einfache Rotation der
-        // Decoder-Kanal-Reihenfolge, sondern eine echte Vertauschung.
+        // Panner-Kanal-Reihenfolge, sondern eine echte Vertauschung.
         // Gemessene Kabel-Zuordnung (per \channelTest auf jedem
         // Hardware-Kanal einzeln, Birk hat pro Kanal die klingende Box
         // benannt): hw0=rechts, hw1=links, hw2=hinten, hw3=vorn.
-        // Bei ~azimuthOffset = -0.25 liefert der Decoder seine vier
-        // logischen Kanaele in der Reihenfolge D0=vorn, D1=rechts,
-        // D2=hinten, D3=links (siehe ~azimuthOffset-Kommentar oben, per
-        // NRT-Sweep auf dem Hermes-vServer bestaetigt). Diese zwei
-        // Zuordnungen zusammen ergeben eine reine Kanal-Permutation vor
-        // dem Hardware-Output — kein weiterer Dreh-Offset kann das
-        // abbilden, weil hw0/hw1 und D0/D1 in UNTERSCHIEDLICHER
-        // Reihenfolge um den Kreis laufen:
-        //   hw0 (rechts) <- D1
-        //   hw1 (links)  <- D3
-        //   hw2 (hinten) <- D2
-        //   hw3 (vorn)   <- D0
+        //
+        // UMGEBAUT 2026-07-31 (Ambisonics -> Pan4, siehe ~toQuad): Pan4
+        // liefert seine vier Kanaele in der FESTEN Reihenfolge
+        // [vorn, rechts, links, hinten] (das ist NICHT dieselbe Konvention
+        // wie DecodeB2s azimutbasierte Kanaele -- die alte Permutation
+        // unten war fuer DecodeB2 gemessen und wurde NEU per NRT-Messung
+        // verifiziert, nicht 1:1 uebernommen, siehe Skill
+        // supercollider-sound-design). Verifiziert (Hermes-vServer,
+        // Score.recordNRT, alle vier Boxpositionen einzeln getestet):
+        // sig[0]=vorn, sig[1]=rechts, sig[2]=links, sig[3]=hinten ->
+        //   hw0 (rechts) <- sig[1]
+        //   hw1 (links)  <- sig[2]
+        //   hw2 (hinten) <- sig[3]
+        //   hw3 (vorn)   <- sig[0]
         // AUF EINEM ANDEREN INTERFACE/BEI ANDERER VERKABELUNG NEU MESSEN
         // (siehe klangnetz-remote-control Skill, Abschnitt "Schicht 0" für
         // den Kanaltest-Workflow) — diese Permutation ist an das ZOOM
         // AMS-24 und seine aktuelle Verkabelung gebunden, keine
-        // allgemeine Ambisonics-Eigenschaft.
-        permuted = [sig[1], sig[3], sig[2], sig[0]];
+        // allgemeine Pan4-Eigenschaft.
+        permuted = [sig[1], sig[2], sig[3], sig[0]];
         Out.ar(out, permuted);
     }).add;
 
@@ -755,73 +640,56 @@ s.waitForBoot({
     // ---- SynthDef: Rausch-Testton DURCH den echten Encoder -------------
     // Für die Azimuth-Testabnahme per OSC (kein REPL-Zugriff vor Ort
     // nötig, siehe /klangnetz/test/noise unten). Läuft durch denselben
-    // ~toBformat-Encoder wie Glocken/Drohnen — Rauschen ist deutlich
+    // ~toQuad-Encoder wie Glocken/Drohnen — Rauschen ist deutlich
     // leichter zu orten als ein Sinuston.
     SynthDef(\noiseBformat, { |amp = 0.4, out = 0, x = 0, y = 0|
         var sig, env;
         env = EnvGen.kr(Env.linen(0.05, 1.5, 0.3), doneAction: 2);
         sig = PinkNoise.ar(1) * amp * env;
-        Out.ar(out, ~toBformat.(sig, x, y));
+        Out.ar(out, ~toQuad.(sig, x, y));
     }).add;
 
     // ---- SynthDef: Rausch-Testton HART gepannt (voll gerichtet) --------
     // Fuer die Testabnahme deutlicher als \noiseBformat: erzwingt
-    // direct = 1 unabhaengig vom Radius, damit auch eine Position nahe
-    // der Netzmitte (kleiner Radius, normalerweise diffus) genauso
-    // scharf geortet werden kann wie eine Position am Rand. Nur fuer
-    // Testzwecke -- Nodes/Drohnen behalten die normale, radiusabhaengige
-    // Richtwirkung ueber ~toBformat.
+    // panSharpness = 8 (Maximum) unabhaengig vom registrierten Live-Wert,
+    // damit auch eine Position nahe der Netzmitte (normalerweise diffus)
+    // genauso scharf geortet werden kann wie eine Position am Rand. Nur
+    // fuer Testzwecke -- Nodes/Drohnen behalten die normale, per
+    // ~panSharpness einstellbare Richtwirkung ueber ~toQuad.
     SynthDef(\noiseBformatHard, { |amp = 0.4, out = 0, x = 0, y = 0|
-        var sig, env, azimuth, bf;
+        var sig, env, xn, yn, r, angle, xw, yw;
         env = EnvGen.kr(Env.linen(0.05, 1.5, 0.3), doneAction: 2);
         sig = PinkNoise.ar(1) * amp * env;
-        azimuth = ((x * ~azimuthSign).atan2(y) / pi) + ~azimuthOffset;
-        bf = PanB2.ar(sig, azimuth, 1);
-        Out.ar(out, bf); // direct = 1, kein radiusabhaengiges Daempfen von bf[1]/bf[2]
+        xn = x / ~maxX;
+        yn = y / ~maxY;
+        r = xn.hypot(yn);
+        angle = xn.atan2(yn);
+        // panSharpness fest 8 (Maximum) statt ueber ~toQuad/Live-Wert --
+        // siehe Kommentar oben.
+        xw = r.pow(1.0 / 8.0) * angle.sin;
+        yw = r.pow(1.0 / 8.0) * angle.cos;
+        Out.ar(out, Pan4.ar(sig, (xw - yw), (xw + yw), 1.0));
     }).add;
 
     s.sync;
 
-    // ---- Decoder starten ---------------------------------------------
-    // Der Decoder MUSS hinter den Stimmen laufen, sonst decodiert er einen
-    // Bus, in den sie im selben Block noch nicht geschrieben haben.
-    ~decoderSyn = Synth.after(~voices, \b2Decoder, [
-        \in, ~bformatBus.index, \orientation, ~decoderOrientation, \out, ~decodedBus.index
-    ]);
-
     // ---- Master-Volume + Reverb starten --------------------------------
-    // MUSS hinter dem Decoder laufen (derselbe Grund wie oben: sonst liest
-    // er ~decodedBus, bevor \b2Decoder im selben Block hineingeschrieben
-    // hat) und ist der letzte Synth vor der Hardware — Out.ar(0, ...) im
-    // SynthDef selbst.
-    ~masterReverbSyn = Synth.after(~decoderSyn, \masterReverb, [
-        \in, ~decodedBus.index, \out, 0,
+    // Direkt hinter allen Stimmen -- Pan4 schreibt bereits die vier
+    // fertigen Lautsprecherkanaele auf ~quadBus, ein separater
+    // Decoder-Synth (wie vorher \b2Decoder) ist nicht mehr noetig.
+    ~masterReverbSyn = Synth.after(~voices, \masterReverb, [
+        \in, ~quadBus.index, \out, 0,
         \masterVolume, ~masterVolume, \reverbMix, ~reverbMix,
         \reverbRoom, ~reverbRoom, \reverbDamp, ~reverbDamp
     ]);
 
-    // orientation zur Laufzeit umstellen. Bewusst über Neuanlegen statt über
-    // .set: DecodeB2 rechnet die Lautsprecherwinkel möglicherweise beim Start
-    // des Synths aus, und ob ein .set sie noch erreicht, ist ungeprüft. Neu
-    // anlegen wirkt in jedem Fall.
-    //
-    // ACHTUNG: auf SC 3.11.2 ändert das GAR NICHTS — gemessen, siehe Kopf
-    // der Datei; auch das Neuanlegen half dort nicht, weil schon die
-    // Graphkonstante keine Wirkung hatte. Diese Funktion ist deshalb KEIN
-    // Werkzeug mehr, um eine 45°-Drehung zu beheben (das macht
-    // ~azimuthOffset). Sie ist genau noch für eines gut: die Messung auf
-    // dem Show-Rechner nachzuhören. Ändert sich beim Aufruf hörbar etwas,
-    // dann wertet die dortige SuperCollider-Version das Argument doch aus
-    // und die Messung von 2026-07-30 gilt dort nicht — das wäre ein Befund,
-    // der in diese Datei gehört.
-    ~setOrientation = { |o|
-        ~decoderOrientation = o;
-        ~decoderSyn.free;
-        ~decoderSyn = Synth.after(~voices, \b2Decoder, [
-            \in, ~bformatBus.index, \orientation, ~decoderOrientation, \out, ~decodedBus.index
-        ]);
-        ("Decoder neu angelegt mit orientation = %".format(o)).postln;
-    };
+    // ~setOrientation/~decoderOrientation ENTFALLEN (UMGEBAUT 2026-07-31):
+    // waren ein Werkzeug fuer DecodeB2s orientation-Argument, das ohnehin
+    // gemessen wirkungslos war (siehe Kopf der Datei). Pan4 kennt kein
+    // Orientation-Argument -- die Drehung des Klangbilds passiert jetzt
+    // vollstaendig ueber die feste 45-Grad-Rotation in ~toQuad (das ist
+    // KEINE live nachstellbare Drehung mehr, weil unser Setup nur eine
+    // einzige, gemessene Boxanordnung hat, keine variable Aufstellung).
 
     // ---- Drohnenverwaltung -------------------------------------------
     // Impuls-ID -> (synth: ..., lastSeen: ...)
@@ -860,7 +728,7 @@ s.waitForBoot({
                 ~drones[id] = (
                     synth: Synth(\impulseDrone, [
                         \freq, ~droneFreq.(id), \x, px, \y, py,
-                        \amp, amp, \out, ~bformatBus.index, \lpfMult, ~droneLpfMult
+                        \amp, amp, \out, ~quadBus.index, \lpfMult, ~droneLpfMult
                     ], ~voices),
                     lastSeen: Main.elapsedTime
                 );
@@ -930,7 +798,7 @@ s.waitForBoot({
         // Die frühere Zufalls-Panoramisierung entfällt: sie war der
         // Platzhalter für genau diese Knotenposition.
         newBell = Synth(\glockenBell, [
-            \freq, freq, \amp, amp, \x, px, \y, py, \out, ~bformatBus.index,
+            \freq, freq, \amp, amp, \x, px, \y, py, \out, ~quadBus.index,
             \brightness, ~brightness, \detune, ~detune
         ], ~voices);
         ~activeBells.add(newBell);
@@ -955,7 +823,7 @@ s.waitForBoot({
     ~noiseTestOscFunc = OSCFunc({ |msg|
         var px = msg[1].asFloat, py = msg[2].asFloat;
         var amp = if (msg.size > 3) { msg[3].asFloat } { 0.4 };
-        Synth(\noiseBformat, [\amp, amp, \x, px, \y, py, \out, ~bformatBus.index], ~voices);
+        Synth(\noiseBformat, [\amp, amp, \x, px, \y, py, \out, ~quadBus.index], ~voices);
         ("testNoise bei (%, %) m, amp %".format(px.round(0.01), py.round(0.01), amp)).postln;
     }, '/klangnetz/test/noise', recvPort: ~oscListenPort);
 
@@ -967,7 +835,7 @@ s.waitForBoot({
     ~noiseTestHardOscFunc = OSCFunc({ |msg|
         var px = msg[1].asFloat, py = msg[2].asFloat;
         var amp = if (msg.size > 3) { msg[3].asFloat } { 0.4 };
-        Synth(\noiseBformatHard, [\amp, amp, \x, px, \y, py, \out, ~bformatBus.index], ~voices);
+        Synth(\noiseBformatHard, [\amp, amp, \x, px, \y, py, \out, ~quadBus.index], ~voices);
         ("testNoiseHard bei (%, %) m, amp %".format(px.round(0.01), py.round(0.01), amp)).postln;
     }, '/klangnetz/test/noiseHard', recvPort: ~oscListenPort);
 
@@ -1014,7 +882,8 @@ s.waitForBoot({
     // Alle drei brauchen die vier angeschlossenen Lautsprecher. Grundsatz:
     // erst 1., dann 2., dann 3. — ohne 1. lässt sich das Ergebnis von 2.
     // nicht auswerten, weil dann unklar bleibt, ob eine falsche Richtung an
-    // der Verkabelung oder an DecodeB2 liegt.
+    // der Verkabelung oder an der Rotation/Permutation in ~toQuad/
+    // \masterReverb liegt.
 
     // ---- 1. Kanalreihenfolge: welche Box hängt an welchem Kanal? -----
     // Rauschen nacheinander auf die Hardware-Kanäle 0, 1, 2, 3, je 1,2 s,
@@ -1038,75 +907,44 @@ s.waitForBoot({
         }).play;
     };
 
-    // ---- 2. Azimut: kommt „rechts" von rechts? -----------------------
-    // Ein Glockenton nacheinander an den vier Lautsprecherpositionen, je
-    // 1,5 s, die Richtung erscheint auf der Konsole.
+    // ---- 2. Position: kommt „rechts" von rechts? -----------------------
+    // UMGEBAUT 2026-07-31 (Ambisonics -> Pan4): kein Azimut/Offset mehr,
+    // die Rotation+Permutation ist FEST in ~toQuad bzw. \masterReverb
+    // eingerechnet und per NRT-Messung verifiziert (siehe Skill
+    // supercollider-sound-design). Dieser Test bleibt als GEGENPROBE am
+    // echten Geraet nuetzlich, meldet aber keine "was aendern"-Anleitung
+    // mehr -- eine Abweichung hier bedeutet, dass sich die Verkabelung
+    // seit der letzten NRT-Messung geaendert hat (channelTest wiederholen,
+    // Permutation in \masterReverb neu herleiten).
     //
-    // ERWARTUNG, wenn beide Werte stimmen: der Ton kommt jeweils aus genau
-    // der Box, deren Name auf der Konsole steht.
-    //
-    // WAS ZU ÄNDERN IST:
-    //  * „rechts" kommt aus der LINKEN Box und „links" aus der rechten,
-    //    vorn und hinten stimmen  ->  Azimut ist gespiegelt:
-    //    ~azimuthSign = -1 setzen und die Datei neu auswerten.
-    //  * jeder der vier Töne sitzt ZWISCHEN zwei Boxen, um 45° verdreht
-    //    ->  das ist der ERWARTETE Ausgangszustand bei ~azimuthOffset = 0,
-    //    kein Defekt: DecodeB2 stellt seine Boxen fest auf ±45°/±135°,
-    //    unsere stehen auf den Seitenmitten (gemessen, siehe Kopf der
-    //    Datei). Abhilfe ist ~azimuthOffset, NICHT ~setOrientation — das
-    //    ist auf SC 3.11.2 wirkungslos. Welche der beiden 45°-Drehungen es
-    //    braucht, sagt der Test selbst:
-    //      - „vorn" sitzt zwischen der vorderen und der RECHTEN Box
-    //        (also im Uhrzeigersinn zu weit)  ->  ~azimuthOffset = -0.25
-    //      - „vorn" sitzt zwischen der vorderen und der LINKEN Box
-    //        (gegen den Uhrzeigersinn zu weit)  ->  ~azimuthOffset = +0.25
-    //    Danach die Datei NEU AUSWERTEN (der Wert steht fest im Graphen,
-    //    ein .set erreicht ihn nicht) und diesen Test wiederholen: jetzt
-    //    muss jeder Ton IN der genannten Box stehen.
-    //    Bei ~azimuthOffset = 0 klingen alle vier Töne gleich diffus; bei
-    //    richtig gesetztem Offset klingen sie deutlich punktförmiger — das
-    //    ist neben der Richtung das zweite Merkmal, an dem man es hört.
-    //  * die Richtungen sind um 90° oder 180° verdreht, aber nicht
-    //    gespiegelt und nicht um 45° verschoben  ->  das ist die
-    //    Verkabelung, nicht die Rechnung: mit dem Ergebnis von 1. die
-    //    Boxen umstecken. (Eine 45°-Drehung dagegen bekommt man durch
-    //    Umstecken NIE weg — dafür ist ~azimuthOffset da.)
-    //
-    // Zu erwarten und KEIN Fehler: „vorn" und „hinten" klingen diffuser als
-    // „rechts" und „links". Die Boxen stehen bei (0, ±4) und (±7, 0), und
-    // direct = radius / ~maxRadiusM ist damit 4/8.062 ≈ 0.50 gegen
-    // 7/8.062 ≈ 0.87 — vorn und hinten sind absichtlich nur halb gerichtet.
-    // Für die Frage nach dem Vorzeichen (links/rechts) ist das unerheblich;
-    // wer es eindeutiger braucht, nimmt 3.
+    // ERWARTUNG: der Ton kommt jeweils aus genau der Box, deren Name auf
+    // der Konsole steht, und praktisch scharf (Pan4 an einer Boxposition
+    // liefert 100% auf einem Kanal, siehe ~toQuad-Kommentar).
     ~testAzimuth = {
         Routine({
-            "== Azimuttest: kommt der Ton aus der genannten Box? ==".postln;
+            "== Positionstest: kommt der Ton aus der genannten Box? ==".postln;
             [[0, 4, "vorn"], [7, 0, "rechts"], [0, -4, "hinten"], [-7, 0, "links"]].do({ |p|
                 p[2].postln;
                 Synth(\glockenBell, [\freq, 440, \amp, 0.3, \x, p[0], \y, p[1],
-                    \out, ~bformatBus.index], ~voices);
+                    \out, ~quadBus.index], ~voices);
                 1.5.wait;
             });
-            ("== Azimuttest fertig (azimuthSign = %, azimuthOffset = %) ==".format(
-                ~azimuthSign, ~azimuthOffset)).postln;
+            "== Positionstest fertig ==".postln;
         }).play;
     };
 
     // ---- 3. Umlauf: in welche Richtung wandert der Klang? ------------
     // Eine Drohne läuft in 8 s einmal ganz herum, in 64 Schritten, auf einem
-    // Kreis mit Radius ~maxRadiusM. Voller Radius mit Absicht: so ist
-    // direct = 1 auf dem ganzen Weg und die Richtwirkung ändert sich
-    // unterwegs nicht — der Kreis liegt damit ausserhalb der Grundfläche,
-    // was für einen Testton egal ist und die Ortung am saubersten macht.
+    // Kreis mit Radius ~maxRadiusM (nicht mehr genau kreisfoermig in
+    // Pan4-Koordinaten -- ~toQuad normiert x/y unabhaengig ueber ~maxX/
+    // ~maxY, ein Kreis in Metern wird dadurch zur Ellipse in Pan4s
+    // Koordinatensystem. Fuer diesen Test unerheblich: er prueft nur die
+    // UMLAUFRICHTUNG, keine exakte Kreisform).
     //
-    // ERWARTUNG, wenn ~azimuthSign stimmt: der Klang wandert
+    // ERWARTUNG: der Klang wandert
     //   vorn -> rechts -> hinten -> links -> vorn,
     // also IM UHRZEIGERSINN von oben gesehen. Die Konsole meldet die vier
     // Viertelpunkte, während er sie passiert.
-    //
-    // WAS ZU ÄNDERN IST: wandert er stattdessen vorn -> links -> hinten ->
-    // rechts (gegen den Uhrzeigersinn), ist das Vorzeichen umgekehrt:
-    // ~azimuthSign = -1 setzen und die Datei neu auswerten.
     //
     // Dieser Test ist der verlässlichere von beiden: eine Bewegungsrichtung
     // hört man auch dann noch eindeutig, wenn eine einzelne Position sich
@@ -1127,7 +965,7 @@ s.waitForBoot({
             "== Umlauftest: erwartet vorn -> rechts -> hinten -> links ==".postln;
             syn = Synth(\impulseDrone, [
                 \freq, 220, \amp, 0.15, \x, 0, \y, ~maxRadiusM,
-                \out, ~bformatBus.index
+                \out, ~quadBus.index
             ], ~voices);
             ~sweepSyn = syn;
             steps.do({ |i|
@@ -1140,20 +978,17 @@ s.waitForBoot({
             syn.set(\gate, 0);
             ~sweepSyn = nil;
             ~sweepRoutine = nil;
-            ("== Umlauftest fertig (azimuthSign = %, azimuthOffset = %) ==".format(
-                ~azimuthSign, ~azimuthOffset)).postln;
+            "== Umlauftest fertig ==".postln;
         }).play;
     };
 
-    "KlangNetz Hang-Drum-Bells (Phrygisch ab A2, Ambisonics 2D auf % Kanaele, Limiter): hoere auf /net/hitNode und /net/impulse, Port % - bereit.".format(
+    "KlangNetz Hang-Drum-Bells (Phrygisch ab A2, Pan4 auf % Kanaele, Limiter): hoere auf /net/hitNode und /net/impulse, Port % - bereit.".format(
         s.options.numOutputBusChannels, ~oscListenPort).postln;
     ("Polyphonie: hoechstens % Glocken und % Drohnen gleichzeitig.".format(
         ~maxPolyphony, ~droneLimit)).postln;
     ("Sound-Parameter-Layer aktiv: % Parameter unter /klangnetz/param/<name>, Port % - siehe Adressliste im Kopf der Datei.".format(
         ~params.size, ~oscListenPort)).postln;
-    ("KlangNetz: Azimuth gemessen (azimuthSign=%, azimuthOffset=%, Hardware-Kanal-Permutation aktiv) - alle vier Positionen am Show-Rechner bestaetigt.".format(
-        ~azimuthSign, ~azimuthOffset)).postln;
-    "HINWEIS: ~decoderOrientation ist auf SC 3.11.2 GEMESSEN wirkungslos (NRT-Messung 2026-07-30, Gegenprobe mit PanAz). Gedreht wird mit ~azimuthOffset im Encoder - bestaetigt auch am Show-Rechner 2026-07-31.".postln;
+    "KlangNetz: Panning auf Pan4 umgebaut (2026-07-31), Rotation+Hardware-Kanal-Permutation per NRT-Messung verifiziert - alle vier Boxpositionen 100% scharf, Netzmitte 25/25/25/25%.".postln;
 });
 )
 
@@ -1173,11 +1008,11 @@ s.waitForBoot({
 // NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/brightness", 1.8);
 // NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/detune", 0.0);
 // NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/droneLpfMult", 2.0);
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/panSharpness", 3.0);
 // )
 
-// ---- Messung der zwei ungemessenen Werte -------------------------------
-// Der Reihe nach auswerten, Ergebnis oben in ~azimuthSign und
-// ~azimuthOffset eintragen. Ausführlich kommentiert bei den Funktionen
+// ---- Kanal-/Positionstest (bei neuer/geaenderter Verkabelung) ---------
+// Der Reihe nach auswerten. Ausführlich kommentiert bei den Funktionen
 // oben im Block. Braucht eine INTERAKTIVE Sitzung (IDE oder sclang-REPL) —
 // headless unter `sclang -D` gibt es nichts, woraus man das aufruft.
 // (
@@ -1188,14 +1023,6 @@ s.waitForBoot({
 // )
 // (
 // ~testSweep.();
-// )
-// Nur noch als Gegenprobe der NRT-Messung auf dem Show-Rechner: ändert der
-// folgende Aufruf HÖRBAR etwas, wertet die dortige SuperCollider-Version das
-// orientation-Argument von DecodeB2 doch aus und die Messung von 2026-07-30
-// gilt dort nicht. Zum Beheben einer 45°-Drehung taugt er NICHT — dafür ist
-// ~azimuthOffset da.
-// (
-// ~setOrientation.(0.5);
 // )
 
 // ---- Aufräumen -----------------------------------------------------
