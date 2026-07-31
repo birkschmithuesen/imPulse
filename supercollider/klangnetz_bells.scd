@@ -144,6 +144,15 @@
 //     eine bewusst leise gemischte Szene noch anheben lässt; der Limiter
 //     dahinter fängt das ab, bevor es hart clippt.
 //
+//   /klangnetz/param/bellVolume     0.0 .. 1.5   Default 1.0
+//   /klangnetz/param/droneVolume    0.0 .. 1.5   Default 1.0
+//     Layer-Fader je Klangschicht, multiplikativ VOR masterVolume:
+//     bellVolume in \glockenBell (Node-Treffer), droneVolume in
+//     \impulseDrone (reisende Impulse). Damit laesst sich das Verhaeltnis
+//     der zwei Schichten vor Ort einstellen, ohne ~maxAmp/~droneAmpScale
+//     im Code anzufassen. droneVolume wirkt SOFORT auf laufende Drohnen,
+//     bellVolume erst auf den naechsten Ton (One-Shot, wie brightness).
+//
 //   /klangnetz/param/reverbMix      0.0 .. 1.0   Default 0.15
 //   /klangnetz/param/reverbRoom     0.0 .. 1.0   Default 0.5
 //   /klangnetz/param/reverbDamp     0.0 .. 1.0   Default 0.5
@@ -205,10 +214,16 @@
 //   Impuls -- Begruendung bei den ~registerParam-Aufrufen im Code.
 //
 //   /klangnetz/param/travelMix       0.0 .. 1.0    Default 0.0
-//     Crossfade Tondrohne <-> Windband. 0 = bisheriger Klang, bitgleich.
-//     Wirkt SOFORT auf laufende Drohnen.
+//     Crossfade Tondrohne <-> Koernerschicht. 0 = bisheriger Klang,
+//     bitgleich. Wirkt SOFORT auf laufende Drohnen.
 //   /klangnetz/param/travelRq        0.02 .. 1.0   Default 0.35
-//     Bandbreite des Rauschbands. Klein = pfeifend, gross = breit.
+//     Koernerdauer als Anteil von 20 ms. Klein = kurze, harte Koerner
+//     (sandig, einzeln hoerbar), gross = ineinanderlaufend. UMGEWIDMET
+//     2026-08-01: hiess frueher Filterguete eines Bandpasses, den es
+//     nicht mehr gibt. Wirkt SOFORT auf laufende Drohnen.
+//   /klangnetz/param/travelGrainRatio 0.01 .. 2.0  Default 0.125
+//     Koerner je Sekunde als Vielfaches von travelFreq -- die Dichte
+//     traegt damit dieselbe Speed-Klasse wie die Grenzfrequenz.
 //     Wirkt SOFORT auf laufende Drohnen.
 //   /klangnetz/param/travelAmpScale  0.0 .. 2.0    Default 1.0
 //     Trimm nur der Rauschschicht. Wirkt SOFORT.
@@ -218,7 +233,8 @@
 //   /klangnetz/param/travelSnap            0 / 1        Default 1
 //   /klangnetz/param/travelFreqMin        20 .. 2000    Default 80
 //   /klangnetz/param/travelFreqMax       200 .. 16000   Default 6000
-//     Mittenfrequenz des Bands, OKTAVBASIERT ueber die gemeldete
+//     Kennfrequenz der Windschicht (Low-Cut UND, ueber travelGrainRatio,
+//     Koernerdichte), OKTAVBASIERT ueber die gemeldete
 //     Geschwindigkeit (LEDs/s, fuenftes Argument von /net/impulse):
 //       freq = travelFreqBase * 2^(log2(speed/travelSpeedRef) * OctavesPerStep)
 //     Jede Verdopplung der Geschwindigkeit ist damit ein fester
@@ -427,6 +443,35 @@ s.options.numInputBusChannels = 2;
 };
 
 ~registerParam.(\masterVolume, 1.0, 0.0, 1.5, nil);
+
+// ---- Zwei Layer-Fader unter dem globalen Show-Fader --------------------
+// masterVolume bleibt der GLOBALE Fader (sitzt in \masterReverb, nach dem
+// Panning, vor dem Limiter). Diese zwei sitzen davor, je Klangschicht, und
+// wirken multiplikativ: eine Glocke geht mit bellVolume * masterVolume
+// heraus, eine Drohne mit droneVolume * masterVolume. Default 1.0 --
+// unveraendertes Verhalten.
+//
+// Warum getrennt: Glocken (Node-Treffer) und Drohnen (reisende Impulse) sind
+// zwei voellig verschiedene Klangrollen mit voellig verschiedenen Pegeln
+// (~maxAmp 0.35 gegen ~droneAmpScale 0.06). Das Verhaeltnis der zwei
+// zueinander ist eine gestalterische Entscheidung, die man vor Ort trifft --
+// bisher ging das nur ueber ~maxAmp/~droneAmpScale im Code.
+//
+// bellVolume bekommt bewusst KEINEN onSet-Callback und KEIN Lag: eine Glocke
+// ist ein One-Shot mit doneAction 2, der Wert wird als Start-Argument
+// gelesen (wie brightness/detune, siehe deren Kommentar bei \glockenBell).
+// Ein Lag waere hier sogar schaedlich -- er wuerde die Lautstaerke ueber die
+// Lag-Zeit hochfahren und damit genau den Anschlag weichzeichnen, der den
+// Glockenklang ausmacht.
+~registerParam.(\bellVolume, 1.0, 0.0, 1.5, nil);
+// droneVolume dagegen MIT Callback und Lag: eine Drohne wird ueber Sekunden
+// gehalten, ein Regler daran soll sofort und ohne Knacken wirken -- dieselbe
+// Ueberlegung wie bei droneLpfMult und travelMix.
+~registerParam.(\droneVolume, 1.0, 0.0, 1.5, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\droneVolume, val);
+    }) };
+});
 // Default 0.35 statt 0.15: die Laptop-Fassung hatte einen FreeVerb mit
 // mix 0.42 in jeder Glocke ("mehr Hall", Birk 2026-07-30). Der Hall sitzt
 // jetzt nach dem Decoder (Begruendung bei \masterReverb), der Default haelt
@@ -492,12 +537,40 @@ s.options.numInputBusChannels = 2;
         entry[\synth].set(\travelMix, val);
     }) };
 });
-// Bandbreite des Rauschbands. Klein = pfeifend/schmal, gross = breites
-// Rauschen. Wirkt wie travelMix sofort auf laufende Drohnen -- eine Drohne
-// wird ueber Sekunden gehalten, ein Live-Regler daran ergibt hoerbar Sinn.
+// Koernerdauer der granularen Windschicht, als Anteil von 20 ms.
+//
+// UMGEWIDMET 2026-08-01 (Birk nach mehreren Hoerproben): hiess frueher
+// "Bandbreite/Filterguete" und war das rq-Argument eines BPF. Die
+// Windschicht ist jetzt granular (siehe \impulseDrone), einen Bandpass gibt
+// es nicht mehr -- der Regler steuert stattdessen, wie lang ein einzelnes
+// Rauschkorn klingt. Name und Registrierung bleiben, damit vorhandene
+// Presets und die Web-UI-Tabelle gueltig bleiben.
+//
+// Klein = kurze, harte Koerner (sandig, kleinteilig, einzeln hoerbar),
+// gross = lange, ineinanderlaufende Koerner (wieder eher ein Rauschteppich).
+// Wirkt wie travelMix sofort auf laufende Drohnen -- eine Drohne wird ueber
+// Sekunden gehalten, ein Live-Regler daran ergibt hoerbar Sinn.
 ~registerParam.(\travelRq, 0.35, 0.02, 1.0, { |val|
     ~drones !? { |d| d.keysValuesDo({ |id, entry|
         entry[\synth].set(\travelRq, val);
+    }) };
+});
+// Koerner je Sekunde als Vielfaches von travelFreq.
+//
+// Die Dichte haengt bewusst an travelFreq, nicht an einem eigenen absoluten
+// Wert: travelFreq traegt die Speed-Klasse (siehe unten), und damit wird die
+// Klasse ZWEIFACH hoerbar -- ein schnellerer Impuls rieselt dichter UND
+// heller. Zwei gleichgerichtete Merkmale sind deutlich leichter zuzuordnen
+// als eines.
+//
+// Default 0.125 = ein Korn je acht Schwingungen der Grenzfrequenz. Mit den
+// Klassen-Frequenzen (200/400/800/1600/3200 Hz) ergibt das
+// 25/50/100/200/400 Koerner je Sekunde: von einzeln abzaehlbaren Tropfen bis
+// zu dichtem Rieseln. Der Wert ist ein Hoer-Kompromiss und deshalb ein
+// Regler, keine Konstante im Graphen.
+~registerParam.(\travelGrainRatio, 0.125, 0.01, 2.0, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\travelGrainRatio, val);
     }) };
 });
 // Trimm NUR der Rauschschicht. Es gibt ihn, weil Rauschen bei gleichem
@@ -508,7 +581,11 @@ s.options.numInputBusChannels = 2;
         entry[\synth].set(\travelAmpScale, val);
     }) };
 });
-// Speed -> Mittenfrequenz des Windbands, OKTAVBASIERT statt linear.
+// Speed -> Kennfrequenz der Windschicht, OKTAVBASIERT statt linear.
+//
+// Diese eine Zahl steuert BEIDE hoerbaren Merkmale der Windschicht: die
+// Grenzfrequenz des Low-Cut UND (ueber travelGrainRatio) die Koernerdichte.
+// Sie heisst weiter travelFreq, weil sie primaer eine Frequenz ist.
 //
 // Linear (die erste Fassung) lagen die Speed-Klassen 1x und 2x dicht
 // beieinander -- genau der "sanfte Gradient", der die Klassen NICHT
@@ -520,6 +597,7 @@ s.options.numInputBusChannels = 2;
 //
 // Mit den Defaults unten (Basis 400 Hz bei Speed 16):
 //   0.5x -> 200 Hz   1x -> 400   2x -> 800   4x -> 1600   8x -> 3200
+// und damit zugleich 25/50/100/200/400 Koerner je Sekunde.
 // Das ist unverwechselbar, und genau das ist der Zweck: beim Hoeren soll
 // klar sein, welcher Speed-Klasse (siehe SpeedQuantizer auf der
 // Processing-Seite) ein Impuls angehoert.
@@ -842,7 +920,7 @@ s.waitForBoot({
     // getriggerten Ton — bei der Anschlagsrate der Installation (Hits im
     // Sekundenbereich) praktisch sofort.
     SynthDef(\glockenBell, { |freq = 440, amp = 0.3, out = 0, x = 0, y = 0,
-            brightness = 1.0, detune = 1.0|
+            brightness = 1.0, detune = 1.0, bellVolume = 1.0|
         var sig, bellSig, grit, gritEnv, partials, partialAmps, partialDecays,
             harmonicPartials;
 
@@ -885,20 +963,33 @@ s.waitForBoot({
         grit = Saw.ar(freq) * gritEnv;
         grit = BPF.ar(grit, freq * 2, 0.7) * 0.22;
 
-        sig = (bellSig + grit) * amp;
+        // bellVolume ist der Layer-Fader der Glockenschicht, multiplikativ
+        // VOR dem globalen masterVolume (das sitzt in \masterReverb).
+        // Bewusst ohne Lag: als Start-Argument eines One-Shots wuerde ein Lag
+        // die Lautstaerke ueber die Lag-Zeit hochfahren und damit genau den
+        // Anschlag weichzeichnen, der den Glockenklang ausmacht.
+        sig = (bellSig + grit) * amp * bellVolume;
         // Position je Ton fest — eine Glocke wandert nicht. Kein Lag nötig.
         Out.ar(out, ~toQuad.(sig, x, y));
     }).add;
 
     // ---- SynthDef: Drohne eines reisenden Impulses --------------------
-    // Leiser gehaltener Ton für einen reisenden Impuls. Die Klangfarbe ist
-    // ein schlichter Startpunkt und ausdrücklich zum Ersetzen gedacht — die
-    // Mechanik drumherum ist der Teil, der stimmen muss.
+    // Zwei Schichten in EINEM Synth je Impuls: ein leiser gehaltener Ton und
+    // eine granulare Windschicht, dazwischen blendet travelMix.
+    //
+    // EIN Synth je Impuls, kein zweiter: dieser hier haengt schon an einer
+    // Impuls-ID und bekommt Position, Huellkurve, ~droneTimeout und
+    // ~droneLimit geschenkt. Ein zweiter Synth fuer den Wind braeuchte ein
+    // zweites Dictionary, einen zweiten Reaper und ein zweites Limit und
+    // verdoppelte die Stimmenzahl -- fuer ein Feature, dessen Ziel es ist,
+    // Klangbrei zu VERMEIDEN. Siehe auch den Block bei ~registerParam
+    // \travelMix.
     SynthDef(\impulseDrone, { |freq = 220, amp = 0.08, out = 0, x = 0, y = 0, gate = 1,
             lpfMult = 6, travelMix = 0, travelFreq = 800, travelRq = 0.35,
-            travelAmpScale = 1.0|
+            travelAmpScale = 1.0, travelGrainRatio = 0.125, droneVolume = 1.0|
         var sig, tone, wind, env, xl, yl, ampl, lpfMultLagged, mixLagged,
-            rqLagged, windAmpLagged;
+            rqLagged, windAmpLagged, ratioLagged, volLagged,
+            grainTrig, grainEnv, grainDur;
         // Lag VOR der Umrechnung: ein springender Positionswert darf nicht
         // als Klick durchschlagen. Bei 10 Hz Melderate glättet 0.1 s die
         // Sprünge zwischen zwei Meldungen.
@@ -914,33 +1005,83 @@ s.waitForBoot({
         // ~registerParam-Aufruf oben) — genauso lagged, sonst knackt ein
         // Regler-Sprung mitten im Filterverlauf.
         lpfMultLagged = Lag.kr(lpfMult, 0.1);
-        // travelMix/travelRq/travelAmpScale kommen ebenfalls live per .set
-        // (siehe die drei onSet-Callbacks bei ~registerParam) und brauchen
-        // dieselbe Glättung: ein Sprung im Crossfade oder in der Filterguete
-        // knackt auf einem gehaltenen Ton genauso wie ein Positionssprung.
+        // travelMix/travelRq/travelAmpScale/travelGrainRatio/droneVolume
+        // kommen ebenfalls live per .set (siehe die onSet-Callbacks bei
+        // ~registerParam) und brauchen dieselbe Glättung: ein Sprung im
+        // Crossfade, in der Koernerdauer oder in der Lautstärke knackt auf
+        // einem gehaltenen Ton genauso wie ein Positionssprung.
         mixLagged = Lag.kr(travelMix, 0.2);
         rqLagged = Lag.kr(travelRq, 0.1);
         windAmpLagged = Lag.kr(travelAmpScale, 0.1);
+        ratioLagged = Lag.kr(travelGrainRatio, 0.1);
+        volLagged = Lag.kr(droneVolume, 0.1);
         env = EnvGen.kr(Env.asr(0.05, 1, 0.3, \sin), gate, doneAction: 2);
 
         // Tonschicht -- unveraendert der bisherige Klang.
         tone = LFTri.ar(freq) * 0.5 + SinOsc.ar(freq * 2.01, 0, 0.2);
         tone = LPF.ar(tone, freq * lpfMultLagged);
 
-        // Windschicht: bandpassgefiltertes Rauschen. travelFreq kommt als
-        // Start-Argument und ist bereits aus der gemeldeten Geschwindigkeit
-        // gerechnet (siehe OSCdef \impulseStream) -- ein schneller Impuls
-        // zischt heller als ein langsamer.
+        // ---- Windschicht: GRANULAR, nicht kontinuierlich ---------------
+        // UMGEBAUT 2026-08-01 (Birk nach mehreren Hoerproben): war vorher
+        // BPF.ar(PinkNoise.ar, travelFreq, rq) -- ein durchgehender, eng
+        // gefilterter Rauschton ohne Struktur. Gewuenscht ist stattdessen
+        // eine koernige Textur: viele kurze Rauschkoerner, "wie Sand, der
+        // runterrinnt". Deshalb drei Aenderungen auf einmal:
         //
-        // Der Faktor 3 gleicht aus, dass BPF ein schmales Band aus dem
-        // Rauschen herausschneidet und das Ergebnis deutlich leiser ist als
-        // die Tonschicht; ohne ihn waere der Crossfade ein Absacken.
-        wind = BPF.ar(PinkNoise.ar, travelFreq, rqLagged) * 3 * windAmpLagged;
+        //   1. WEISSES statt rosa Rauschen -- rosa faellt mit 3 dB/Oktave
+        //      ab und klingt hinter einem Low-Cut dumpf/hohl; weiss ist der
+        //      luftige, sandige Grundstoff.
+        //   2. LOW-CUT (HPF) statt Bandpass -- ein Bandpass macht einen
+        //      engen, pfeifenden Ton, genau das Gegenteil von luftig.
+        //   3. GRANULAR statt Dauerton -- Dust.ar streut die Koerner
+        //      zufaellig (Poisson), nicht periodisch: ein regelmaessiges
+        //      Impulse.ar klaenge nach Motor, nicht nach rieselndem Sand.
+        //
+        // Die Speed-Kopplung bleibt der Zweck der Uebung und wird sogar
+        // staerker: travelFreq bestimmt jetzt BEIDES -- die Grenzfrequenz
+        // des Low-Cut UND die Koernerdichte. Ein 8x-Impuls rieselt damit
+        // dichter UND heller als ein 1x-Impuls, zwei gleichgerichtete
+        // Merkmale statt einem.
+        grainDur = rqLagged * 0.02;              // 0.4 .. 20 ms je Korn
+        grainTrig = Dust.ar(travelFreq * ratioLagged);
+        // Decay2 = zwei Exponentialkurven, also ein Korn mit weichem
+        // Ausklang statt eines harten Rechtecks. Der sehr kurze Attack
+        // (0.3 ms) laesst die Kante hoerbar -- sie ist das "Kleinteilige".
+        grainEnv = Decay2.ar(grainTrig, 0.0003, grainDur);
+        wind = WhiteNoise.ar * grainEnv;
+        // Low-Cut NACH der Huelle: so schneidet der Filter auch die
+        // Korn-Kanten mit an und gibt ihnen etwas Luft, statt sie als
+        // harten Klick stehen zu lassen.
+        wind = HPF.ar(wind, travelFreq);
+        // ---- Pegel: zwei getrennte Korrekturen -------------------------
+        // 1. DICHTEAUSGLEICH. Die Koernerdichte haengt an travelFreq, also
+        //    an der Speed-Klasse -- doppelt so viele Koerner tragen doppelt
+        //    so viel Energie. OHNE diesen Ausgleich waere die 8x-Klasse
+        //    VIERMAL so laut wie die 0.5x-Klasse (NRT-gemessen: RMS 0.134
+        //    gegen 0.501). Die Klasse soll sich in Farbe und Dichte zeigen,
+        //    NICHT in der Lautstaerke -- sonst regelt der Limiter die
+        //    schnellen Impulse weg und die Zuordenbarkeit kippt.
+        //    1/sqrt(rate) ist der richtige Exponent, weil sich unkorrelierte
+        //    Koerner in der Leistung addieren, nicht in der Amplitude.
+        //    Bezugspunkt 100 Koerner/s = die 2x-Klasse. Gemessen bleibt
+        //    danach eine Streuung von Faktor 1.08 statt 4.0.
+        // 2. ANGLEICH AN DIE TONSCHICHT, damit der Crossfade kein Sprung
+        //    ist. Faktor 3 -- NRT-gemessen liegt die Windschicht damit rund
+        //    3 dB unter der Tonschicht, was bei ihrem hohen Scheitelfaktor
+        //    (10..19 gegen 2.1) etwa gleich laut WIRKT. Feinjustiert wird
+        //    mit travelAmpScale.
+        // Der max(..., 1) verhindert eine Division durch fast 0, das
+        // .clip(0, 4) eine Explosion bei sehr kleiner Dichte.
+        wind = wind
+            * ((100 / max(travelFreq * ratioLagged, 1)).sqrt.clip(0, 4))
+            * 3 * windAmpLagged;
 
         // Crossfade: 0 = reine Tondrohne (Auslieferungszustand, bitgleich
-        // dem bisherigen Klang), 1 = reines Windband.
+        // dem bisherigen Klang), 1 = reine Koernerschicht.
         sig = XFade2.ar(tone, wind, (mixLagged * 2) - 1);
-        sig = sig * ampl * env;
+        // droneVolume ist der Layer-Fader dieser Schicht, multiplikativ VOR
+        // dem globalen masterVolume (das sitzt in \masterReverb).
+        sig = sig * ampl * env * volLagged;
         Out.ar(out, ~toQuad.(sig, xl, yl));
     }).add;
 
@@ -1170,7 +1311,9 @@ s.waitForBoot({
                         \freq, ~droneFreq.(id), \x, px, \y, py,
                         \amp, amp, \out, ~quadBus.index, \lpfMult, ~droneLpfMult,
                         \travelMix, ~travelMix, \travelFreq, travelFreq,
-                        \travelRq, ~travelRq, \travelAmpScale, ~travelAmpScale
+                        \travelRq, ~travelRq, \travelAmpScale, ~travelAmpScale,
+                        \travelGrainRatio, ~travelGrainRatio,
+                        \droneVolume, ~droneVolume
                     ], ~voices),
                     lastSeen: Main.elapsedTime
                 );
@@ -1254,7 +1397,8 @@ s.waitForBoot({
         newBell = Synth(\glockenBell, [
             \freq, freq, \amp, amp, \x, px, \y, py, \out, ~quadBus.index,
             \brightness, (~brightness * bias[\brightness]).clip(0.0, 2.0),
-            \detune, (~detune * bias[\detune]).clip(0.0, 1.0)
+            \detune, (~detune * bias[\detune]).clip(0.0, 1.0),
+            \bellVolume, ~bellVolume
         ], ~voices);
         ~activeBells.add(newBell);
         // Natuerliches Verklingen (doneAction 2 im SynthDef) muss

@@ -323,6 +323,12 @@ SC_PARAM_PREFIX = "/klangnetz/param/"
 SC_PARAMS: List[Dict[str, Any]] = [
     {"name": "masterVolume", "default": 1.0, "min": 0.0, "max": 1.5,
      "group": "Master", "description": "Gain nach dem Panning, vor dem Limiter."},
+    {"name": "bellVolume", "default": 1.0, "min": 0.0, "max": 1.5,
+     "group": "Master", "description":
+     "Layer-Fader der Glocken, vor masterVolume. Wirkt auf den naechsten Ton."},
+    {"name": "droneVolume", "default": 1.0, "min": 0.0, "max": 1.5,
+     "group": "Master", "description":
+     "Layer-Fader der Impuls-Drohnen, vor masterVolume. Wirkt sofort."},
     {"name": "reverbMix", "default": 0.35, "min": 0.0, "max": 1.0,
      "group": "Master", "description": "Trocken/nass des Halls hinter dem Panning."},
     {"name": "reverbRoom", "default": 0.5, "min": 0.0, "max": 1.0,
@@ -344,7 +350,11 @@ SC_PARAMS: List[Dict[str, Any]] = [
      "group": "Travel-Sound", "description":
      "Crossfade Tondrohne zu Windband. 0 = kein Travel-Sound."},
     {"name": "travelRq", "default": 0.35, "min": 0.02, "max": 1.0,
-     "group": "Travel-Sound", "description": "Bandbreite. Klein = pfeifend."},
+     "group": "Travel-Sound", "description":
+     "Koernerdauer (Anteil von 20 ms). Klein = sandig und kleinteilig."},
+    {"name": "travelGrainRatio", "default": 0.125, "min": 0.01, "max": 2.0,
+     "group": "Travel-Sound", "description":
+     "Koerner je Sekunde als Vielfaches von travelFreq - traegt die Speed-Klasse."},
     {"name": "travelAmpScale", "default": 1.0, "min": 0.0, "max": 2.0,
      "group": "Travel-Sound", "description": "Pegel nur der Rauschschicht."},
     {"name": "travelFreqBase", "default": 400.0, "min": 50.0, "max": 4000.0,

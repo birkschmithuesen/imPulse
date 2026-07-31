@@ -579,6 +579,16 @@ Fehlen beim Start Positionen, meldet `setup()` eine `WARNUNG`-Zeile mit dem Abde
 
 Vierkanal-Kette: Ambisonics 2D erster Ordnung mit Kern-UGens (`PanB2` als Encoder, **ein** `DecodeB2` am Ende), Glocken an den Knoten (`/net/hitNode`) und leise Drohnen, die den reisenden Impulsen folgen (`/net/impulse`). Lautsprecher auf den **Seitenmitten** (0,+4), (+7,0), (0,−4), (−7,0), nicht in den Ecken.
 
+**Drei Lautstärken, nicht eine.** `masterVolume` ist der globale Show-Fader
+(in `\masterReverb`, nach dem Panning, vor dem Limiter). Darunter sitzen zwei
+**Layer-Fader**, multiplikativ davor: `bellVolume` in `\glockenBell` und
+`droneVolume` in `\impulseDrone`. Damit lässt sich das Verhältnis von
+Node-Treffern zu reisenden Impulsen vor Ort einstellen, ohne `~maxAmp` bzw.
+`~droneAmpScale` im Code anzufassen. `droneVolume` wirkt sofort auf laufende
+Drohnen (`onSet`-Callback plus `Lag`); `bellVolume` erst auf den nächsten Ton
+und bewusst **ohne** `Lag` — eine Glocke ist ein One-Shot, ein Lag würde den
+Anschlag weichzeichnen, der ihren Klang ausmacht.
+
 Der Klang selbst ist der vor Ort getunte Stand: Phrygisch ab A2 (`~scaleSteps`), `~minAmp`/`~maxAmp` aus dem +6-dB-Live-Abgleich, Sägezahn-Layer für den Hang-Drum-Attack, `~maxPolyphony = 24` als Voice-Stealing-Deckel gegen „command FIFO full" (der Ausfallmodus dabei ist **Stille ohne Absturz**). Der Hall sitzt **hinter** dem Decoder (`\masterReverb`, je Hardware-Kanal getrennt) und nicht in der Glocke — vor dem Encoder würde er selbst räumlich codiert und wieder zu einer Punktquelle verschmiert; `~reverbMix` steht deshalb auf 0.35 statt auf dem früheren Wert 0.15.
 
 **Klangbias nach Netzregion** (`~regionZone`, `~regionBias`, Parameter
@@ -600,10 +610,10 @@ in älteren Notizen als Timbre-Regler auftauchen, gibt es in dieser Datei
 nicht; die vorhandenen Äquivalente sind `brightness` und `detune`.
 
 **Travel-Sound** (`/klangnetz/param/travelMix`, Default **0**, plus
-`travelRq`, `travelAmpScale`, `travelFreqMin`, `travelFreqMax`,
-`travelFreqBase`, `travelSpeedRef`, `travelOctavesPerStep`, `travelSnap`,
-`travelFreqMin`, `travelFreqMax`): eine Wind-/Rauschschicht **innerhalb** von `\impulseDrone`,
-kein zweiter Synth je Impuls. `\impulseDrone` ist bereits eine Stimme pro
+`travelRq`, `travelGrainRatio`, `travelAmpScale`, `travelFreqBase`,
+`travelSpeedRef`, `travelOctavesPerStep`, `travelSnap`, `travelFreqMin`,
+`travelFreqMax`): eine **granulare** Wind-/Sandschicht **innerhalb** von
+`\impulseDrone`, kein zweiter Synth je Impuls. `\impulseDrone` ist bereits eine Stimme pro
 Impuls-ID mit Position, Hüllkurve, `~droneTimeout` und `~droneLimit`; ein
 zweiter Synth bräuchte ein zweites Dictionary, einen zweiten Reaper und ein
 zweites Limit und verdoppelte die Stimmenzahl — für ein Feature, dessen Ziel
@@ -623,8 +633,41 @@ Klangseite kann eine Überzahl selbst ignorieren), ein größerer unerfüllbar
 ohne mehr zu senden. Der Deckel, der wirklich gebraucht wird, sitzt dort, wo
 die Rechenlast entsteht, und existiert schon: `~droneLimit`.
 
+**Die Windschicht ist granular, nicht kontinuierlich** (umgebaut 2026-08-01
+nach mehreren Hörproben): `Dust.ar` triggert kurze Rauschkörner
+(`Decay2`-Hülle auf `WhiteNoise`), danach ein **Low-Cut** (`HPF`). Vorher war
+es `BPF.ar(PinkNoise.ar, ...)` — ein durchgehender, eng gefilterter Rauschton.
+Drei Entscheidungen dahinter:
+
+- **Weiß statt rosa**: rosa fällt mit 3 dB/Oktave ab und klingt hinter einem
+  Low-Cut dumpf; weiß ist der luftige, sandige Grundstoff.
+- **Low-Cut statt Bandpass**: ein Bandpass macht einen engen, pfeifenden Ton —
+  das Gegenteil von luftig.
+- **`Dust` statt `Impulse`**: zufällig gestreute Körner klingen nach
+  rieselndem Sand, periodische nach Motor.
+
+`travelRq` heißt weiter so, steuert aber jetzt die **Körnerdauer** (Anteil von
+20 ms) statt einer Filtergüte — den Bandpass gibt es nicht mehr. Name und
+Registrierung bleiben, damit vorhandene Presets und `SC_PARAMS` gültig bleiben.
+
+**Zwei Pegelkorrekturen, beide NRT-gemessen, keine geratenen Zahlen:**
+
+1. **Dichteausgleich** `sqrt(100 / Körnerrate)`. Die Dichte hängt an
+   `travelFreq`, also an der Speed-Klasse — ohne Ausgleich wäre die 8x-Klasse
+   **viermal** so laut wie die 0.5x-Klasse (gemessen: RMS 0.134 gegen 0.501).
+   Die Klasse soll sich in Farbe und Dichte zeigen, nicht in der Lautstärke,
+   sonst regelt der Limiter genau die schnellen Impulse weg. Nach dem
+   Ausgleich beträgt die Streuung Faktor **1.08**.
+2. **Angleich an die Tonschicht**, Faktor 3, damit der Crossfade kein Sprung
+   ist. Ein erster Versuch mit Faktor 6 **clippte** (Spitzenwert 1.0 in allen
+   fünf Klassen) — deshalb steht hier eine gemessene und keine geschätzte
+   Zahl.
+
 **Die Speed→Frequenz-Abbildung ist oktavbasiert, nicht linear** — das ist es,
-was die Speed-Klassen hörbar auseinanderhält:
+was die Speed-Klassen hörbar auseinanderhält. Sie steuert jetzt **zwei**
+Merkmale: die Grenzfrequenz des Low-Cut **und** (über `travelGrainRatio`) die
+Körnerdichte, also 25/50/100/200/400 Körner je Sekunde für 0.5x…8x. Zwei
+gleichgerichtete Merkmale sind leichter zuzuordnen als eines:
 
 ```
 octaves = log2(speed / travelSpeedRef)
@@ -697,11 +740,12 @@ Amplituden-Grenzen sind vor Ort getunte Konstanten und bleiben es.
   unbekannt" plus einen Hinweis auf genau diese Ursache. Ein
   `/sc/preset/save standby` überschreibt sie mit dem aktuellen Satz.
 
-Die 18 Parameter, die ein Preset umfasst: `masterVolume`, `reverbMix`,
-`reverbRoom`, `reverbDamp`, `brightness`, `detune`, `droneLpfMult`,
-`panSharpness`, `regionBiasAmount`, `travelMix`, `travelRq`,
-`travelAmpScale`, `travelFreqBase`, `travelSpeedRef`, `travelOctavesPerStep`,
-`travelSnap`, `travelFreqMin`, `travelFreqMax`. Wer einen `~registerParam`
+Die 21 Parameter, die ein Preset umfasst: `masterVolume`, **`bellVolume`**,
+**`droneVolume`**, `reverbMix`, `reverbRoom`, `reverbDamp`, `brightness`,
+`detune`, `droneLpfMult`, `panSharpness`, `regionBiasAmount`, `travelMix`,
+`travelRq`, **`travelGrainRatio`**, `travelAmpScale`, `travelFreqBase`,
+`travelSpeedRef`, `travelOctavesPerStep`, `travelSnap`, `travelFreqMin`,
+`travelFreqMax`. Wer einen `~registerParam`
 ergänzt, bekommt ihn ohne weiteres Zutun in die Presets — die Liste wird aus
 `~params` gelesen, nicht gepflegt. (Die handgepflegte Kopie im Web-UI,
 `SC_PARAMS` in `webui/server.py`, muss dann allerdings nachgezogen werden;
