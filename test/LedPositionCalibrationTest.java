@@ -520,6 +520,11 @@ public class LedPositionCalibrationTest {
     Check.that("zweite LED der Kreuzung blinkt ebenfalls weiss",
         bufX[30].x > 0.9f && bufX[30].y > 0.9f && bufX[30].z > 0.9f);
 
+    // Der Leuchtabschnitt um die beteiligten LEDs wird weiter unten geprueft
+    // (markSpanOnLongStripes) - er ist mit 25 LEDs laenger als die 20 LEDs
+    // dieses synthetischen Stripes und liesse sich hier nicht von "der ganze
+    // Stripe leuchtet" unterscheiden.
+
     // Beide beteiligten Stripes glimmen gruen
     LedColor[] bufX2 = cd.drawMe(500L);
     Check.that("Stripe 0 glimmt gruen", bufX2[3].y > 0f && bufX2[3].x == 0f);
@@ -539,10 +544,89 @@ public class LedPositionCalibrationTest {
     Check.that("die weisse An-Phase kam tatsaechlich im Puffer an",
         maxComp >= 1.0f - 1e-6f);
 
+    markSpanOnLongStripes();
+
     // ---- drawMe() ohne Argument delegiert an drawMe(System.currentTimeMillis()) ----
     Check.eq("no-arg drawMe liefert einen vollen Puffer",
         STRIPES * PER_STRIPE, cd.drawMe().length);
 
     System.exit(Check.report("LedPositionCalibrationTest"));
+  }
+
+  // Weiss ist die Blinkfarbe des aktuellen Eintrags. Alles andere im
+  // Positionsmodus glimmt nur mit DIM auf einem einzelnen Kanal, ein
+  // Schwellwert je Kanal trennt die beiden also sauber.
+  static boolean isWhite(LedColor c) {
+    return c.x > 0.9f && c.y > 0.9f && c.z > 0.9f;
+  }
+
+  // Der Leuchtabschnitt um die LED des aktuellen Eintrags, auf Stripes in der
+  // Groessenordnung des Aufbaus (600 LEDs). Die kleine Geometrie oben taugt
+  // dafuer nicht: 25 leuchtende LEDs auf einem Stripe von 20 waeren von
+  // "alles an" nicht zu unterscheiden.
+  //
+  // Die Zahlen stehen hier ausgeschrieben und werden NICHT aus MARK_RADIUS
+  // gerechnet. Mit der Konstante gerechnet waere jeder Wert "richtig", auch 0,
+  // und die Suite bestaetigte nur sich selbst - genau das ist beim ersten
+  // Entwurf dieses Tests passiert. 12 Nachbarn je Seite sind die Anforderung,
+  // also stehen sie als Zahl da.
+  static void markSpanOnLongStripes() {
+    final int stripes = 3;
+    final int per = 600;
+    Check.eq("zwoelf Nachbarn je Seite", 12, LedPositionCalibration.MARK_RADIUS);
+
+    NodeCrossingStore cs = new NodeCrossingStore(stripes, per);
+    // Kreuzung mitten auf Stripe 0 mit Stripe 1
+    Check.that("Kreuzung angelegt", cs.add(0, 300, 1, 250));
+    LedPositionMap map = new LedPositionMap(stripes, per, FOOT_X, FOOT_Y);
+    ArrayList<LedNetworkNode> nodes = new ArrayList<LedNetworkNode>();
+    LedInNetInfo[] infos = LedInNetInfo.buildNetInfo(stripes, per);
+    LedInNetInfo.applyCrossings(cs.crossings(), infos, nodes);
+    LedAnchorStore st = new LedAnchorStore(stripes, per, FOOT_X, FOOT_Y, PITCH);
+    LedPositionCalibration c = new LedPositionCalibration(st, map, cs, nodes,
+        stripes, per, NO_FILE, PANE_X, PANE_Y, PANE_W, PANE_H, FOOT_X, FOOT_Y);
+
+    // Mitten im Stripe: der Anker liegt in der Mitte des Abschnitts
+    int[] mid = c.markSpan(300);
+    Check.eq("Abschnitt beginnt zwoelf LEDs vor dem Anker", 288, mid[0]);
+    Check.eq("Abschnitt endet zwoelf LEDs nach dem Anker", 312, mid[1]);
+    Check.eq("25 LEDs lang", 25, mid[1] - mid[0] + 1);
+
+    // Am Stripe-Anfang: nach innen geschoben, nicht abgeschnitten
+    int[] first = c.markSpan(0);
+    Check.eq("am Stripe-Anfang beginnt er bei der ersten LED", 0, first[0]);
+    Check.eq("und ist trotzdem 25 LEDs lang", 25, first[1] - first[0] + 1);
+
+    // Am Stripe-Ende ebenso, und ohne in den naechsten Stripe zu laufen
+    int[] last = c.markSpan(per - 1);
+    Check.eq("am Stripe-Ende endet er bei der letzten LED", per - 1, last[1]);
+    Check.eq("und ist ebenfalls 25 LEDs lang", 25, last[1] - last[0] + 1);
+
+    // Stripe 1 beginnt bei 600 - der Abschnitt dort darf nicht nach Stripe 0
+    // hineinreichen
+    int[] nextStart = c.markSpan(per);
+    Check.eq("der Abschnitt des naechsten Stripes beginnt an dessen erster LED",
+        per, nextStart[0]);
+    Check.eq("und bleibt 25 LEDs lang", 25, nextStart[1] - nextStart[0] + 1);
+
+    // Dicht am Rand, aber nicht darauf: ebenfalls geschoben
+    int[] nearStart = c.markSpan(5);
+    Check.eq("dicht am Anfang beginnt er bei 0", 0, nearStart[0]);
+    Check.eq("und bleibt 25 LEDs lang", 25, nearStart[1] - nearStart[0] + 1);
+
+    // Und dasselbe im gezeichneten Bild, nicht nur in der Rechnung
+    while (c.entryIndex() >= 0 && !c.entryIsCrossing(c.entryIndex())) {
+      c.next();
+    }
+    Check.that("Zeiger steht auf der Kreuzung", c.entryIsCrossing(c.entryIndex()));
+    LedColor[] buf = c.drawMe(0L);
+    Check.that("linke Randled des Abschnitts leuchtet", isWhite(buf[288]));
+    Check.that("rechte Randled des Abschnitts leuchtet", isWhite(buf[312]));
+    Check.that("davor bleibt es dunkel", !isWhite(buf[287]));
+    Check.that("dahinter bleibt es dunkel", !isWhite(buf[313]));
+    Check.that("die Partner-LED auf Stripe 1 bekommt denselben Abschnitt",
+        isWhite(buf[600 + 238]) && isWhite(buf[600 + 262]));
+    Check.that("und auch dort endet er",
+        !isWhite(buf[600 + 237]) && !isWhite(buf[600 + 263]));
   }
 }

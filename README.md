@@ -36,20 +36,38 @@ The byte order within those 4 bytes is R, G, B, 0 - byte 0 drives red, byte 1 gr
 
 An **ArtSync** packet (OpSync) is sent after each controller's universes and is mandatory, not optional - without it the firmware would display each universe as soon as it arrives, tearing the image across outputs. Sending happens on its own 40 Hz thread with triple buffering (build/ready/send buffers), so `draw()` never blocks waiting on the network. `describeMapping()` prints the full controller/universe/stripe table to the console at startup, useful for checking against the controllers' web interface before anything is connected.
 
-## master level - a safety limit, now show-side, testbilder still fixed
+## master level - one show fader, test patterns dim themselves
 
 `/master/level` is the show fader, freely adjustable **0..1** since 2026-07-30
 (Birk: the installation never drives the stripes to full white during a show).
 The hardware risk - full white on a 10 m stripe already showing voltage drop
 per the strip's datasheet - only ever applied to the calibration test
-patterns (`TestPatterns` 3/5 send literal `(1,1,1)`), not to the show content.
-Those test patterns therefore run on their own fixed ceiling,
-`CALIBRATION_MASTER_LEVEL = 0.1f` in `imPulse.pde`, applied whenever
-`calibrationMode` is active - completely independent of the `/master/level`
-fader, and not reachable via OSC (a plain constant, same reasoning as
-`test/PatternProbe.java`'s `MASTER_LEVEL`). `ArtNetOutput.setMasterLevel()`
-still independently clamps whatever value it's given to **0..1** as a
-defensive fallback.
+patterns, not to the show content.
+
+Since 2026-07-31 the fader applies unfiltered to **every** mode - show,
+calibration, position mode. `draw()` simply calls
+`artNetOutput.setMasterLevel(masterLevel.getValue())`; the former
+`calibrationMode ? CALIBRATION_MASTER_LEVEL : ...` and the constant behind it
+are gone. The reason: the calibration view shows only individual points plus
+two cursor stripes tinted to 6 %, and it needs to be bright while recording
+crossings - a per-mode ceiling cannot separate it from the full-surface test
+patterns that live in the same mode.
+
+The safety limit now sits where the brightness is produced:
+`TestPatterns.PATTERN_LEVEL = 0.1f`, applied in the private helper
+`lit(r, g, b)` that **every** colour of **every** pattern passes through. No
+pattern builds its own `LedColor` - otherwise the ceiling would be a
+convention a later pattern has to remember. `test/TestPatternsTest.java`
+enforces it (no channel above `PATTERN_LEVEL`, and pattern 5 actually reaches
+it, so an accidentally black pattern cannot pass).
+
+This makes the guarantee *stricter*, not weaker: the master still multiplies
+on top and is clamped to 0..1 by `ArtNetOutput.setMasterLevel()`, so a test
+pattern can never exceed 10 % - the fader can only darken it further.
+
+Consequence for `test/PatternProbe.java`: its `MASTER_LEVEL` is now **1.0**,
+not 0.1. Two dimmings in series would give 0.01, i.e. 2 of 255 - the test
+patterns would be practically invisible on site.
 
 ## parameters
 * /net/impulse/speed

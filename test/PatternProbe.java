@@ -15,10 +15,12 @@ public class PatternProbe {
   static final int[] OCTETS = { 2, 4, 6, 7, 8, 10, 12, 13, 14, 16, 17, 18, 19, 20, 21 };
   static final int LEDS_PER_STRIPE = 600;
 
-  // Sicherheitsventil: die Stripes vertragen keine volle Helligkeit. Bewusst
-  // eine Konstante statt eines Arguments, damit sie sich nicht versehentlich
-  // hochschrauben laesst.
-  static final float MASTER_LEVEL = 0.1f;
+  // Das Sicherheitsventil steht seit 2026-07-31 in den Mustern selbst
+  // (TestPatterns.PATTERN_LEVEL) und wirkt damit hier wie im Sketch. Der
+  // Master muss deshalb 1.0 sein und NICHT nochmal 0.1: zwei Daempfungen
+  // hintereinander ergaeben 0.01, also 2 von 255 - die Testbilder waeren am
+  // Aufbau praktisch unsichtbar und die Abnahme wertlos.
+  static final float MASTER_LEVEL = 1.0f;
 
   public static void main(String[] args) throws Exception {
     if (args.length < 1) {
@@ -99,8 +101,8 @@ public class PatternProbe {
   }
 
   private static void printIntro(int pattern, int seconds, int stripeForPattern2, int numStripes) {
-    System.out.println("Master-Pegel fest auf " + MASTER_LEVEL
-        + " - laesst sich ueber Argumente nicht erhoehen.");
+    System.out.println("Testbild-Pegel fest auf " + TestPatterns.PATTERN_LEVEL
+        + " (in den Mustern selbst) - laesst sich ueber Argumente nicht erhoehen.");
     System.out.println("Laufzeit " + seconds + " s, " + numStripes + " Stripes.");
     switch (pattern) {
       case 1:
@@ -125,7 +127,7 @@ public class PatternProbe {
             + "die Farben vertauscht, in ArtNetOutput.java R_OFFSET und B_OFFSET tauschen.");
         break;
       case 5:
-        System.out.println("Testbild 5 - flaechig weiss, Dauerlast.");
+        System.out.println("Testbild 5 - alle Stripes flaechig gruen, Dauerlast.");
         System.out.println("Darauf achten: ueber die ganze Laufzeit stabil, kein Flackern, "
             + "kein Blackout.");
         break;

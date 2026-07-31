@@ -25,7 +25,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle neun Suiten — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle zehn Suiten — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
@@ -34,8 +34,9 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `NodeSelectionTest` — der Auswahlzeiger der Kalibrierung: Blättern, Aufheben am Anfang, Klemmen bei schrumpfender Liste
 - `LedAnchorStoreTest` — Anker setzen und löschen, Bereichs- und Grundflächenprüfung, Verteilung einer Position auf alle LEDs einer Kreuzung, die Bogenlängen-Warnung, Laden/Speichern von `data/ledPositions.txt`
 - `LedPositionMapTest` — Interpolation zwischen zwei Ankern, Fortsetzung des Vektors darüber hinaus, Klemmung auf die Grundfläche, `coverageReport`
-- `LedPositionCalibrationTest` — Arbeitsliste, Zeiger, Umrechnung Pixel↔Meter, Vorschlag, Feinjustierung, `L`-Zeitfenster, Rückmeldung im Netz
+- `LedPositionCalibrationTest` — Arbeitsliste, Zeiger, Umrechnung Pixel↔Meter, Vorschlag, Feinjustierung, `L`-Zeitfenster, Rückmeldung im Netz samt Leuchtabschnitt um den aktuellen Eintrag
 - `ImpulseOscThrottleTest` — Sendetakt (inklusive `rateHz = 0` und NaN) und die Auswahl der energiereichsten Impulse samt Tie-Break
+- `TestPatternsTest` — das Sicherheitsventil der Testbilder: kein Muster gibt einen Kanal über `TestPatterns.PATTERN_LEVEL` aus (siehe „Master-Pegel")
 
 Daneben liegen im selben Ordner drei Sonden, die **echte Hardware ansprechen** und deshalb nicht Teil der Default-Suite sind: `TimingProbe` (misst den 40-Hz-Sendetakt am echten Netz), `PollProbe` (fragt die Controller per ArtPoll nach ihrem Befinden ab) und `PatternProbe` (speist die fünf Testbilder direkt über `ArtNetOutput` ein, ohne Processing-Laufzeit). Diese drei gezielt einzeln aufrufen, z. B. `test/run.sh TimingProbe`, niemals ungefragt gegen die Installation.
 
@@ -144,7 +145,7 @@ Beide Pfade sind in `setup()`/`draw()` per Kommentar umschaltbar:
 
 `dispose()` in `imPulse.pde` wird von Processing beim Beenden aufgerufen: veröffentlicht einen komplett schwarzen Frame, wartet kurz, damit der Sender-Thread ihn noch verschickt, und ruft danach `artNetOutput.stop()`. Ohne das blieben die Stripes im letzten gesendeten Bild stehen, weil die Empfänger-Firmware nicht von selbst blankt.
 
-### Master-Pegel: Show-Fader (0..1) vs. Testbild-Fixpegel
+### Master-Pegel: ein Show-Fader (0..1), Testbilder dämpfen sich selbst
 
 `masterLevel` (`/master/level`, `RemoteControlledFloatParameter`) ist seit
 2026-07-30 der **Show-Fader**, Bereich **0..1** (`new
@@ -152,15 +153,34 @@ RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 1f)` in
 `imPulse.pde`) — die Installation fährt die Stripes im Betrieb bewusst nie auf
 Vollweiss, das Hardware-Risiko (Spannungsabfall bei Weiss auf 10 m Länge laut
 Handbuch der Stripes) betraf nur die Kalibrier-Testbilder, nicht den
-Show-Content. `TestPatterns` 3/5 senden bewusst `(1,1,1)` (Vollweiss) — dafür
-gibt es seither einen eigenen, vom Fader unabhängigen Fixpegel
-`CALIBRATION_MASTER_LEVEL = 0.1f` (Konstante in `imPulse.pde`, nicht per OSC
-erreichbar, gleiche Begründung wie `test/PatternProbe.java`s `MASTER_LEVEL`),
-angewandt in `draw()` via `calibrationMode ? CALIBRATION_MASTER_LEVEL :
-masterLevel.getValue()`. `setMasterLevel()` selbst klemmt weiterhin defensiv
-auf **0..1** (siehe `test/ArtNetOutputTest.java`) — ein zweites Sicherheitsnetz
-für den Fall, dass es je von anderer Stelle mit einem rohen Wert aufgerufen
-wird.
+Show-Content.
+
+Seit 2026-07-31 gilt der Fader **ungefiltert für jede Betriebsart** — Show,
+Kalibrierung, Positionsmodus. `draw()` ruft schlicht
+`artNetOutput.setMasterLevel(masterLevel.getValue())`; das frühere
+`calibrationMode ? CALIBRATION_MASTER_LEVEL : ...` ist weg, ebenso die
+Konstante. Grund: die Kalibrieransicht zeigt nur einzelne Punkte und zwei mit
+6 % eingefärbte Cursor-Stripes und soll bei der Aufnahme hell sein dürfen; ein
+Modus-Pegel kann sie nicht von den flächigen Testbildern trennen, die im
+selben Modus liegen.
+
+Das Sicherheitsventil sitzt stattdessen dort, wo die Helligkeit entsteht:
+`TestPatterns.PATTERN_LEVEL = 0.1f`, angewandt in der privaten Hilfsmethode
+`lit(r, g, b)`, durch die **jede** Farbe jedes Musters geht. Kein Muster baut
+sein `LedColor` selbst — sonst wäre der Pegel nur eine Konvention, an die ein
+später ergänztes Muster sich erinnern müsste. `test/TestPatternsTest.java`
+hält genau das nach (kein Kanal über `PATTERN_LEVEL`, und Muster 5 reizt ihn
+tatsächlich aus — ein versehentlich schwarzes Muster soll die Prüfung nicht
+bestehen).
+
+Die Sicherheitseigenschaft wird dadurch **strenger**, nicht schwächer: der
+Master multipliziert weiterhin obendrauf und ist auf 0..1 geklemmt
+(`setMasterLevel()`, siehe `test/ArtNetOutputTest.java`), ein Testbild kommt
+also nie über 10 % heraus — der Fader kann es nur noch dunkler machen.
+
+Folge für `test/PatternProbe.java`: dessen `MASTER_LEVEL` steht jetzt auf
+**1.0**, nicht mehr auf 0.1. Zwei Dämpfungen hintereinander ergäben 0.01, also
+2 von 255 — die Testbilder wären am Aufbau praktisch unsichtbar.
 
 ### Node-Kalibrierung
 
@@ -179,7 +199,7 @@ Tastenbelegung (nur wirksam im Kalibriermodus, ausser `c`/`C` selbst):
 - **S**: komplette Liste nach `data/nodeCrossings.txt` schreiben (atomar über Temp-Datei + Rename, **kein** Anhängen — mehrfaches Speichern verdoppelt nichts)
 - **R**: `LedInNetInfo.applyCrossings(...)` zur Laufzeit neu anwenden, ohne Neustart des Sketches
 - **N**: geladene (magenta) und neue (cyan) Kreuzungen einblenden/ausblenden
-- **0–5**: Testbilder umschalten — `0` ist die Kalibrieransicht selbst, `1`–`5` die fünf Abnahme-Testbilder aus `TestPatterns.java` (dieselbe Logik wie `test/PatternProbe.java`, keine zweite Implementierung). `imPulse.pde` ruft `nodeCalibration.setPattern(0)` bei **jedem** Umschalten des Kalibriermodus mit `C` — egal ob rein oder raus —, sonst würde ein Wiedereintritt das zuletzt gewählte Testbild statt der Kalibrierung zeigen
+- **0–5**: Testbilder umschalten — `0` ist die Kalibrieransicht selbst, `1`–`5` die fünf Abnahme-Testbilder aus `TestPatterns.java` (dieselbe Logik wie `test/PatternProbe.java`, keine zweite Implementierung): 1 ein Stripe nach dem anderen, 2 Lauflicht über den Cursor-Stripe, 3 nur die letzten vier LEDs jedes Stripes, 4 die einmalige Farbfolge Weiss/Rot/Grün/Blau, 5 alle Stripes flächig **grün** (seit 2026-07-31, vorher Vollweiss — grün zieht nur einen Kanal auf, also ein Drittel der Last auf denselben 18 000 LEDs). Alle fünf dämpfen sich selbst auf `PATTERN_LEVEL`, siehe „Master-Pegel". `imPulse.pde` ruft `nodeCalibration.setPattern(0)` bei **jedem** Umschalten des Kalibriermodus mit `C` — egal ob rein oder raus —, sonst würde ein Wiedereintritt das zuletzt gewählte Testbild statt der Kalibrierung zeigen
 - **L**: **alle** Kreuzungen verwerfen, auch die geladenen — für den Fall, dass eine Kalibrierung aus einer anderen Geometrie stammt und `BACKSPACE` sie (bewusst) nicht anfasst. Erfordert eine ausdrückliche Bestätigung: erster Druck kündigt die Anzahl an, ein zweiter Druck zwischen 300 ms und 5 s danach führt `NodeCrossingStore.clearAll()` aus. Jede andere Taste — Pfeiltasten und das Umschalten des Kalibriermodus mit `C` eingeschlossen — verwirft eine angekündigte Bestätigung wieder, die Untergrenze von 300 ms wehrt ausserdem Tastenwiederholung bei gehaltenem `L` ab
 
 `data/nodeCrossings_16x720.txt` ist die Topologie der vorigen 16×720-Geometrie (aufgehoben als Beleg, nicht geladen), `data/nodeCrossings_35C3.txt` die der 35C3-Installation davor.

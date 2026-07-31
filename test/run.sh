@@ -44,7 +44,7 @@ if [ "$#" -eq 0 ]; then
   # als unversionierte Arbeitskopie vor und fehlt auf einem frischen Klon.
   set -- ArtNetOutputTest ArtNetDecoderTest NodeCrossingStoreTest ApplyCrossingsTest
   for optional in NodeSelectionTest LedAnchorStoreTest LedPositionMapTest \
-                  LedPositionCalibrationTest ImpulseOscThrottleTest; do
+                  LedPositionCalibrationTest ImpulseOscThrottleTest TestPatternsTest; do
     if [ -f "test/$optional.java" ]; then
       set -- "$@" "$optional"
     else

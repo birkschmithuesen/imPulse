@@ -90,14 +90,10 @@ int counter=0;
 NodeCalibration nodeCalibration;
 boolean calibrationMode = false;
 
-// Sicherheitsventil ausschliesslich fuer die Testbilder (TestPatterns 1-5,
-// siehe drawPattern()/calibrationMode) - unabhaengig vom Show-Fader
-// masterLevel, der seit 2026-07-30 bis 1.0 gehen darf. TestPatterns 3/5
-// senden bewusst Vollweiss (1,1,1); bei 10-m-Stripe-Laenge ist das laut
-// Handbuch schon ein Spannungsabfall-Risiko. Bewusst eine Konstante statt
-// eines OSC-Parameters, damit sie sich nicht versehentlich hochschrauben
-// laesst (gleiche Begruendung wie test/PatternProbe.java MASTER_LEVEL).
-static final float CALIBRATION_MASTER_LEVEL = 0.1f;
+// Das Sicherheitsventil der Testbilder steht seit 2026-07-31 nicht mehr hier,
+// sondern als TestPatterns.PATTERN_LEVEL in den Mustern selbst - siehe die
+// Begruendung dort. Der Kalibriermodus laeuft dadurch auf demselben Fader wie
+// alles andere und darf bis 1.0 gehen.
 
 
 void setup() {
@@ -141,10 +137,10 @@ void setup() {
   System.out.print(artNetOutput.describeMapping());
   // 2026-07-30, Birk: Obergrenze auf 0..1 freigegeben - die Show fährt die
   // Stripes bewusst nie auf Vollweiss, das Hardware-Risiko (Spannungsabfall
-  // bei Weiss auf 10 m Laenge) betraf nur die Testbilder (TestPatterns 3/5
-  // senden (1,1,1)). Die Testbilder haben deshalb jetzt einen eigenen, vom
-  // Fader unabhaengigen Fixpegel CALIBRATION_MASTER_LEVEL statt masterLevel
-  // zu nutzen - der Fader selbst darf nun bis 1.0 gehen.
+  // bei Weiss auf 10 m Laenge) betraf nur die Testbilder. Die daempfen sich
+  // seit 2026-07-31 selbst (TestPatterns.PATTERN_LEVEL), der Fader gilt
+  // seither ungefiltert fuer jede Betriebsart - Show, Kalibrierung,
+  // Positionsmodus.
   masterLevel = new RemoteControlledFloatParameter("/master/level", 0.1f, 0f, 1f);
   artNetOutput.start();
 
@@ -253,10 +249,12 @@ void draw() {
   //server.sendTexture(canvas); //use this on Windows
   //server.sendImage(canvas); //use this on MacOS
   //send data directly to ArtNet Interface withoput MadMapper in between
-  // Testbilder (calibrationMode) laufen auf einem eigenen Fixpegel statt dem
-  // Show-Fader: TestPatterns 3/5 senden Vollweiss (1,1,1), das darf nicht mit
-  // masterLevel bis 1.0 rausgehen (Spannungsabfall-Risiko bei Weiss auf 10 m).
-  artNetOutput.setMasterLevel(calibrationMode ? CALIBRATION_MASTER_LEVEL : masterLevel.getValue());
+  // Ein Pegel fuer alle Betriebsarten, auch die Kalibrierung: die Testbilder
+  // daempfen sich seit 2026-07-31 selbst (TestPatterns.PATTERN_LEVEL), der
+  // Fader muss sie also nicht mehr abfangen. Damit laesst sich die
+  // Kalibrieransicht - einzelne Punkte, zwei schwach eingefaerbte Stripes -
+  // auf 1.0 hochziehen, ohne dass ein flaechiges Testbild mitgeht.
+  artNetOutput.setMasterLevel(masterLevel.getValue());
   artNetOutput.publish(ledColors);
 }
 
