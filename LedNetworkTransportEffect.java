@@ -24,8 +24,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   double lastCyclePos=(double)System.currentTimeMillis()/1000;
   double lastRandomSpawnTime=(double)System.currentTimeMillis()/1000; // Zeitpunkt des letzten randomSpawn-Events
 
-  LedColor[] stripeColorMapping = {new LedColor(68/255f,0/255f,62/255f), new LedColor(189/255f,103/255f,0/255f), new LedColor(236/255f,204/255f,0/255f), new LedColor(221/255f,65/255f,8/255f),
-                             new LedColor(187/255f,213/255f,67/255f), new LedColor(126/255f,201/255f,232/255f), new LedColor(210/255f,39/255f,45/255f), new LedColor(234/255f,147/255f,44/255f)};
+  // Die acht Stripe-Farben standen bis 2026-08-01 hier als Literal-Array
+  // (stripeColorMapping) und waren weder per OSC noch im Web-UI erreichbar.
+  // Sie sind jetzt 24 RemoteControlledFloatParameter, siehe stripeColorR/G/B
+  // weiter unten; die Zahlen selbst liegen in StripeColorDefaults.
 
   LinkedList<TravellingActivation> activations = new LinkedList<TravellingActivation>();
 
@@ -141,10 +143,26 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   RemoteControlledFloatParameter impulseGamma= new RemoteControlledFloatParameter("/net/impulse/color/gamma", 0f, 0.1f, 5f);
 
-  RemoteControlledIntParameter impulseUseRemoteCol; 
+  // 1 = jeder Impuls bekommt die EINE zentral gesetzte Farbe (impulseR/G/B),
+  // 0 = er bekommt die Farbe seines Stripes aus den acht Slots darunter.
+  // Hiess bis 2026-08-01 impulseUseRemoteCol an der Adresse
+  // /net/impulse/color/useRemoteCol -- "remote" beschrieb, WOHER der Wert
+  // kommt (per OSC), nicht was der Schalter tut. Beide Faelle kommen per OSC.
+  RemoteControlledIntParameter impulseUseSpecificColor;
   RemoteControlledFloatParameter impulseR;
   RemoteControlledFloatParameter impulseG;
   RemoteControlledFloatParameter impulseB;
+
+  // Die acht Farben des Gegenfalls ("Stripe-Farben"), Stripe -> Slot per
+  // Modulo. Bis 2026-08-01 ein Literal-Array mitten in dieser Klasse und
+  // damit weder per OSC noch im Web-UI erreichbar; die Startwerte kommen
+  // jetzt aus StripeColorDefaults, der Rest ist ein ganz normaler Parameter.
+  RemoteControlledFloatParameter[] stripeColorR =
+      new RemoteControlledFloatParameter[StripeColorDefaults.COUNT];
+  RemoteControlledFloatParameter[] stripeColorG =
+      new RemoteControlledFloatParameter[StripeColorDefaults.COUNT];
+  RemoteControlledFloatParameter[] stripeColorB =
+      new RemoteControlledFloatParameter[StripeColorDefaults.COUNT];
 
   RemoteControlledFloatParameter fadeOutR;
   RemoteControlledFloatParameter fadeOutG;
@@ -273,10 +291,19 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     lifetimeRandomizeMax= new RemoteControlledFloatParameter("/net/impulse/lifetime/randomize/max", 0.05f, 0.0001f, 1f);
     lifetimeRandomizePeriod= new RemoteControlledFloatParameter("/net/impulse/lifetime/randomize/period", 20f, 1f, 300f);
 
-    impulseUseRemoteCol = new RemoteControlledIntParameter("/net/impulse/color/useRemoteCol", 1, 0, 1);
+    impulseUseSpecificColor = new RemoteControlledIntParameter("/net/impulse/color/useSpecificColor", 1, 0, 1);
     impulseR= new RemoteControlledFloatParameter("/net/impulse/color/r", 1, 0, 1); // color of travelling impulse
     impulseG= new RemoteControlledFloatParameter("/net/impulse/color/g", 1, 0, 1); // color of travelling impulse
     impulseB= new RemoteControlledFloatParameter("/net/impulse/color/b", 1, 0, 1); // color of travelling impulse
+
+    // Die acht Stripe-Farben. Startwerte aus StripeColorDefaults, damit die
+    // Installation ohne jedes Preset genauso aussieht wie vorher.
+    for (int i=0; i<StripeColorDefaults.COUNT; i++) {
+      String base="/net/impulse/stripeColor/"+i+"/";
+      stripeColorR[i]= new RemoteControlledFloatParameter(base+"r", StripeColorDefaults.rgb(i, 0), 0, 1);
+      stripeColorG[i]= new RemoteControlledFloatParameter(base+"g", StripeColorDefaults.rgb(i, 1), 0, 1);
+      stripeColorB[i]= new RemoteControlledFloatParameter(base+"b", StripeColorDefaults.rgb(i, 2), 0, 1);
+    }
 
     fadeOutR= new RemoteControlledFloatParameter("/net/impulse/fadeOut/r", 0.97f, 0f, 1f); // color of travelling impulse
     fadeOutG= new RemoteControlledFloatParameter("/net/impulse/fadeOut/g", 0.96f, 0f, 1f); // color of travelling impulse
@@ -477,7 +504,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   //simulate one time step
   public LedColor[] drawMe() {
-    int useRemoteCol = impulseUseRemoteCol.getValue();
+    int useSpecificColor = impulseUseSpecificColor.getValue();
     float spotR=impulseR.getValue();
     float spotG=impulseG.getValue();
     float spotB=impulseB.getValue();
@@ -542,13 +569,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       TravellingActivation curActivation = iter.next();
       int curLedIndex=curActivation.getLedIndex(); // global led position
       float fade=(float)Math.pow(curActivation.energy, gamma);
-      if (useRemoteCol == 1) {
+      if (useSpecificColor == 1) {
         bufferLedColors[curLedIndex].set(spotR*fade*curActivation.energy, spotG*fade*curActivation.energy, spotB*fade*curActivation.energy);
       } else {
-        // Tabelle hat acht Eintraege, es gibt aber 30 Stripes
-        LedColor col = stripeColorMapping[ledNetInfo[curLedIndex].stripeIndex % stripeColorMapping.length];
-
-      bufferLedColors[curLedIndex].set(col.x*fade, col.y*fade, col.z*fade);
+        // Acht Slots, es gibt aber 30 Stripes - das Muster wiederholt sich
+        int slot = ledNetInfo[curLedIndex].stripeIndex % StripeColorDefaults.COUNT;
+        bufferLedColors[curLedIndex].set(stripeColorR[slot].getValue()*fade,
+                                         stripeColorG[slot].getValue()*fade,
+                                         stripeColorB[slot].getValue()*fade);
       }
       //if the travelling activation is a filler remove it
       if (curActivation.getClass() == TravellingActivationFiller.class) {

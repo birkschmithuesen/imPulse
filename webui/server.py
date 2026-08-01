@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import re
 import socket
 import struct
 import sys
@@ -246,49 +248,9 @@ SPLIT_STAGGER_NOTES: List[Tuple[str, int]] = [
     ("sixteenth", 16),
 ]
 
-# Kurzerklaerungen fuer Parameter, deren Adresse allein nicht verraet, was sie
-# tun. remoteSettings.txt fuehrt zwar eine Beschreibungsspalte, die steht aber
-# bei fast allen Parametern auf dem Platzhalter "space for descripiton".
-DESCRIPTIONS: Dict[str, str] = {
-    "/net/impulse/splitSpeedJitter":
-        "Streut die Geschwindigkeit der Kinder an einer Kreuzung. "
-        "0 = jeder Zweig exakt so schnell wie der Elternimpuls.",
-    "/net/impulse/splitLifetimeJitter":
-        "Streut die Lebensdauer der Kinder an einer Kreuzung, ohne ihre "
-        "Helligkeit zu aendern. 0 = Geschwister sterben synchron.",
-    "/net/impulse/speedQuantize/enabled":
-        "Laesst neue Impulse mit einem rhythmischen Vielfachen von "
-        "/net/impulse/speed spawnen statt immer mit genau diesem Wert.",
-    "/net/impulse/speedQuantize/jitter":
-        "Swing auf der gezogenen Speed-Klasse. 0 = exakt das Vielfache. "
-        "Ueber 0,29 rutschen einzelne Impulse im Klang in die Nachbarklasse.",
-    "/net/impulse/speedQuantize/baseSpeed":
-        "Manuelle Basis-Speed wenn Speed Quantize an ist. Die Klassen (0,5x bis 8x) "
-        "werden auf diese Basis multipliziert, nicht auf den Randomizer impulseSpeed.",
-    "/net/impulse/split/weight/all":
-        "Gewicht dafuer, dass eine Kreuzung alle moeglichen Zweige nimmt - "
-        "das bisherige Verhalten.",
-    "/net/impulse/split/weight/oneLess":
-        "Gewicht fuer einen Zweig weniger als moeglich. Welcher wegfaellt, "
-        "wird je Aufspaltung gewuerfelt.",
-    "/net/impulse/split/weight/single":
-        "Gewicht dafuer, dass der Impuls nur in EINE Richtung weiterlaeuft, "
-        "statt sich zu teilen.",
-    "/net/impulse/split/staggerEnabled":
-        "Laesst die Zweige einer Aufspaltung nacheinander statt gleichzeitig "
-        "starten. Der Abstand haengt an /net/sequencer/bpm, auch wenn der "
-        "Sequencer aus ist.",
-    "/net/impulse/split/stagger/weight/sixteenth":
-        "Gewicht fuer einen Sechzehntel-Abstand zwischen den Zweigen. "
-        "Gezogen wird je Aufspaltung, nicht je Zweig - die Kinder EINES "
-        "Splits stehen also immer auf demselben Raster.",
-    "/net/sequencer/enabled":
-        "Not-Aus fuer alle sechs Tracks. Die Taktuhr laeuft weiter, das "
-        "Wiedereinschalten haengt also nicht an der Dauer der Pause.",
-    "/net/sequencer/bpm":
-        "Gemeinsames Tempo aller Tracks. Ein Wechsel aendert die Rate, nicht "
-        "die Position - es gibt keinen Sprung.",
-}
+# Die Titel und Kurzerklaerungen aller Regler stehen weiter unten in
+# ADDRESS_LABELS -- sie brauchen die Levelnamen der Song-Struktur, die erst
+# darunter definiert sind.
 
 
 def build_sequencer(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
@@ -328,7 +290,32 @@ def build_sequencer(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, An
                        for v, s, n in NOTE_VALUES],
         "treeLabels": list(TREE_LABELS),
         "treeHelp": TREE_HELP,
+        "legend": track_field_legend(),
     }
+
+
+def track_field_legend() -> List[Dict[str, str]]:
+    """Was die Regler einer Track-Karte bedeuten -- EINMAL unter der Reihe.
+
+    Die Karten sind bewusst kompakt beschriftet ("Wdh.", "Swing"): sechs
+    Erklaerungssaetze in jeder der sechs Karten waeren 36 Absaetze und
+    machten das Panel unbedienbar, das ja gerade deshalb existiert. Einmal
+    darunter als Legende ist die Erklaerung trotzdem da, ohne die Karten zu
+    sprengen.
+
+    Text und Titel kommen aus ADDRESS_LABELS, nicht aus einer zweiten Liste --
+    sonst stuende dieselbe Aussage an zwei Orten und nur einer wuerde
+    nachgezogen. originTreeFilter fehlt hier bewusst: TREE_HELP steht direkt
+    daneben und sagt mehr (den Vorrang des festen Ursprungs).
+    """
+    legend: List[Dict[str, str]] = []
+    for name in SEQUENCER_TRACK_FIELDS:
+        if name == "originTreeFilter":
+            continue
+        label, text = label_for("%strack0/%s" % (SEQUENCER_PREFIX, name))
+        if label and text:
+            legend.append({"label": label, "text": text})
+    return legend
 
 
 def build_speed_classes(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
@@ -401,6 +388,237 @@ def build_split(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Farben
+#
+# Alle Farben des UI werden ueber einen nativen Farbwaehler eingestellt, nicht
+# mehr ueber Kanalregler (Birk, 2026-08-01). Der Server liefert dafuer nur die
+# STRUKTUR -- welche drei Adressen eine Karte bilden und in welchem Farbraum
+# --, das Aussehen macht app.js. Dieselbe Aufteilung wie beim Sequencer.
+#
+# Zwei Farbraeume, weil die Java-Seite zwei kennt: die Impuls- und
+# Stripe-Farben liegen als r/g/b (RemoteControlledFloatParameter, 0..1), die
+# Knotenfarben als Hue/Sat/Bright (RemoteControlledColorParameter). Umgerechnet
+# wird im Browser, gesendet werden weiter die Einzelkanaele -- an dem, was bei
+# imPulse ankommt, aendert sich nichts.
+# ---------------------------------------------------------------------------
+
+STRIPE_COLOR_PREFIX = "/net/impulse/stripeColor/"
+# Spiegelt StripeColorDefaults.COUNT auf der Java-Seite. Der Effekt bildet
+# Stripe -> Slot per Modulo ab; bei 30 Stripes wiederholt sich das Muster also
+# alle acht.
+STRIPE_COLOR_COUNT = 8
+RGB_COMPONENTS = ("r", "g", "b")
+
+IMPULSE_COLOR_BASE = "/net/impulse/color"
+
+
+def _rgb_card(by_address: Dict[str, "Parameter"], base: str
+              ) -> Optional[Dict[str, Any]]:
+    """Eine Farbkarte aus <base>/r, <base>/g und <base>/b, oder None.
+
+    None heisst: dieser imPulse-Stand kennt die drei Adressen nicht. Dann
+    faellt das UI auf das generische Rendering zurueck, statt eine Karte ohne
+    Wirkung zu zeigen.
+    """
+    parts = {}
+    for component in RGB_COMPONENTS:
+        param = by_address.get("%s/%s" % (base, component))
+        if param is None:
+            return None
+        parts[component] = param.as_dict()
+    label, help_text = label_for(base)
+    return {
+        "kind": "rgb",
+        "base": base,
+        "label": label or base.rpartition("/")[2],
+        "help": help_text,
+        "components": parts,
+    }
+
+
+def build_colors(by_address: Dict[str, "Parameter"]) -> Dict[str, Any]:
+    """Struktur der Farb-Sektionen: Impulsfarbe, Modus, acht Stripe-Slots.
+
+    Liefert immer ein Objekt (nie None) -- die einzelnen Felder sind None,
+    wenn ihre Adressen fehlen. Anders als beim Sequencer gibt es hier kein
+    Alles-oder-nichts: eine aeltere remoteSettings.txt kennt die
+    Stripe-Farben nicht, die Impulsfarbe aber schon, und dann soll die
+    Impulsfarbe trotzdem als Farbwaehler dastehen.
+    """
+    stripes: List[Dict[str, Any]] = []
+    for slot in range(STRIPE_COLOR_COUNT):
+        card = _rgb_card(by_address, "%s%d" % (STRIPE_COLOR_PREFIX, slot))
+        if card is None:
+            # Teilweise vorhandene Slots gibt es nicht: sie werden in einer
+            # Schleife registriert. Ein fehlender Slot heisst "dieser Stand
+            # kennt das Feature nicht", also gar keine Slot-Reihe.
+            stripes = []
+            break
+        card["slot"] = slot
+        stripes.append(card)
+
+    mode = by_address.get(IMPULSE_COLOR_BASE + "/useSpecificColor")
+    return {
+        "impulse": _rgb_card(by_address, IMPULSE_COLOR_BASE),
+        "mode": mode.as_dict() if mode is not None else None,
+        # Die Beschriftung der zwei Zustaende steht HIER und nicht in app.js:
+        # sie ist die Aussage darueber, was der Schalter auf der Java-Seite
+        # tut, und nur hier pruefbar. "an (1)/aus (0)" war fuer genau diesen
+        # Parameter die schlechteste aller Beschriftungen -- beide Zustaende
+        # sind ein Modus, keiner ist "aus".
+        "modeLabels": {"1": "Spezifische Farbe", "0": "Stripe-Farben"},
+        "stripes": stripes,
+    }
+
+
+def color_addresses(colors: Optional[Dict[str, Any]]) -> Set[str]:
+    """Adressen, die die Farb-Sektionen selbst rendern.
+
+    Ohne das stuenden Impulsfarbe und Stripe-Slots zweimal auf der Seite:
+    einmal als Farbwaehler und einmal als Kanalregler -- zwei Bedienelemente
+    fuer denselben Wert, die auseinanderlaufen koennen.
+    """
+    taken: Set[str] = set()
+    if not colors:
+        return taken
+    cards = list(colors.get("stripes") or [])
+    if colors.get("impulse"):
+        cards.append(colors["impulse"])
+    for card in cards:
+        for entry in card["components"].values():
+            taken.add(entry["address"])
+    if colors.get("mode"):
+        taken.add(colors["mode"]["address"])
+    return taken
+
+
+# ---------------------------------------------------------------------------
+# Nachleuchten: Zielfarbe + Tempo statt drei Zerfallsraten
+#
+# /net/impulse/fadeOut/{r,g,b} sind KEINE Farbe. Der Effekt multipliziert den
+# ganzen LED-Puffer in jedem Frame damit (LedColor.mult in drawMe()) -- es sind
+# drei Zerfallsraten je Kanal. Ein Farbwaehler direkt darauf waere irrefuehrend:
+# die Intuition "heller im Waehler = mehr davon" bedeutet hier "zerfaellt
+# LANGSAMER", also das Gegenteil dessen, was man beim Aufziehen erwartet.
+#
+# Bedient wird deshalb, was ein Operator wirklich fragt: welche Farbe hat die
+# Spur, kurz bevor sie verschwindet, und wie schnell verschwindet sie. Die drei
+# Raten werden daraus gerechnet.
+#
+# Formel:
+#     w_c       = MIN_WEIGHT + (1 - MIN_WEIGHT) * (ziel_c / max(ziel))
+#     fadeOut_c = baseDecay ** (1 / w_c)
+#
+# Der staerkste Kanal der Zielfarbe hat w = 1 und bekommt damit genau
+# baseDecay; jeder schwaechere bekommt einen groesseren Exponenten, zerfaellt
+# also schneller und ist frueher weg. Uebrig bleibt am Ende der Spur die
+# Zielfarbe -- genau das, was der Waehler zeigt.
+#
+# Drei Grenzfaelle, die die Kalibrierung bestimmen:
+#
+# * baseDecay = 1 -> alle Kanaele 1, unabhaengig von der Zielfarbe. Faellt
+#   ohne Sonderfall heraus, weil 1**x == 1 fuer jedes x. Das ist der Grund fuer
+#   die Potenz-Form: eine multiplikative Gewichtung (baseDecay * w_c) haette
+#   hier je Kanal etwas anderes ergeben.
+# * Schwarze Zielfarbe -> max(ziel) == 0, die Division waere undefiniert.
+#   Dann gelten alle Gewichte als 1: die Spur zerfaellt in allen drei Kanaelen
+#   gleich schnell, verfaerbt sich also nicht. Das ist die einzige Antwort, die
+#   ohne willkuerliche Annahme auskommt -- "welche Farbe bleibt uebrig" hat bei
+#   Schwarz keine Antwort.
+# * MIN_WEIGHT > 0 haelt den Exponenten endlich. Bei w = 0 waere er unendlich.
+#
+# MIN_WEIGHT ist NICHT geraten, sondern aus dem Auslieferungswert
+# 0.97/0.96/0.56 zurueckgerechnet: mit baseDecay = 0.97 (der langsamste Kanal)
+# braucht Blau ein Gewicht von ln(0.97)/ln(0.56) = 0.0525, damit die Zahl
+# wieder herauskommt. Ein groesseres MIN_WEIGHT koennte die gelieferte
+# Einstellung gar nicht mehr darstellen -- der warme Schweif der Installation
+# waere mit dem neuen Bedienelement unerreichbar.
+# ---------------------------------------------------------------------------
+
+FADE_PREFIX = "/net/impulse/fadeOut/"
+FADE_ADDRESSES = tuple(FADE_PREFIX + c for c in RGB_COMPONENTS)
+
+MIN_WEIGHT = 0.05
+
+# Ab hier gilt baseDecay als "kein Zerfall": ln(1) ist 0, die Rueckrechnung
+# teilte also durch null. Der Abstand ist grob genug, um auch die Rundung auf
+# vier Stellen in einer Preset-Datei aufzufangen.
+_NO_DECAY_EPSILON = 1e-4
+
+
+def fade_from_target(red: float, green: float, blue: float,
+                     decay: float) -> Tuple[float, float, float]:
+    """(Zielfarbe 0..1, Tempo 0..1) -> die drei Zerfallsraten 0..1."""
+    channels = [_clamp01(float(c)) for c in (red, green, blue)]
+    base = _clamp01(float(decay))
+    strongest = max(channels)
+    result: List[float] = []
+    for value in channels:
+        if strongest <= 0.0:
+            weight = 1.0
+        else:
+            weight = MIN_WEIGHT + (1.0 - MIN_WEIGHT) * (value / strongest)
+        result.append(_clamp01(base ** (1.0 / weight)))
+    return result[0], result[1], result[2]
+
+
+def fade_to_target(red: float, green: float, blue: float
+                   ) -> Tuple[float, float, float, float]:
+    """Die Umkehrung: drei Zerfallsraten -> (Zielfarbe 0..1, Tempo 0..1).
+
+    Gebraucht beim Seitenaufbau und nach jedem Preset-Laden -- das UI kennt
+    dann nur die drei rohen Werte und muss daraus Waehler und Fader stellen.
+
+    Zwei Faelle haben keine eindeutige Antwort und liefern deshalb Weiss:
+    zerfaellt gar nichts (alle Raten 1), gibt es keine Reihenfolge, in der die
+    Kanaele verschwinden; zerfaellt alles sofort (Rate 0), bleibt keine Farbe
+    uebrig. Weiss ist dabei die harmloseste Anzeige: sie behauptet keine
+    Faerbung, die es nicht gibt.
+    """
+    rates = [_clamp01(float(c)) for c in (red, green, blue)]
+    base = max(rates)
+    if base >= 1.0 - _NO_DECAY_EPSILON or base <= 0.0:
+        return 1.0, 1.0, 1.0, base
+    import math
+    log_base = math.log(base)
+    channels: List[float] = []
+    for rate in rates:
+        if rate <= 0.0:
+            # Kanal verschwindet sofort: das ist das Gewicht MIN_WEIGHT, also
+            # der schwaechstmoegliche Anteil an der Zielfarbe.
+            channels.append(0.0)
+            continue
+        exponent = math.log(rate) / log_base
+        if exponent <= 1.0:
+            channels.append(1.0)
+            continue
+        weight = 1.0 / exponent
+        channels.append(_clamp01((weight - MIN_WEIGHT) / (1.0 - MIN_WEIGHT)))
+    return channels[0], channels[1], channels[2], base
+
+
+def build_fade(by_address: Dict[str, "Parameter"],
+               values: Dict[str, float]) -> Optional[Dict[str, Any]]:
+    """Struktur der Sektion "Nachleuchten", oder None wenn unbekannt."""
+    params = [by_address.get(address) for address in FADE_ADDRESSES]
+    if any(p is None for p in params):
+        return None
+    current = [float(values.get(p.address, p.value)) for p in params]
+    red, green, blue, decay = fade_to_target(*current)
+    return {
+        "addresses": list(FADE_ADDRESSES),
+        "target": {"r": red, "g": green, "b": blue},
+        "decay": decay,
+        "raw": {p.address: value for p, value in zip(params, current)},
+    }
+
+
+def fade_addresses(fade: Optional[Dict[str, Any]]) -> Set[str]:
+    """Adressen, die die Nachleucht-Sektion selbst bedient."""
+    return set(fade["addresses"]) if fade else set()
+
+
+# ---------------------------------------------------------------------------
 # Song-Struktur-Ebene
 #
 # Die Dramaturgie ueber eine ganze Nacht: eine Markov-Kette ueber vier
@@ -437,6 +655,454 @@ SONG_LEVEL_HINTS: List[str] = [
     "hohe Spawn-Rate, viel Bewegung im Netz",
     "Maximalausschlag - kurz und intensiv, kein Dauerzustand",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Regler-Beschriftungen
+#
+# Adresse -> (sprechender Titel, Kurzerklaerung oder None).
+#
+# Warum das HIER steht und nicht in app.js: es ist eine inhaltliche Aussage
+# darueber, was ein Parameter im Sketch bewirkt -- dasselbe Argument wie bei
+# TAB_RULES und TREE_HELP. Hier ist sie ohne jsdom pruefbar; test_webui.py
+# haelt fest, dass jede bekannte Adresse einen Titel hat.
+#
+# Der Titel ersetzt das letzte Adresssegment als HAUPTtext des Reglers. Die
+# rohe OSC-Adresse bleibt sichtbar, aber als kleinste, gedimmte Zeile darunter
+# -- ohne sie waere ein Regler nicht mehr einer Adresse zuzuordnen, und genau
+# das braucht man beim Debuggen mit OSC von Hand.
+#
+# Die zweite Spalte ist bewusst dreiwertig gemeint:
+#   Text  -- Erklaerung, wird unter dem Regler angezeigt
+#   None  -- SELBSTERKLAEREND, es soll bewusst nichts dastehen (Farbkanaele,
+#            Min/Max-Paare, deren Sektionsueberschrift schon alles sagt)
+# Ein fehlender Eintrag heisst dagegen "vergessen" -- der Unterschied ist der
+# Grund, warum hier auch triviale Adressen mit None aufgefuehrt sind.
+#
+# remoteSettings.txt fuehrt zwar selbst eine Beschreibungsspalte, die steht
+# aber bei praktisch allen Parametern auf dem Platzhalter
+# "space for descripiton" und ist deshalb keine Quelle.
+# ---------------------------------------------------------------------------
+
+# Nachgeschlagen wird in drei Stufen (siehe label_for): exakte Adresse, dann
+# das Ziffern-Muster (track0 -> track#), dann das letzte Segment. Die
+# Muster-Stufe spart sechs identische Zeilen je Sequencer-Feld.
+ADDRESS_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
+
+    # --- Mixer ------------------------------------------------------------
+    "/master/level": (
+        "Gesamt-Helligkeit",
+        "Show-Fader ueber alle 18 000 LEDs. Wirkt auf die Hardware; die "
+        "Vorschau im Sketch-Fenster zeigt weiter volle Helligkeit."),
+    "Master/trace": (
+        "Nachleuchten (Gesamtbild)",
+        "Wieviel vom vorigen Bild stehen bleibt, bevor das neue darauf "
+        "gemischt wird. 0 = harte Punkte, hoch = lange Schweife durch das "
+        "ganze Netz. Wirkt auf ALLE Ebenen; die Spur der Impulse allein "
+        "regelt der Farben-Tab."),
+    "Master/0/opacity/0.Impulse": (
+        "Ebene: Impulse",
+        "Deckkraft der wandernden Impulse in der Mischung."),
+    "Master/1/opacity/1.Nodes": (
+        "Ebene: Knoten",
+        "Deckkraft der Kreuzungspunkte in der Mischung."),
+
+    # --- Impuls-Physik ----------------------------------------------------
+    "/net/impulse/speed": (
+        "Grundgeschwindigkeit",
+        "Wie schnell ein Impuls den Stripe entlangwandert, in LEDs pro "
+        "Sekunde. Bei eingeschalteter Kopplung ziehen Lebensdauer, Totzeit "
+        "und Spawn-Intervall proportional mit."),
+    "/net/impulse/lifetime": (
+        "Energieverlust je Sekunde",
+        "Wie schnell ein Impuls unterwegs dunkler wird und schliesslich "
+        "stirbt. Klein = weite Reise durchs Netz, gross = kurzer Funke."),
+    "/net/impulse/nodeDeadTime": (
+        "Totzeit pro Knoten",
+        "So lange bleibt eine Kreuzung nach dem Feuern stumm. Ohne sie wuerde "
+        "derselbe Impuls denselben Knoten in jedem Frame neu ausloesen."),
+    "/net/impulse/energyExponent": (
+        "Anschlags-Kennlinie",
+        "Exponent auf der Energie eines eingehenden Triggers. 1 = linear, "
+        "hoeher = nur kraeftige Anschlaege kommen noch hell durch."),
+    "/net/impulse/oscRate": (
+        "Positionsmeldungen je Sekunde",
+        "Takt, in dem die Positionen reisender Impulse an SuperCollider "
+        "gehen. 0 schaltet den Strom ab - die Knotentoene laufen weiter. Der "
+        "Not-Aus, wenn der Klangrechner nicht mitkommt."),
+    "/net/impulse/oscMaxCount": (
+        "Gemeldete Impulse je Takt",
+        "Hoechstzahl gleichzeitig gemeldeter Impulse, ausgewaehlt nach "
+        "Energie. Deckel gegen Klangbrei und Netzlast."),
+    "/net/impulse/splitSpeedJitter": (
+        "Streuung: Tempo der Zweige",
+        "Streut die Geschwindigkeit der Kinder an einer Kreuzung. "
+        "0 = jeder Zweig exakt so schnell wie der Elternimpuls."),
+    "/net/impulse/splitLifetimeJitter": (
+        "Streuung: Lebensdauer der Zweige",
+        "Streut die Lebensdauer der Kinder an einer Kreuzung, ohne ihre "
+        "Helligkeit zu aendern. 0 = Geschwister sterben synchron."),
+
+    # --- Sinus-Randomizer -------------------------------------------------
+    "/net/impulse/speed/randomize/enabled": (
+        "Tempo automatisch schwanken lassen",
+        "Faehrt die Grundgeschwindigkeit langsam zwischen Min und Max hin und "
+        "her, statt sie fest stehen zu lassen. Der Regler oben folgt der "
+        "Bewegung im UI nicht - es gibt keinen Rueckkanal."),
+    "/net/impulse/speed/randomize/min": (
+        "Tempo: untere Grenze",
+        "Langsamster Wert, den die Schwingung erreicht."),
+    "/net/impulse/speed/randomize/max": (
+        "Tempo: obere Grenze",
+        "Schnellster Wert, den die Schwingung erreicht."),
+    "/net/impulse/speed/randomize/period": (
+        "Tempo: Dauer eines Zyklus",
+        "Sekunden fuer einen vollen Auf-und-Ab-Durchlauf. Beim Einschalten "
+        "startet die Schwingung in der Mitte des Bereichs."),
+    "/net/impulse/lifetime/randomize/enabled": (
+        "Lebensdauer automatisch schwanken lassen",
+        "Faehrt den Energieverlust langsam zwischen Min und Max hin und her. "
+        "Unabhaengig von der Tempo-Schwingung, eigener Takt."),
+    "/net/impulse/lifetime/randomize/min": (
+        "Lebensdauer: untere Grenze",
+        "Kleinster Energieverlust der Schwingung - die Impulse reisen hier am "
+        "weitesten."),
+    "/net/impulse/lifetime/randomize/max": (
+        "Lebensdauer: obere Grenze",
+        "Groesster Energieverlust der Schwingung - die Impulse sterben hier "
+        "am schnellsten."),
+    "/net/impulse/lifetime/randomize/period": (
+        "Lebensdauer: Dauer eines Zyklus",
+        "Sekunden fuer einen vollen Auf-und-Ab-Durchlauf."),
+
+    # --- Tempo-Klassen ----------------------------------------------------
+    "/net/impulse/speedQuantize/enabled": (
+        "Rhythmische Tempo-Klassen",
+        "Laesst neue Impulse mit einem rhythmischen Vielfachen der "
+        "Grundgeschwindigkeit starten statt immer mit genau diesem Wert."),
+    "/net/impulse/speedQuantize/jitter": (
+        "Swing auf der Tempo-Klasse",
+        "0 = exakt das Vielfache. Ueber 0,29 rutschen einzelne Impulse im "
+        "Klang hoerbar in die Nachbarklasse."),
+    "/net/impulse/speedQuantize/baseSpeed": (
+        "Basis der Tempo-Klassen",
+        "Faktor, auf den die Klassen (0,5x bis 8x) multiplizieren, solange "
+        "die Tempo-Klassen an sind - unabhaengig vom Sinus-Randomizer auf der "
+        "Grundgeschwindigkeit."),
+    "/net/impulse/speedQuantize/weight/0x5": (
+        "Gewicht 0,5x",
+        "Wie oft ein neuer Impuls halb so schnell startet wie die "
+        "Grundgeschwindigkeit."),
+    "/net/impulse/speedQuantize/weight/1x": (
+        "Gewicht 1x",
+        "Wie oft ein neuer Impuls genau mit der Grundgeschwindigkeit "
+        "startet - der Normalfall."),
+    "/net/impulse/speedQuantize/weight/2x": (
+        "Gewicht 2x",
+        "Wie oft ein neuer Impuls doppelt so schnell startet."),
+    "/net/impulse/speedQuantize/weight/4x": (
+        "Gewicht 4x",
+        "Wie oft ein neuer Impuls vierfach so schnell startet."),
+    "/net/impulse/speedQuantize/weight/8x": (
+        "Gewicht 8x",
+        "Wie oft ein neuer Impuls achtfach so schnell startet - der seltene "
+        "Ausreisser, der quer durchs Netz schiesst."),
+
+    # --- Split-Verhalten --------------------------------------------------
+    "/net/impulse/split/weight/all": (
+        "Gewicht: alle Zweige",
+        "Gewicht dafuer, dass eine Kreuzung alle moeglichen Zweige nimmt - "
+        "das Verhalten von frueher."),
+    "/net/impulse/split/weight/oneLess": (
+        "Gewicht: einer weniger",
+        "Gewicht fuer einen Zweig weniger als moeglich. Welcher wegfaellt, "
+        "wird je Aufspaltung gewuerfelt."),
+    "/net/impulse/split/weight/single": (
+        "Gewicht: nur einer",
+        "Gewicht dafuer, dass der Impuls nur in EINE Richtung weiterlaeuft, "
+        "statt sich zu teilen."),
+    "/net/impulse/split/staggerEnabled": (
+        "Zweige zeitversetzt starten",
+        "Laesst die Zweige einer Aufspaltung nacheinander statt gleichzeitig "
+        "losgehen. Der Abstand haengt am BPM-Raster, auch wenn der Sequencer "
+        "aus ist."),
+    # Der Versatz hatte bis 2026-08-01 EINEN festen Notenwert
+    # (/net/impulse/split/staggerNoteValue); er wird jetzt je Aufspaltung aus
+    # diesen fuenf Gewichten gezogen, deshalb steht hier eine Verteilung und
+    # keine einzelne Adresse mehr.
+    "/net/impulse/split/stagger/weight/whole": (
+        "Gewicht: ganze Note",
+        "Wie oft die Zweige einer Aufspaltung eine ganze Note auseinander "
+        "starten - der weiteste Abstand."),
+    "/net/impulse/split/stagger/weight/half": (
+        "Gewicht: halbe Note",
+        "Wie oft die Zweige einer Aufspaltung eine halbe Note auseinander "
+        "starten."),
+    "/net/impulse/split/stagger/weight/quarter": (
+        "Gewicht: Viertel",
+        "Wie oft die Zweige einer Aufspaltung ein Viertel auseinander "
+        "starten."),
+    "/net/impulse/split/stagger/weight/eighth": (
+        "Gewicht: Achtel",
+        "Wie oft die Zweige einer Aufspaltung ein Achtel auseinander "
+        "starten."),
+    "/net/impulse/split/stagger/weight/sixteenth": (
+        "Gewicht: Sechzehntel",
+        "Wie oft die Zweige einer Aufspaltung ein Sechzehntel auseinander "
+        "starten. Gezogen wird je Aufspaltung, nicht je Zweig - die Kinder "
+        "EINES Splits stehen also immer auf demselben Raster."),
+
+    # --- Impuls-Farbe -----------------------------------------------------
+    # Die drei Kanaele sind Birks Beispiel fuer "selbsterklaerend": ein
+    # Regler namens "Rot" braucht keinen Satz darunter.
+    "/net/impulse/color/r": ("Impulsfarbe Rot", None),
+    "/net/impulse/color/g": ("Impulsfarbe Gruen", None),
+    "/net/impulse/color/b": ("Impulsfarbe Blau", None),
+    "/net/impulse/color/gamma": (
+        "Farbkurve",
+        "Wie steil die Helligkeit mit der Energie des Impulses steigt. Unter "
+        "1 hebt schwache Impulse an, ueber 1 drueckt sie weg."),
+    # Kein Regler mehr, sondern der Zwei-Zustands-Schalter der Sektion
+    # "Impuls-Farbe" -- der Titel steht trotzdem hier, damit die
+    # Vollstaendigkeitspruefung greift und der Rueckfall stimmt, falls die
+    # Sektion einmal nicht gebaut werden kann.
+    "/net/impulse/color/useSpecificColor": (
+        "Farbquelle der Impulse",
+        "„Spezifische Farbe“ = alle Impulse nehmen die eine Farbe darueber. "
+        "„Stripe-Farben“ = jeder Impuls nimmt die Farbe seines Stripes aus "
+        "den acht Slots."),
+    "/net/impulse/color": (
+        "Impulsfarbe",
+        "Die Farbe, in der ein Impuls durchs Netz laeuft. Wirkt nur im Modus "
+        "„Spezifische Farbe“."),
+    # Die acht Slots des Modus "Stripe-Farben". Der Slot-Titel kommt aus einer
+    # Schleife weiter unten -- acht fast gleiche Zeilen von Hand waeren acht
+    # Gelegenheiten, eine Nummer zu verwechseln.
+    # Die drei fadeOut-Kanaele sind KEINE Farbe, sondern Zerfallsraten je
+    # Kanal. Sie stehen im UI nicht mehr als eigene Regler (die Sektion
+    # "Nachleuchten" rechnet sie aus Zielfarbe und Tempo aus), behalten hier
+    # aber ihren Eintrag: fuer den Rueckfall und die Vollstaendigkeitspruefung.
+    "/net/impulse/fadeOut/r": (
+        "Zerfallsrate Rot",
+        "Anteil, den der Rotkanal der Spur je Frame behaelt. Nahe 1 = bleibt "
+        "lange stehen, klein = verschwindet sofort."),
+    "/net/impulse/fadeOut/g": (
+        "Zerfallsrate Gruen",
+        "Anteil, den der Gruenkanal der Spur je Frame behaelt. Nahe 1 = "
+        "bleibt lange stehen, klein = verschwindet sofort."),
+    "/net/impulse/fadeOut/b": (
+        "Zerfallsrate Blau",
+        "Anteil, den der Blaukanal der Spur je Frame behaelt. Nahe 1 = bleibt "
+        "lange stehen, klein = verschwindet sofort."),
+
+    # --- Zufalls-Spawns ---------------------------------------------------
+    "/net/randomSpawn/enabled": (
+        "Zufalls-Spawns",
+        "Der Grundpuls der Installation: laesst von selbst Impulse an "
+        "zufaelligen Stripes starten, ohne Trigger von aussen."),
+    "/net/randomSpawn/count": (
+        "Stripes je Runde",
+        "Wieviele Stripes gleichzeitig einen Impuls bekommen. Hohe Werte "
+        "wirken wie ein Flaechenblitz statt wie Ambient."),
+    "/net/randomSpawn/interval": (
+        "Abstand zwischen den Runden",
+        "Sekunden von einer Spawn-Runde zur naechsten. Klein = dichtes Netz, "
+        "gross = einzelne Ereignisse."),
+    "/net/randomSpawn/energy": (
+        "Energie je Impuls",
+        "Starthelligkeit der so erzeugten Impulse - bestimmt zugleich, wie "
+        "weit sie kommen, bevor sie sterben."),
+    "/net/randomSpawn/directionBias": (
+        "Laufrichtung",
+        "Wahrscheinlichkeit fuer „vorwaerts“. 1 = alle laufen in dieselbe "
+        "Richtung, 0,5 = gemischt."),
+    "/net/randomSpawn/jitter": (
+        "Unregelmaessigkeit des Abstands",
+        "0 = exakt periodisch wie ein Metronom, 1 = der Abstand schwankt "
+        "zwischen null und dem doppelten Intervall."),
+
+    # --- Sequencer --------------------------------------------------------
+    "/net/sequencer/enabled": (
+        "Sequencer",
+        "Not-Aus fuer alle sechs Spuren. Die Taktuhr laeuft weiter, das "
+        "Wiedereinschalten haengt also nicht an der Dauer der Pause."),
+    "/net/sequencer/bpm": (
+        "Tempo",
+        "Gemeinsames Tempo aller Spuren. Ein Wechsel aendert die Rate, nicht "
+        "die Position - es gibt keinen Sprung."),
+    # Muster-Eintraege: gelten fuer track0..track5 gleichermassen.
+    "/net/sequencer/track#/enabled": (
+        "Spur an",
+        "Schaltet diese Spur ab, ohne ihre Einstellungen zu verlieren."),
+    "/net/sequencer/track#/noteValue": (
+        "Notenwert",
+        "In welchem Abstand die Spur feuert, gemessen am gemeinsamen "
+        "BPM-Raster."),
+    "/net/sequencer/track#/repeatCount": (
+        "Wiederholungen am selben Ursprung",
+        "So viele Zyklen bleibt die Spur auf demselben Ursprungs-Stripe, "
+        "bevor sie neu wuerfelt. Daraus entsteht die wiedererkennbare "
+        "Melodie."),
+    "/net/sequencer/track#/energy": (
+        "Energie",
+        "Starthelligkeit der Impulse dieser Spur."),
+    "/net/sequencer/track#/swingJitter": (
+        "Swing",
+        "Verschiebt den Einsatz gegenueber dem exakten Raster. 0 = "
+        "maschinell genau."),
+    "/net/sequencer/track#/originTreeFilter": (
+        "Baum-Filter",
+        "Schraenkt den Ursprungs-Stripe dieser Spur auf einen der vier "
+        "physischen Baeume ein. „alle“ = kein Filter."),
+    "/net/sequencer/track#/originStripeOverride": (
+        "Fester Ursprung",
+        "-1 = die Spur wuerfelt ihren Ursprungs-Stripe. Ein Wert ab 0 nagelt "
+        "sie auf diesen Stripe fest und schlaegt den Baum-Filter."),
+
+    # --- Knoten -----------------------------------------------------------
+    "/nodes/fadeOutGamma": (
+        "Ausblend-Kurve der Knoten",
+        "Wie ein Knoten von „gefeuert“ nach „wartend“ verblasst. Ueber 1 = "
+        "haelt lange und faellt spaet ab, unter 1 = faellt sofort."),
+    "/nodes/pulseFrequency": (
+        "Pulsfrequenz der Knoten",
+        "Wie schnell wartende Knoten atmen, in Schlaegen pro Sekunde."),
+    "/nodes/pulseFreqRandFrac": (
+        "Streuung der Pulsfrequenz",
+        "0 = alle Knoten atmen im Gleichtakt, 1 = jeder in seinem eigenen "
+        "Tempo."),
+    "/nodes/radius/fired": (
+        "Radius: feuert",
+        "Wieviele LEDs um die Kreuzung herum leuchten, waehrend der Knoten "
+        "feuert."),
+    "/nodes/radius/inactive": (
+        "Radius: erloschen",
+        "Groesse im stummen Zustand direkt nach dem Feuern, waehrend die "
+        "Totzeit laeuft."),
+    "/nodes/radius/waiting": (
+        "Radius: wartend",
+        "Groesse im Ruhezustand, wenn der Knoten wieder ausloesbar ist."),
+    "/nodes/times/fire": (
+        "Dauer des Feuerns",
+        "Sekunden, die ein getroffener Knoten hell bleibt."),
+    "/nodes/times/recover": (
+        "Erholungsdauer",
+        "Sekunden vom Erloeschen bis zurueck in den wartenden Zustand."),
+
+    # Farbkarten der Knoten. Der Schluessel ist die BASIS der drei Adressen
+    # <basis>/Hue|Sat|Bright -- eine Farbkarte traegt keine eigene Adresse.
+    "/nodes/colors/central/fired": (
+        "Knotenkern: feuert",
+        "Farbe des Kreuzungspunkts selbst im Moment des Ausloesens."),
+    "/nodes/colors/central/inactive": (
+        "Knotenkern: erloschen",
+        "Farbe direkt nach dem Feuern, solange die Totzeit laeuft."),
+    "/nodes/colors/central/waiting": (
+        "Knotenkern: wartend",
+        "Farbe im Ruhezustand, wenn der Knoten wieder ausloesbar ist."),
+    "/nodes/colors/outer/fired": (
+        "Knotenhof: feuert",
+        "Farbe der LEDs rings um den Kreuzungspunkt im Moment des "
+        "Ausloesens."),
+    "/nodes/colors/outer/inactive": (
+        "Knotenhof: erloschen",
+        "Farbe des Hofs direkt nach dem Feuern."),
+    "/nodes/colors/outer/waiting": (
+        "Knotenhof: wartend",
+        "Farbe des Hofs im Ruhezustand."),
+
+    # --- Trigger (Kommandos, keine Regler) --------------------------------
+    "/net/activateNode": (
+        "Knoten von Hand ausloesen",
+        "Laesst die Kreuzung mit dieser Nummer sofort feuern - zum Pruefen "
+        "einzelner Knoten."),
+    "/net/activateStripe": (
+        "Stripe von Hand anstossen",
+        "Startet sofort einen Impuls am Anfang dieses Stripes."),
+
+    # --- Preset-Wechsler --------------------------------------------------
+    "/preset/scheduler/enabled": (
+        "Preset-Wechsler",
+        "Wechselt von selbst alphabetisch durch alle Presets. Ist die "
+        "Song-Struktur eingeschaltet, hat die Vorrang."),
+    "/preset/scheduler/interval": (
+        "Wechsel-Intervall",
+        "Sekunden zwischen zwei Preset-Wechseln."),
+
+    # --- Song-Struktur ----------------------------------------------------
+    "/songStructure/enabled": (
+        "Dramaturgie",
+        "Waehlt bei jedem faelligen Wechsel erst das naechste Energie-Level "
+        "und dann ein Preset daraus. Hat Vorrang vor dem alphabetischen "
+        "Preset-Wechsler."),
+    # Die 16 Matrixzellen und die 8 Verweildauern kommen gleich darunter aus
+    # einer Schleife -- sechzehnmal derselbe Satz von Hand waere sechzehn
+    # Gelegenheiten, sich zu vertippen.
+}
+
+# Letztes Adresssegment -> Titel. Greift erst, wenn weder die exakte Adresse
+# noch das Ziffern-Muster passt. Deckt die 18 Farbkomponenten der sechs
+# Knoten-Farbkarten ab, ohne sie einzeln aufzufuehren.
+SUFFIX_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
+    "Hue": ("Farbton", None),
+    "Sat": ("Saettigung", None),
+    "Bright": ("Helligkeit", None),
+}
+
+for _slot in range(STRIPE_COLOR_COUNT):
+    ADDRESS_LABELS["%s%d" % (STRIPE_COLOR_PREFIX, _slot)] = (
+        "Stripe-Slot %d" % _slot,
+        None)
+    for _channel, _channel_name in (("r", "Rot"), ("g", "Gruen"), ("b", "Blau")):
+        ADDRESS_LABELS["%s%d/%s" % (STRIPE_COLOR_PREFIX, _slot, _channel)] = (
+            "Slot %d %s" % (_slot, _channel_name), None)
+del _slot, _channel, _channel_name
+
+for _from_index, _from in enumerate(SONG_LEVEL_NAMES):
+    for _to in SONG_LEVEL_NAMES:
+        ADDRESS_LABELS["%smatrix/%s/%s" % (SONG_PREFIX, _from, _to)] = (
+            "%s → %s" % (_from, _to),
+            "Gewicht dafuer, dass auf „%s“ als naechstes „%s“ folgt. Die Zeile "
+            "muss sich nicht zu 100 summieren; ein Gewicht von 0 kommt nie "
+            "vor." % (_from, _to))
+    # Die zwei Grenzen einer Spanne unter der Ueberschrift „Verweildauer je
+    # Level“ erklaeren sich gegenseitig -- hier waere ein Satz Fuellmaterial.
+    ADDRESS_LABELS["%sdwell/%s/min" % (SONG_PREFIX, _from)] = (
+        "%s: kuerzeste Dauer" % _from, None)
+    ADDRESS_LABELS["%sdwell/%s/max" % (SONG_PREFIX, _from)] = (
+        "%s: laengste Dauer" % _from, None)
+del _from_index, _from, _to
+
+# Ziffernfolge hinter einem Buchstaben durch '#' ersetzen: aus
+# /net/sequencer/track3/energy wird /net/sequencer/track#/energy. Die
+# Einschraenkung "hinter einem Buchstaben" haelt Master/0/opacity/0.Impulse
+# und die Kanalnummern dort unberuehrt -- die sind echte, eigene Adressen und
+# haben ihren eigenen Eintrag.
+_PATTERN_DIGITS = re.compile(r"(?<=[A-Za-z])\d+(?=/|$)")
+
+
+def pattern_address(address: str) -> str:
+    """Die Adresse mit '#' statt einer Nummer im Segment (track0 -> track#)."""
+    return _PATTERN_DIGITS.sub("#", address)
+
+
+def label_for(address: str) -> Tuple[Optional[str], Optional[str]]:
+    """(Titel, Erklaerung) einer Adresse; (None, None) wenn unbekannt.
+
+    Drei Stufen, spezifisch vor allgemein: exakte Adresse, Ziffern-Muster,
+    letztes Segment. Ein unbekannter Parameter faellt damit auf die alte
+    Darstellung zurueck (Adresssegment als Titel, keine Erklaerung) statt zu
+    verschwinden -- ein neuer Regler im Sketch soll auch dann sichtbar sein,
+    wenn hier niemand eine Zeile ergaenzt hat.
+    """
+    entry = ADDRESS_LABELS.get(address)
+    if entry is None:
+        entry = ADDRESS_LABELS.get(pattern_address(address))
+    if entry is None:
+        entry = SUFFIX_LABELS.get(address.rpartition("/")[2])
+    if entry is None:
+        return None, None
+    return entry
 
 
 def build_song_structure(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
@@ -600,6 +1266,19 @@ TAB_RULES: List[Tuple[str, str]] = [
     ("Master/", TAB_MIXER),
     # speedQuantize VOR /net/impulse/, sonst faengt die Physik-Regel es ab.
     ("/net/impulse/speedQuantize/", TAB_NOTES),
+    # Dieselbe Falle bei den Farben: /net/impulse/color/* wuerde sonst von
+    # der Physik-Regel eingesammelt, /nodes/colors/* von der Node-Regel.
+    # fadeOut steht bewusst dabei -- es ist der Nachleucht-Farbfaktor des
+    # Impulses und teilt sich mit color/* ohnehin schon eine Gruppe
+    # (SPLIT_GROUP_PREFIXES); eine Gruppe geht als GANZES in einen Tab.
+    ("/net/impulse/color/", TAB_COLORS),
+    ("/net/impulse/fadeOut/", TAB_COLORS),
+    # Rueckfall: normalerweise rendert die Sektion "Impuls-Farbe" die acht
+    # Slots selbst und nimmt ihre Adressen aus dem generischen Rendering.
+    # Kann sie nicht gebaut werden (unvollstaendiger Dump), landen die 24
+    # Regler wenigstens im richtigen Tab statt bei der Physik.
+    (STRIPE_COLOR_PREFIX, TAB_COLORS),
+    ("/nodes/colors/", TAB_COLORS),
     # Das Split-Verhalten aus demselben Grund, und in denselben Tab: der
     # zeitliche Versatz der Zweige haengt am BPM-Raster, genau wie die
     # Speed-Klassen. Die zwei Haelften eines Features (wieviele Zweige, wie
@@ -611,14 +1290,6 @@ TAB_RULES: List[Tuple[str, str]] = [
     # auch /net/impulse/splitSpeedJitter und /net/impulse/splitLifetimeJitter
     # hierher, die zur Physik gehoeren und dort schon kuratiert sind.
     ("/net/impulse/split/", TAB_NOTES),
-    # Dieselbe Falle bei den Farben: /net/impulse/color/* wuerde sonst von
-    # der Physik-Regel eingesammelt, /nodes/colors/* von der Node-Regel.
-    # fadeOut steht bewusst dabei -- es ist der Nachleucht-Farbfaktor des
-    # Impulses und teilt sich mit color/* ohnehin schon eine Gruppe
-    # (SPLIT_GROUP_PREFIXES); eine Gruppe geht als GANZES in einen Tab.
-    ("/net/impulse/color/", TAB_COLORS),
-    ("/net/impulse/fadeOut/", TAB_COLORS),
-    ("/nodes/colors/", TAB_COLORS),
     ("/net/sequencer/", TAB_SPAWN),
     ("/net/randomSpawn/", TAB_SPAWN),
     ("/net/activate", TAB_SPAWN),
@@ -692,57 +1363,101 @@ TAB_PRIMARY: Dict[str, List[str]] = {
 
 SC_OSC_PORT = 8002
 SC_PARAM_PREFIX = "/klangnetz/param/"
+#
+# "label" ist der sprechende Titel im UI, "description" die Zeile darunter --
+# dieselbe Aufteilung wie ADDRESS_LABELS fuer die imPulse-Parameter. Der Name
+# aus der Registry ("travelOctavesPerStep") bleibt als Adresszeile sichtbar:
+# er ist die Kennung, unter der der Parameter per OSC ansprechbar ist.
 SC_PARAMS: List[Dict[str, Any]] = [
     {"name": "masterVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
-     "group": "Master", "description": "Gain nach dem Panning, vor dem Limiter."},
+     "group": "Master", "label": "Gesamtlautstaerke", "description":
+     "Der Show-Fader des Klangs, hinter dem Panning und vor dem Limiter. "
+     "Wirkt auf alles."},
     {"name": "bellVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
-     "group": "Master", "description":
-     "Layer-Fader der Glocken, vor masterVolume. Wirkt auf den naechsten Ton."},
+     "group": "Master", "label": "Lautstaerke der Glocken", "description":
+     "Nur die Toene, die an den Kreuzungen anschlagen. Wirkt erst auf den "
+     "naechsten Ton - eine Glocke wird nicht mittendrin leiser."},
     {"name": "droneVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
-     "group": "Master", "description":
-     "Layer-Fader der Impuls-Drohnen, vor masterVolume. Wirkt sofort."},
+     "group": "Master", "label": "Lautstaerke der Impuls-Drohnen", "description":
+     "Nur die liegenden Klaenge, die den reisenden Impulsen folgen. Wirkt "
+     "sofort, auch auf schon klingende Stimmen."},
     {"name": "reverbMix", "tab": TAB_MIXER, "default": 0.35, "min": 0.0, "max": 1.0,
-     "group": "Master", "description": "Trocken/nass des Halls hinter dem Panning."},
+     "group": "Master", "label": "Hallanteil", "description":
+     "Trocken zu nass. Der Hall sitzt hinter der Ortung, verwischt sie also "
+     "nicht."},
     {"name": "reverbRoom", "tab": TAB_MIXER, "default": 0.5, "min": 0.0, "max": 1.0,
-     "group": "Master", "description": "Gefuehlte Raumgroesse."},
+     "group": "Master", "label": "Raumgroesse", "description":
+     "Wie gross der Raum klingt, in dem die Toene stehen - laengerer Schweif "
+     "bei hohen Werten."},
     {"name": "reverbDamp", "tab": TAB_MIXER, "default": 0.5, "min": 0.0, "max": 1.0,
-     "group": "Master", "description": "Hoehendaempfung im Hallschweif."},
+     "group": "Master", "label": "Hoehendaempfung im Hall", "description":
+     "Wie schnell die Hoehen im Hallschweif wegsterben. Hoch = dunkler, "
+     "weicher Nachklang."},
     {"name": "panSharpness", "tab": TAB_SOUND, "default": 1.0, "min": 0.1, "max": 8.0,
-     "group": "Master", "description": "Schaerfe der Ortung. 1 = Referenz."},
+     "group": "Master", "label": "Schaerfe der Ortung", "description":
+     "Wie eng ein Klang auf eine Box gezogen wird. 1 = Referenz; hoch = "
+     "punktgenau, niedrig = im Raum verteilt."},
     {"name": "brightness", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 2.0,
-     "group": "Glocke", "description": "Amp der oberen vier Teiltoene."},
+     "group": "Glocke", "label": "Glanz der Glocke", "description":
+     "Pegel der oberen vier Teiltoene. Hoch = hell und glasig, niedrig = "
+     "dumpf und holzig."},
     {"name": "detune", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
-     "group": "Glocke", "description": "1 = metallisch, 0 = rein harmonisch."},
+     "group": "Glocke", "label": "Metallischer Charakter", "description":
+     "Verstimmung der Teiltoene gegeneinander. 1 = metallisch und schwebend, "
+     "0 = rein harmonisch wie eine Orgel."},
     {"name": "regionBiasAmount", "tab": TAB_SOUND, "default": 0.6, "min": 0.0, "max": 1.0,
-     "group": "Glocke", "description":
-     "Klangbias nach Netzregion (vier Quadranten). 0 = aus."},
+     "group": "Glocke", "label": "Regions-Klangbias", "description":
+     "Wie stark sich Tonwahl und Klangfarbe zwischen den vier Netzquadranten "
+     "unterscheiden. 0 = aus, ueberall gleich."},
     {"name": "droneLpfMult", "tab": TAB_SOUND, "default": 6.0, "min": 1.0, "max": 12.0,
-     "group": "Travel-Sound", "description": "Filter der Tonschicht der Drohne."},
+     "group": "Travel-Sound", "label": "Klangfarbe der Drohne", "description":
+     "Filter auf der Tonschicht einer Impuls-Drohne. Niedrig = dumpf und "
+     "zurueckhaltend, hoch = praesent."},
     {"name": "travelMix", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 1.0,
-     "group": "Travel-Sound", "description":
-     "Crossfade Tondrohne zu Windband. 0 = kein Travel-Sound."},
+     "group": "Travel-Sound", "label": "Wind statt Ton", "description":
+     "Blendet die Drohne vom liegenden Ton zur rieselnden Windschicht ueber. "
+     "0 = kein Travel-Sound; nur ueber diese Schicht ist die Tempo-Klasse "
+     "eines Impulses hoerbar."},
     {"name": "travelRq", "tab": TAB_SOUND, "default": 0.35, "min": 0.02, "max": 1.0,
-     "group": "Travel-Sound", "description":
-     "Koernerdauer (Anteil von 20 ms). Klein = sandig und kleinteilig."},
+     "group": "Travel-Sound", "label": "Koernerdauer im Wind", "description":
+     "Wie lang ein einzelnes Rauschkorn klingt (Anteil von 20 ms). Klein = "
+     "sandig und kleinteilig, gross = fliessend."},
     {"name": "travelGrainRatio", "tab": TAB_SOUND, "default": 0.125, "min": 0.01, "max": 2.0,
-     "group": "Travel-Sound", "description":
-     "Koerner je Sekunde als Vielfaches von travelFreq - traegt die Speed-Klasse."},
+     "group": "Travel-Sound", "label": "Dichte des Windes", "description":
+     "Koerner je Sekunde, gerechnet als Vielfaches der Windfrequenz - dadurch "
+     "rieseln schnelle Impulse dichter als langsame."},
     {"name": "travelAmpScale", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 2.0,
-     "group": "Travel-Sound", "description": "Pegel nur der Rauschschicht."},
+     "group": "Travel-Sound", "label": "Pegel der Windschicht", "description":
+     "Nur das Rauschen, ohne die Tonschicht. Zum Abgleichen, wenn der "
+     "Uebergang beim Ueberblenden einen Sprung macht."},
     {"name": "travelFreqBase", "tab": TAB_SOUND, "default": 400.0, "min": 50.0, "max": 4000.0,
-     "group": "Travel-Sound", "description": "Frequenz bei der 1x-Speed-Klasse."},
+     "group": "Travel-Sound", "label": "Wind-Tonlage bei 1x", "description":
+     "Grenzfrequenz des Windes fuer einen Impuls der Klasse 1x. Alle anderen "
+     "Klassen liegen oktavweise darueber und darunter."},
     {"name": "travelSpeedRef", "tab": TAB_SOUND, "default": 16.0, "min": 1.0, "max": 1500.0,
-     "group": "Travel-Sound", "description": "Speed in LEDs/s, die als 1x gilt."},
+     "group": "Travel-Sound", "label": "Bezugsgeschwindigkeit", "description":
+     "Welche Geschwindigkeit in LEDs/s als 1x gilt. Sollte zur "
+     "Grundgeschwindigkeit im Impuls-Tab passen, sonst liegt der ganze "
+     "Wind zu hoch oder zu tief."},
     {"name": "travelOctavesPerStep", "tab": TAB_SOUND, "default": 1.0, "min": 0.25, "max": 3.0,
-     "group": "Travel-Sound", "description":
-     "Oktaven je Verdopplung der Speed. Groesser = Klassen deutlicher getrennt."},
+     "group": "Travel-Sound", "label": "Spreizung der Tempo-Klassen",
+     "description":
+     "Oktaven je Verdopplung der Geschwindigkeit. Groesser = die Klassen "
+     "liegen klanglich weiter auseinander und sind leichter zu "
+     "unterscheiden."},
     {"name": "travelSnap", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
-     "group": "Travel-Sound", "description":
-     "Rastet die Frequenz auf die Speed-Klasse, damit Jitter sie nicht verschmiert."},
+     "group": "Travel-Sound", "label": "Auf Tempo-Klasse rasten",
+     "description":
+     "Rundet die Wind-Tonlage auf die Klasse, damit jeder Impuls einer Klasse "
+     "auf derselben Hoehe zischt und der Swing sie nicht verschmiert."},
     {"name": "travelFreqMin", "tab": TAB_SOUND, "default": 80.0, "min": 20.0, "max": 2000.0,
-     "group": "Travel-Sound", "description": "Untere harte Grenze."},
+     "group": "Travel-Sound", "label": "Wind: tiefste Tonlage", "description":
+     "Harte Untergrenze - darunter faellt der Wind nie, egal wie langsam ein "
+     "Impuls reist."},
     {"name": "travelFreqMax", "tab": TAB_SOUND, "default": 6000.0, "min": 200.0, "max": 16000.0,
-     "group": "Travel-Sound", "description": "Obere harte Grenze."},
+     "group": "Travel-Sound", "label": "Wind: hoechste Tonlage", "description":
+     "Harte Obergrenze - darueber steigt der Wind nie, egal wie schnell ein "
+     "Impuls reist."},
 ]
 
 
@@ -763,7 +1478,9 @@ def build_tabs(groups: List[Dict[str, Any]],
                sequencer: Optional[Dict[str, Any]],
                speed: Optional[Dict[str, Any]],
                split: Optional[Dict[str, Any]] = None,
-               song: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+               song: Optional[Dict[str, Any]] = None,
+               colors: Optional[Dict[str, Any]] = None,
+               fade: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Verteilt Gruppen, Spezial-Sektionen und SC-Parameter auf die Tabs.
 
     Eine Gruppe geht als GANZES in einen Tab (bestimmt von ihrem ersten
@@ -790,6 +1507,14 @@ def build_tabs(groups: List[Dict[str, Any]],
         by_tab[TAB_SPAWN]["sections"].append("sequencer")
     if speed:
         by_tab[TAB_NOTES]["sections"].append("speedClasses")
+    # Reihenfolge im Farben-Tab: erst die Farbe der Impulse selbst mit ihrem
+    # Moduswahlschalter, dann die acht Slots des Gegenmodus (direkt darunter,
+    # weil der Schalter zwischen genau diesen zwei Sektionen umschaltet), dann
+    # das Nachleuchten, dann die wiederverwendbare Palette.
+    if colors and (colors.get("impulse") or colors.get("stripes")):
+        by_tab[TAB_COLORS]["sections"].append("impulseColor")
+    if fade:
+        by_tab[TAB_COLORS]["sections"].append("fade")
     # Die Palette-Leiste braucht keine Adresse aus remoteSettings.txt und ist
     # deshalb bedingungslos da -- anders als Sequencer und Speed-Klassen, die
     # ohne ihre Parameter nicht gebaut werden koennen.
@@ -1078,21 +1803,28 @@ class Parameter:
 
     def as_dict(self) -> Dict[str, Any]:
         ui_min, ui_max = self.ui_range()
+        label, help_text = label_for(self.address)
         return {
             "kind": "param",
             "type": self.type,
             "address": self.address,
             "description": self.description,
+            # Sprechender Titel statt des letzten Adresssegments. None heisst
+            # "keine Zeile in ADDRESS_LABELS" -- das UI faellt dann auf das
+            # Segment zurueck, damit ein neuer Parameter nicht unbeschriftet
+            # ist.
+            "label": label,
             "min": ui_min,
             "max": ui_max,
             "step": self.step(),
             # 0/1-Ints bekommen einen Schalter statt eines Zweipunkt-Reglers
             "widget": "toggle" if (self.is_int and self.minimum == 0
                                    and self.maximum == 1) else "slider",
-            # Kurzerklaerung, wo die Adresse allein nicht reicht. None fuer
-            # alle anderen -- das UI zeigt dann nichts statt einer leeren
-            # Zeile.
-            "help": DESCRIPTIONS.get(self.address),
+            # Kurzerklaerung. None heisst entweder "selbsterklaerend" (Rot,
+            # Farbton, min/max unter einer eindeutigen Ueberschrift) oder
+            # "unbekannte Adresse" -- in beiden Faellen zeigt das UI nichts
+            # statt einer leeren Zeile.
+            "help": help_text,
         }
 
 
@@ -1467,11 +2199,30 @@ def group_sort_key(key: str) -> Tuple[int, str]:
         return (len(GROUP_ORDER), key.lower())
 
 
-# Menschenlesbare Titel fuer Gruppen, die keinen sprechenden Adress-Praefix
-# als Titel hergeben (z.B. "net/impulse/color" statt "/net/impulse/color").
+# Menschenlesbare Titel fuer die Gruppen-Ueberschriften. Ohne Eintrag steht
+# dort der rohe Adress-Praefix ("/net/randomSpawn") -- derselbe Einwand wie
+# bei den Reglern selbst: das ist ein Hinweis darauf, wo man nachschlagen
+# muesste, keine Ueberschrift. Der Praefix ist an der Adresszeile jedes
+# Reglers darunter weiterhin abzulesen.
 GROUP_TITLE_OVERRIDES = {
-    "net/impulse/color": "Impuls-Farbe",
+    "Master": "Ebenen und Nachleuchten",
+    "master": "Gesamt-Helligkeit",
+    "net/impulse": "Impuls-Physik",
+    # Nach dem Farbwaehler-Umbau steht hier nur noch die Farbkurve: die drei
+    # Kanaele und der Moduswahlschalter gehoeren der Sektion "Impuls-Farbe".
+    # Derselbe Titel fuer beides waeren zwei Ueberschriften, die dasselbe
+    # versprechen und Verschiedenes halten.
+    "net/impulse/color": "Impuls-Farbe: Feinheiten",
     "net/impulse/randomize": "Impuls-Randomizer (Sinus)",
+    "net/impulse/split": "Split-Verhalten",
+    "net/randomSpawn": "Zufalls-Spawns",
+    "net/sequencer": "Sequencer",
+    "net": "Direkt-Trigger",
+    "nodes": "Knoten",
+    "nodes/colors": "Knoten-Farben",
+    "nodes/radius": "Knoten-Groessen",
+    "nodes/times": "Knoten-Zeiten",
+    "preset/scheduler": "Preset-Wechsler",
 }
 
 
@@ -1513,10 +2264,16 @@ def build_groups(parameters: List[Parameter]) -> List[Dict[str, Any]]:
 
         controls: List[Dict[str, Any]] = []
         for base in color_bases:
+            # Der Titel einer Farbkarte haengt an ihrer BASIS, nicht an einer
+            # Adresse -- die Karte hat keine, sie hat drei darunter. Ohne
+            # Eintrag bleibt es beim letzten Segment ("fired"), das allein
+            # nicht verraet, wessen Zustand gemeint ist.
+            color_label, color_help = label_for(base)
             controls.append({
                 "kind": "color",
                 "base": base,
-                "label": base.split("/")[-1] or base,
+                "label": color_label or base.split("/")[-1] or base,
+                "help": color_help,
                 "components": {
                     "hue": by_address["%s/Hue" % base].as_dict(),
                     "sat": by_address["%s/Sat" % base].as_dict(),
@@ -1527,11 +2284,14 @@ def build_groups(parameters: List[Parameter]) -> List[Dict[str, Any]]:
             if param.address in consumed:
                 continue
             if param.address in TRIGGER_ADDRESSES:
+                trigger_label, trigger_help = label_for(param.address)
                 controls.append({
                     "kind": "trigger",
                     "type": param.type,
                     "address": param.address,
                     "description": param.description,
+                    "label": trigger_label,
+                    "help": trigger_help,
                     "min": param.minimum,
                     "max": param.maximum,
                 })
@@ -1621,8 +2381,12 @@ class ParameterStore:
             speed = build_speed_classes(self.by_address)
             split = build_split(self.by_address)
             song = build_song_structure(self.by_address)
+            colors = build_colors(self.by_address)
+            fade = build_fade(self.by_address, self.values)
             taken = sequencer_addresses(sequencer, speed, split)
             taken |= song_structure_addresses(song)
+            taken |= color_addresses(colors)
+            taken |= fade_addresses(fade)
             generic = [p for p in self.parameters if p.address not in taken]
             groups = build_groups(generic)
             return {
@@ -1632,7 +2396,10 @@ class ParameterStore:
                 "speedClasses": speed,
                 "split": split,
                 "songStructure": song,
-                "tabs": build_tabs(groups, sequencer, speed, split, song),
+                "colors": colors,
+                "fade": fade,
+                "tabs": build_tabs(groups, sequencer, speed, split, song,
+                                   colors, fade),
                 "scParams": {
                     "port": SC_OSC_PORT,
                     "groups": sc_param_groups(),
@@ -1892,6 +2659,42 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
             "skipped": skipped,
         })
 
+    @app.route("/api/fadeout", methods=["POST"])
+    def api_fadeout():
+        """Zielfarbe + Tempo -> die drei Zerfallsraten, gesendet und quittiert.
+
+        Eigener Endpoint statt einer Rechnung in app.js: die Umrechnung ist
+        eine inhaltliche Aussage darueber, wie der Effekt den Puffer
+        multipliziert, und nur hier ohne jsdom pruefbar. Das UI kennt nur
+        Zielfarbe und Tempo -- also genau die zwei Dinge, die es anzeigt.
+        """
+        body = request.get_json(silent=True) or {}
+        try:
+            red = float(body.get("r"))
+            green = float(body.get("g"))
+            blue = float(body.get("b"))
+            decay = float(body.get("decay"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False,
+                            "error": "r, g, b und decay muessen Zahlen sein"}), 400
+        for value in (red, green, blue, decay):
+            if value != value or value in (float("inf"), float("-inf")):
+                return jsonify({"ok": False,
+                                "error": "ungueltige Zahl"}), 400
+        rates = fade_from_target(red, green, blue, decay)
+        applied: List[Applied] = []
+        for address, value in zip(FADE_ADDRESSES, rates):
+            param = store.get(address)
+            if param is None:
+                return jsonify({"ok": False,
+                                "error": "unbekannte Adresse: %s" % address}), 400
+            applied.append(apply_value(param, value))
+        return jsonify({
+            "ok": True,
+            "applied": [{"address": a.address, "value": a.value, "sent": a.sent}
+                        for a in applied],
+        })
+
     @app.route("/api/songstructure")
     def api_song_structure():
         """Der Live-Zustand der Song-Struktur, gelesen vom Dateisystem.
@@ -1954,6 +2757,11 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         # selbst, hier werden nur die Regler nachgefuehrt.
         sender.send("/preset/load", name)
         result = apply_preset_entries(store, entries)
+        # Die Nachleucht-Sektion zeigt Zielfarbe und Tempo, nicht die drei
+        # rohen Raten -- sie kann sich also nicht aus "values" nachziehen.
+        # Ohne diesen Block bliebe ihr Farbwaehler nach einem Preset-Wechsel
+        # auf der vorigen Farbe stehen, ohne Fehlermeldung.
+        result["fade"] = build_fade(store.by_address, store.values)
         result.update({"ok": True, "name": name})
         return jsonify(result)
 
