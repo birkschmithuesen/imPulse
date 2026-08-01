@@ -1,0 +1,48 @@
+# data/energyLevels.txt -- Preset-Name -> Energie-Level
+#
+# Gelesen von EnergyLevelStore, benutzt von SongStructureDirector: die
+# Song-Struktur-Ebene wuerfelt zuerst das naechste LEVEL und waehlt danach
+# ein Preset INNERHALB dieses Levels. Ohne diese Datei sind alle Presets
+# gleich und die Dramaturgie waere wieder ein Zufallsloop.
+#
+# Level: ruhig | mittel | dynamisch | dramatisch
+# Format: name <TAB> level. '#' leitet einen Kommentar ein, Leerzeilen
+# werden uebersprungen.
+#
+# Das Level ist eine KUENSTLERISCHE Einschaetzung, keine Messung -- es wird
+# von Hand vergeben, wenn ein Preset am Geraet gehoert und gesehen wurde.
+# Deshalb steht es hier und wird nicht aus den Parameterwerten gerechnet.
+#
+# Diese Datei liegt bewusst NICHT in data/presets/: PresetStore.list() sammelt
+# jede *.txt dort ein. Ein Name ohne Grossbuchstaben (energylevels.txt) waere
+# ab sofort ein Preset, das der Scheduler zu laden versucht.
+#
+# Fehlt ein Preset hier, gilt "mittel" und der Startbericht nennt es -- ein
+# untagged Preset soll nicht still verschwinden, aber die Show auch nicht
+# anhalten.
+#
+# Bei doppeltem Namen gewinnt die LETZTE Zeile: die natuerliche
+# Handkorrektur ist eine angehaengte Zeile am Ende, "erste gewinnt" wuerde
+# sie still verschlucken (dieselbe Regel wie data/stripeTrees.txt).
+
+# --- ruhig: wenig Bewegung, lange Lebensdauern, dunkel und kalt ------------
+standby			ruhig
+hang_drum_slow		ruhig
+nacht_ruhig_atem	ruhig
+nacht_ruhig_tropfen	ruhig
+
+# --- mittel: spuerbarer Puls, aber kein Draengen ---------------------------
+hang_blue		mittel
+nachvollziehbar		mittel
+nacht_mittel_puls	mittel
+nacht_mittel_wandern	mittel
+
+# --- dynamisch: hohe Spawn-Rate, viel Bewegung im Netz ---------------------
+hang_drum_fast		dynamisch
+random1			dynamisch
+nacht_dynamisch_treiben	dynamisch
+nacht_dynamisch_schwarm	dynamisch
+
+# --- dramatisch: Maximalausschlag, kurz und intensiv -----------------------
+nacht_dramatisch_sturm	dramatisch
+nacht_dramatisch_blitz	dramatisch
