@@ -421,9 +421,18 @@ s.options.numInputBusChannels = 2;
 // erzeugt jetzt SECHS Synths statt einem -- die Glocke plus fuenf additive
 // Tails (siehe ~tailDefs). Bei 24 liefen an der Grenze 144 Stimmen statt 24,
 // also genau die Last, gegen die dieser Deckel nach dem Live-Ausfall
-// eingezogen wurde. 16 sind 96 Stimmen; die reale Rechenlast des
-// Tail-Klangs ist noch nicht am Geraet gemessen, der Wert ist also bewusst
-// konservativ und kein Messergebnis.
+// eingezogen wurde. 16 sind 96 Stimmen; die Zahl selbst ist konservativ
+// gewaehlt und kein Messergebnis vom Geraet.
+//
+// Was gemessen IST (Linux-vServer, jack-Dummy, OHNE Echtzeitpriorisierung,
+// 2026-08-01, 40 Treffer mit 10/s): ohne Tails 5 % Server-CPU, mit allen
+// fuenf Tails 65 %, davon rund zwei Drittel die drei FreeVerbs in den Tails
+// (ohne sie 23 %). Die absoluten Zahlen sagen fuer den Windows-Laptop nichts,
+// das VERHAELTNIS schon: diese Schicht ist rund eine Groessenordnung teurer
+// als die Glocke allein. Wer den Deckel wieder anhebt, misst vorher am
+// Geraet, statt zu schaetzen. Die Buchfuehrung selbst ist geprueft: nach dem
+// Ausklang eines solchen Dauerfeuers steht ~activeBells wieder auf 0 und auf
+// dem Server laeuft nur noch \masterReverb.
 //
 // ~activeBells haelt seither nicht mehr einzelne Synths, sondern je Treffer
 // ein ARRAY [glocke, tail1..tail5]. Beim Voice-Stealing wird der ganze
@@ -1349,11 +1358,22 @@ s.waitForBoot({
     //
     // BEWUSST GEBLIEBEN ist der FreeVerb in Shimmer, FM-Glide und Sub-Glow,
     // obwohl diese Datei sonst "Hall NACH dem Panning" durchhaelt (siehe
-    // \masterReverb): er ist Teil des abgenommenen Klangs. Ein Hall vor dem
-    // Encoder wird selbst raeumlich codiert und wandert mit -- bei einer
-    // ROTIERENDEN Quelle ist das ein bekanntes Artefakt und ein Punkt, den
-    // Birk beim ersten Hoeren am Netz entscheiden sollte. Bis dahin gilt der
-    // abgenommene Klang.
+    // \masterReverb): er ist Teil des abgenommenen Klangs. Drei Gruende
+    // sprechen dagegen, und alle drei sind Birks Entscheidung, nicht eine
+    // Aufraeumaufgabe:
+    //  * Ein Hall VOR dem Encoder wird selbst raeumlich codiert und wandert
+    //    mit. Bei einer ROTIERENDEN Quelle ist das ein bekanntes Artefakt --
+    //    der Raum kreist mit, statt stehen zu bleiben.
+    //  * \masterReverb liefert ohnehin schon Hall, je Hardware-Kanal und
+    //    dekorreliert. Der Tail-Hall kommt obendrauf.
+    //  * ER KOSTET GEMESSEN ZWEI DRITTEL DER LAST DIESER SCHICHT: bei 10
+    //    Treffern/s liegt die Server-CPU mit den drei FreeVerbs bei 65 %,
+    //    ohne sie bei 23 % (gleiche Maschine, gleicher Lauf, 40 Treffer;
+    //    zum Vergleich: ohne Tails 5 %). Gemessen auf einem Linux-vServer
+    //    OHNE Echtzeitpriorisierung -- die absoluten Zahlen gelten nicht fuer
+    //    den Windows-Laptop, das VERHAELTNIS schon.
+    // Bis Birk am Netz gehoert hat, ob der Tail ohne seinen Eigenhall noch
+    // der abgenommene Klang ist, bleibt er drin.
     SynthDef(\tail1_shimmer, { |freq = 440, amp = 0.22, out = 0, x0 = 0, y0 = 0,
             attack = 0.02, decay = 0.0, sustain = 1.0, release = 4.5,
             tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,

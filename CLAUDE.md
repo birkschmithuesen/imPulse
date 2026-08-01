@@ -698,8 +698,13 @@ Vier Dinge, die man beim Ändern kennen muss:
   2026-08-01, RMS 0.0006 gegen 0.0061). Die Zahl ist eine Messung, keine
   Schätzung. Der `FreeVerb` in Shimmer, FM-Glide und Sub-Glow steht dagegen
   quer zur Regel „Hall nach dem Panning" und ist **bewusst geblieben** — er
-  ist Teil des abgenommenen Klangs; bei einer *rotierenden* Quelle wandert er
-  allerdings mit, ein Punkt zum Nachhören am Netz.
+  ist Teil des abgenommenen Klangs. Drei Argumente dagegen, alle drei Birks
+  Entscheidung: bei einer *rotierenden* Quelle kreist der Eigenhall mit statt
+  stehen zu bleiben; `\masterReverb` liefert ohnehin schon Hall; und er kostet
+  **gemessen zwei Drittel der Last dieser Schicht** (bei 10 Treffern/s 65 %
+  Server-CPU mit, 23 % ohne die drei FreeVerbs — zum Vergleich 5 % ohne Tails;
+  Linux-vServer ohne Echtzeitpriorität, die absoluten Zahlen gelten nicht für
+  den Windows-Laptop, das Verhältnis schon).
 
 **Tail-Orbit: Kreisbewegung um den Auslöseort** (`~tailOrbitOut`, Parameter
 `tailOrbitRadius` 0.25, `tailOrbitSpeed` 0.5, `tailOrbitEnvExp` 1.0,
