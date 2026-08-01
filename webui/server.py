@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import struct
 import sys
@@ -224,45 +225,9 @@ SPLIT_WEIGHTS: List[Tuple[str, str]] = [
     ("single", "nur einer"),
 ]
 
-# Kurzerklaerungen fuer Parameter, deren Adresse allein nicht verraet, was sie
-# tun. remoteSettings.txt fuehrt zwar eine Beschreibungsspalte, die steht aber
-# bei fast allen Parametern auf dem Platzhalter "space for descripiton".
-DESCRIPTIONS: Dict[str, str] = {
-    "/net/impulse/splitSpeedJitter":
-        "Streut die Geschwindigkeit der Kinder an einer Kreuzung. "
-        "0 = jeder Zweig exakt so schnell wie der Elternimpuls.",
-    "/net/impulse/splitLifetimeJitter":
-        "Streut die Lebensdauer der Kinder an einer Kreuzung, ohne ihre "
-        "Helligkeit zu aendern. 0 = Geschwister sterben synchron.",
-    "/net/impulse/speedQuantize/enabled":
-        "Laesst neue Impulse mit einem rhythmischen Vielfachen von "
-        "/net/impulse/speed spawnen statt immer mit genau diesem Wert.",
-    "/net/impulse/speedQuantize/jitter":
-        "Swing auf der gezogenen Speed-Klasse. 0 = exakt das Vielfache. "
-        "Ueber 0,29 rutschen einzelne Impulse im Klang in die Nachbarklasse.",
-    "/net/impulse/split/weight/all":
-        "Gewicht dafuer, dass eine Kreuzung alle moeglichen Zweige nimmt - "
-        "das bisherige Verhalten.",
-    "/net/impulse/split/weight/oneLess":
-        "Gewicht fuer einen Zweig weniger als moeglich. Welcher wegfaellt, "
-        "wird je Aufspaltung gewuerfelt.",
-    "/net/impulse/split/weight/single":
-        "Gewicht dafuer, dass der Impuls nur in EINE Richtung weiterlaeuft, "
-        "statt sich zu teilen.",
-    "/net/impulse/split/staggerEnabled":
-        "Laesst die Zweige einer Aufspaltung nacheinander statt gleichzeitig "
-        "starten. Der Abstand haengt an /net/sequencer/bpm, auch wenn der "
-        "Sequencer aus ist.",
-    "/net/impulse/split/staggerNoteValue":
-        "Abstand zwischen dem 1., 2. und 3. Zweig einer Aufspaltung, in "
-        "Notenwerten des BPM-Rasters.",
-    "/net/sequencer/enabled":
-        "Not-Aus fuer alle sechs Tracks. Die Taktuhr laeuft weiter, das "
-        "Wiedereinschalten haengt also nicht an der Dauer der Pause.",
-    "/net/sequencer/bpm":
-        "Gemeinsames Tempo aller Tracks. Ein Wechsel aendert die Rate, nicht "
-        "die Position - es gibt keinen Sprung.",
-}
+# Die Titel und Kurzerklaerungen aller Regler stehen weiter unten in
+# ADDRESS_LABELS -- sie brauchen die Levelnamen der Song-Struktur, die erst
+# darunter definiert sind.
 
 
 def build_sequencer(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
@@ -395,6 +360,402 @@ SONG_LEVEL_HINTS: List[str] = [
     "hohe Spawn-Rate, viel Bewegung im Netz",
     "Maximalausschlag - kurz und intensiv, kein Dauerzustand",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Regler-Beschriftungen
+#
+# Adresse -> (sprechender Titel, Kurzerklaerung oder None).
+#
+# Warum das HIER steht und nicht in app.js: es ist eine inhaltliche Aussage
+# darueber, was ein Parameter im Sketch bewirkt -- dasselbe Argument wie bei
+# TAB_RULES und TREE_HELP. Hier ist sie ohne jsdom pruefbar; test_webui.py
+# haelt fest, dass jede bekannte Adresse einen Titel hat.
+#
+# Der Titel ersetzt das letzte Adresssegment als HAUPTtext des Reglers. Die
+# rohe OSC-Adresse bleibt sichtbar, aber als kleinste, gedimmte Zeile darunter
+# -- ohne sie waere ein Regler nicht mehr einer Adresse zuzuordnen, und genau
+# das braucht man beim Debuggen mit OSC von Hand.
+#
+# Die zweite Spalte ist bewusst dreiwertig gemeint:
+#   Text  -- Erklaerung, wird unter dem Regler angezeigt
+#   None  -- SELBSTERKLAEREND, es soll bewusst nichts dastehen (Farbkanaele,
+#            Min/Max-Paare, deren Sektionsueberschrift schon alles sagt)
+# Ein fehlender Eintrag heisst dagegen "vergessen" -- der Unterschied ist der
+# Grund, warum hier auch triviale Adressen mit None aufgefuehrt sind.
+#
+# remoteSettings.txt fuehrt zwar selbst eine Beschreibungsspalte, die steht
+# aber bei praktisch allen Parametern auf dem Platzhalter
+# "space for descripiton" und ist deshalb keine Quelle.
+# ---------------------------------------------------------------------------
+
+# Nachgeschlagen wird in drei Stufen (siehe label_for): exakte Adresse, dann
+# das Ziffern-Muster (track0 -> track#), dann das letzte Segment. Die
+# Muster-Stufe spart sechs identische Zeilen je Sequencer-Feld.
+ADDRESS_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
+
+    # --- Mixer ------------------------------------------------------------
+    "/master/level": (
+        "Gesamt-Helligkeit",
+        "Show-Fader ueber alle 18 000 LEDs. Wirkt auf die Hardware; die "
+        "Vorschau im Sketch-Fenster zeigt weiter volle Helligkeit."),
+    "Master/trace": (
+        "Nachleuchten",
+        "Wieviel vom vorigen Bild stehen bleibt, bevor das neue darauf "
+        "gemischt wird. 0 = harte Punkte, hoch = lange Schweife durch das "
+        "ganze Netz."),
+    "Master/0/opacity/0.Impulse": (
+        "Ebene: Impulse",
+        "Deckkraft der wandernden Impulse in der Mischung."),
+    "Master/1/opacity/1.Nodes": (
+        "Ebene: Knoten",
+        "Deckkraft der Kreuzungspunkte in der Mischung."),
+
+    # --- Impuls-Physik ----------------------------------------------------
+    "/net/impulse/speed": (
+        "Grundgeschwindigkeit",
+        "Wie schnell ein Impuls den Stripe entlangwandert, in LEDs pro "
+        "Sekunde. Bei eingeschalteter Kopplung ziehen Lebensdauer, Totzeit "
+        "und Spawn-Intervall proportional mit."),
+    "/net/impulse/lifetime": (
+        "Energieverlust je Sekunde",
+        "Wie schnell ein Impuls unterwegs dunkler wird und schliesslich "
+        "stirbt. Klein = weite Reise durchs Netz, gross = kurzer Funke."),
+    "/net/impulse/nodeDeadTime": (
+        "Totzeit pro Knoten",
+        "So lange bleibt eine Kreuzung nach dem Feuern stumm. Ohne sie wuerde "
+        "derselbe Impuls denselben Knoten in jedem Frame neu ausloesen."),
+    "/net/impulse/energyExponent": (
+        "Anschlags-Kennlinie",
+        "Exponent auf der Energie eines eingehenden Triggers. 1 = linear, "
+        "hoeher = nur kraeftige Anschlaege kommen noch hell durch."),
+    "/net/impulse/oscRate": (
+        "Positionsmeldungen je Sekunde",
+        "Takt, in dem die Positionen reisender Impulse an SuperCollider "
+        "gehen. 0 schaltet den Strom ab - die Knotentoene laufen weiter. Der "
+        "Not-Aus, wenn der Klangrechner nicht mitkommt."),
+    "/net/impulse/oscMaxCount": (
+        "Gemeldete Impulse je Takt",
+        "Hoechstzahl gleichzeitig gemeldeter Impulse, ausgewaehlt nach "
+        "Energie. Deckel gegen Klangbrei und Netzlast."),
+    "/net/impulse/splitSpeedJitter": (
+        "Streuung: Tempo der Zweige",
+        "Streut die Geschwindigkeit der Kinder an einer Kreuzung. "
+        "0 = jeder Zweig exakt so schnell wie der Elternimpuls."),
+    "/net/impulse/splitLifetimeJitter": (
+        "Streuung: Lebensdauer der Zweige",
+        "Streut die Lebensdauer der Kinder an einer Kreuzung, ohne ihre "
+        "Helligkeit zu aendern. 0 = Geschwister sterben synchron."),
+
+    # --- Sinus-Randomizer -------------------------------------------------
+    "/net/impulse/speed/randomize/enabled": (
+        "Tempo automatisch schwanken lassen",
+        "Faehrt die Grundgeschwindigkeit langsam zwischen Min und Max hin und "
+        "her, statt sie fest stehen zu lassen. Der Regler oben folgt der "
+        "Bewegung im UI nicht - es gibt keinen Rueckkanal."),
+    "/net/impulse/speed/randomize/min": (
+        "Tempo: untere Grenze",
+        "Langsamster Wert, den die Schwingung erreicht."),
+    "/net/impulse/speed/randomize/max": (
+        "Tempo: obere Grenze",
+        "Schnellster Wert, den die Schwingung erreicht."),
+    "/net/impulse/speed/randomize/period": (
+        "Tempo: Dauer eines Zyklus",
+        "Sekunden fuer einen vollen Auf-und-Ab-Durchlauf. Beim Einschalten "
+        "startet die Schwingung in der Mitte des Bereichs."),
+    "/net/impulse/lifetime/randomize/enabled": (
+        "Lebensdauer automatisch schwanken lassen",
+        "Faehrt den Energieverlust langsam zwischen Min und Max hin und her. "
+        "Unabhaengig von der Tempo-Schwingung, eigener Takt."),
+    "/net/impulse/lifetime/randomize/min": (
+        "Lebensdauer: untere Grenze",
+        "Kleinster Energieverlust der Schwingung - die Impulse reisen hier am "
+        "weitesten."),
+    "/net/impulse/lifetime/randomize/max": (
+        "Lebensdauer: obere Grenze",
+        "Groesster Energieverlust der Schwingung - die Impulse sterben hier "
+        "am schnellsten."),
+    "/net/impulse/lifetime/randomize/period": (
+        "Lebensdauer: Dauer eines Zyklus",
+        "Sekunden fuer einen vollen Auf-und-Ab-Durchlauf."),
+
+    # --- Tempo-Klassen ----------------------------------------------------
+    "/net/impulse/speedQuantize/enabled": (
+        "Rhythmische Tempo-Klassen",
+        "Laesst neue Impulse mit einem rhythmischen Vielfachen der "
+        "Grundgeschwindigkeit starten statt immer mit genau diesem Wert."),
+    "/net/impulse/speedQuantize/jitter": (
+        "Swing auf der Tempo-Klasse",
+        "0 = exakt das Vielfache. Ueber 0,29 rutschen einzelne Impulse im "
+        "Klang hoerbar in die Nachbarklasse."),
+    "/net/impulse/speedQuantize/weight/0x5": (
+        "Gewicht 0,5x",
+        "Wie oft ein neuer Impuls halb so schnell startet wie die "
+        "Grundgeschwindigkeit."),
+    "/net/impulse/speedQuantize/weight/1x": (
+        "Gewicht 1x",
+        "Wie oft ein neuer Impuls genau mit der Grundgeschwindigkeit "
+        "startet - der Normalfall."),
+    "/net/impulse/speedQuantize/weight/2x": (
+        "Gewicht 2x",
+        "Wie oft ein neuer Impuls doppelt so schnell startet."),
+    "/net/impulse/speedQuantize/weight/4x": (
+        "Gewicht 4x",
+        "Wie oft ein neuer Impuls vierfach so schnell startet."),
+    "/net/impulse/speedQuantize/weight/8x": (
+        "Gewicht 8x",
+        "Wie oft ein neuer Impuls achtfach so schnell startet - der seltene "
+        "Ausreisser, der quer durchs Netz schiesst."),
+
+    # --- Split-Verhalten --------------------------------------------------
+    "/net/impulse/split/weight/all": (
+        "Gewicht: alle Zweige",
+        "Gewicht dafuer, dass eine Kreuzung alle moeglichen Zweige nimmt - "
+        "das Verhalten von frueher."),
+    "/net/impulse/split/weight/oneLess": (
+        "Gewicht: einer weniger",
+        "Gewicht fuer einen Zweig weniger als moeglich. Welcher wegfaellt, "
+        "wird je Aufspaltung gewuerfelt."),
+    "/net/impulse/split/weight/single": (
+        "Gewicht: nur einer",
+        "Gewicht dafuer, dass der Impuls nur in EINE Richtung weiterlaeuft, "
+        "statt sich zu teilen."),
+    "/net/impulse/split/staggerEnabled": (
+        "Zweige zeitversetzt starten",
+        "Laesst die Zweige einer Aufspaltung nacheinander statt gleichzeitig "
+        "losgehen. Der Abstand haengt am BPM-Raster, auch wenn der Sequencer "
+        "aus ist."),
+    "/net/impulse/split/staggerNoteValue": (
+        "Versatz der Zweige",
+        "Abstand zwischen dem 1., 2. und 3. Zweig einer Aufspaltung, in "
+        "Notenwerten des BPM-Rasters."),
+
+    # --- Impuls-Farbe -----------------------------------------------------
+    # Die drei Kanaele sind Birks Beispiel fuer "selbsterklaerend": ein
+    # Regler namens "Rot" braucht keinen Satz darunter.
+    "/net/impulse/color/r": ("Impulsfarbe Rot", None),
+    "/net/impulse/color/g": ("Impulsfarbe Gruen", None),
+    "/net/impulse/color/b": ("Impulsfarbe Blau", None),
+    "/net/impulse/color/gamma": (
+        "Farbkurve",
+        "Wie steil die Helligkeit mit der Energie des Impulses steigt. Unter "
+        "1 hebt schwache Impulse an, ueber 1 drueckt sie weg."),
+    "/net/impulse/color/useRemoteCol": (
+        "Feste Impulsfarbe benutzen",
+        "Aus = jeder Impuls behaelt die Farbe seiner Herkunft. An = alle "
+        "Impulse nehmen die drei Farbregler darueber."),
+    # Alle drei tragen denselben Satz: die Regler stehen zwar nebeneinander,
+    # aber "fadeOut" ist von aussen nicht zu erraten, und ein Regler soll fuer
+    # sich allein lesbar sein.
+    "/net/impulse/fadeOut/r": (
+        "Schweiffarbe Rot",
+        "Farbe, in die ein Impuls beim Verloeschen ausblendet."),
+    "/net/impulse/fadeOut/g": (
+        "Schweiffarbe Gruen",
+        "Farbe, in die ein Impuls beim Verloeschen ausblendet."),
+    "/net/impulse/fadeOut/b": (
+        "Schweiffarbe Blau",
+        "Farbe, in die ein Impuls beim Verloeschen ausblendet."),
+
+    # --- Zufalls-Spawns ---------------------------------------------------
+    "/net/randomSpawn/enabled": (
+        "Zufalls-Spawns",
+        "Der Grundpuls der Installation: laesst von selbst Impulse an "
+        "zufaelligen Stripes starten, ohne Trigger von aussen."),
+    "/net/randomSpawn/count": (
+        "Stripes je Runde",
+        "Wieviele Stripes gleichzeitig einen Impuls bekommen. Hohe Werte "
+        "wirken wie ein Flaechenblitz statt wie Ambient."),
+    "/net/randomSpawn/interval": (
+        "Abstand zwischen den Runden",
+        "Sekunden von einer Spawn-Runde zur naechsten. Klein = dichtes Netz, "
+        "gross = einzelne Ereignisse."),
+    "/net/randomSpawn/energy": (
+        "Energie je Impuls",
+        "Starthelligkeit der so erzeugten Impulse - bestimmt zugleich, wie "
+        "weit sie kommen, bevor sie sterben."),
+    "/net/randomSpawn/directionBias": (
+        "Laufrichtung",
+        "Wahrscheinlichkeit fuer „vorwaerts“. 1 = alle laufen in dieselbe "
+        "Richtung, 0,5 = gemischt."),
+    "/net/randomSpawn/jitter": (
+        "Unregelmaessigkeit des Abstands",
+        "0 = exakt periodisch wie ein Metronom, 1 = der Abstand schwankt "
+        "zwischen null und dem doppelten Intervall."),
+
+    # --- Sequencer --------------------------------------------------------
+    "/net/sequencer/enabled": (
+        "Sequencer",
+        "Not-Aus fuer alle sechs Spuren. Die Taktuhr laeuft weiter, das "
+        "Wiedereinschalten haengt also nicht an der Dauer der Pause."),
+    "/net/sequencer/bpm": (
+        "Tempo",
+        "Gemeinsames Tempo aller Spuren. Ein Wechsel aendert die Rate, nicht "
+        "die Position - es gibt keinen Sprung."),
+    # Muster-Eintraege: gelten fuer track0..track5 gleichermassen.
+    "/net/sequencer/track#/enabled": (
+        "Spur an",
+        "Schaltet diese Spur ab, ohne ihre Einstellungen zu verlieren."),
+    "/net/sequencer/track#/noteValue": (
+        "Notenwert",
+        "In welchem Abstand die Spur feuert, gemessen am gemeinsamen "
+        "BPM-Raster."),
+    "/net/sequencer/track#/repeatCount": (
+        "Wiederholungen am selben Ursprung",
+        "So viele Zyklen bleibt die Spur auf demselben Ursprungs-Stripe, "
+        "bevor sie neu wuerfelt. Daraus entsteht die wiedererkennbare "
+        "Melodie."),
+    "/net/sequencer/track#/energy": (
+        "Energie",
+        "Starthelligkeit der Impulse dieser Spur."),
+    "/net/sequencer/track#/swingJitter": (
+        "Swing",
+        "Verschiebt den Einsatz gegenueber dem exakten Raster. 0 = "
+        "maschinell genau."),
+    "/net/sequencer/track#/originTreeFilter": (
+        "Baum-Filter",
+        "Schraenkt den Ursprungs-Stripe dieser Spur auf einen der vier "
+        "physischen Baeume ein. „alle“ = kein Filter."),
+    "/net/sequencer/track#/originStripeOverride": (
+        "Fester Ursprung",
+        "-1 = die Spur wuerfelt ihren Ursprungs-Stripe. Ein Wert ab 0 nagelt "
+        "sie auf diesen Stripe fest und schlaegt den Baum-Filter."),
+
+    # --- Knoten -----------------------------------------------------------
+    "/nodes/fadeOutGamma": (
+        "Ausblend-Kurve der Knoten",
+        "Wie ein Knoten von „gefeuert“ nach „wartend“ verblasst. Ueber 1 = "
+        "haelt lange und faellt spaet ab, unter 1 = faellt sofort."),
+    "/nodes/pulseFrequency": (
+        "Pulsfrequenz der Knoten",
+        "Wie schnell wartende Knoten atmen, in Schlaegen pro Sekunde."),
+    "/nodes/pulseFreqRandFrac": (
+        "Streuung der Pulsfrequenz",
+        "0 = alle Knoten atmen im Gleichtakt, 1 = jeder in seinem eigenen "
+        "Tempo."),
+    "/nodes/radius/fired": (
+        "Radius: feuert",
+        "Wieviele LEDs um die Kreuzung herum leuchten, waehrend der Knoten "
+        "feuert."),
+    "/nodes/radius/inactive": (
+        "Radius: erloschen",
+        "Groesse im stummen Zustand direkt nach dem Feuern, waehrend die "
+        "Totzeit laeuft."),
+    "/nodes/radius/waiting": (
+        "Radius: wartend",
+        "Groesse im Ruhezustand, wenn der Knoten wieder ausloesbar ist."),
+    "/nodes/times/fire": (
+        "Dauer des Feuerns",
+        "Sekunden, die ein getroffener Knoten hell bleibt."),
+    "/nodes/times/recover": (
+        "Erholungsdauer",
+        "Sekunden vom Erloeschen bis zurueck in den wartenden Zustand."),
+
+    # Farbkarten der Knoten. Der Schluessel ist die BASIS der drei Adressen
+    # <basis>/Hue|Sat|Bright -- eine Farbkarte traegt keine eigene Adresse.
+    "/nodes/colors/central/fired": (
+        "Knotenkern: feuert",
+        "Farbe des Kreuzungspunkts selbst im Moment des Ausloesens."),
+    "/nodes/colors/central/inactive": (
+        "Knotenkern: erloschen",
+        "Farbe direkt nach dem Feuern, solange die Totzeit laeuft."),
+    "/nodes/colors/central/waiting": (
+        "Knotenkern: wartend",
+        "Farbe im Ruhezustand, wenn der Knoten wieder ausloesbar ist."),
+    "/nodes/colors/outer/fired": (
+        "Knotenhof: feuert",
+        "Farbe der LEDs rings um den Kreuzungspunkt im Moment des "
+        "Ausloesens."),
+    "/nodes/colors/outer/inactive": (
+        "Knotenhof: erloschen",
+        "Farbe des Hofs direkt nach dem Feuern."),
+    "/nodes/colors/outer/waiting": (
+        "Knotenhof: wartend",
+        "Farbe des Hofs im Ruhezustand."),
+
+    # --- Trigger (Kommandos, keine Regler) --------------------------------
+    "/net/activateNode": (
+        "Knoten von Hand ausloesen",
+        "Laesst die Kreuzung mit dieser Nummer sofort feuern - zum Pruefen "
+        "einzelner Knoten."),
+    "/net/activateStripe": (
+        "Stripe von Hand anstossen",
+        "Startet sofort einen Impuls am Anfang dieses Stripes."),
+
+    # --- Preset-Wechsler --------------------------------------------------
+    "/preset/scheduler/enabled": (
+        "Preset-Wechsler",
+        "Wechselt von selbst alphabetisch durch alle Presets. Ist die "
+        "Song-Struktur eingeschaltet, hat die Vorrang."),
+    "/preset/scheduler/interval": (
+        "Wechsel-Intervall",
+        "Sekunden zwischen zwei Preset-Wechseln."),
+
+    # --- Song-Struktur ----------------------------------------------------
+    "/songStructure/enabled": (
+        "Dramaturgie",
+        "Waehlt bei jedem faelligen Wechsel erst das naechste Energie-Level "
+        "und dann ein Preset daraus. Hat Vorrang vor dem alphabetischen "
+        "Preset-Wechsler."),
+    # Die 16 Matrixzellen und die 8 Verweildauern kommen gleich darunter aus
+    # einer Schleife -- sechzehnmal derselbe Satz von Hand waere sechzehn
+    # Gelegenheiten, sich zu vertippen.
+}
+
+# Letztes Adresssegment -> Titel. Greift erst, wenn weder die exakte Adresse
+# noch das Ziffern-Muster passt. Deckt die 18 Farbkomponenten der sechs
+# Knoten-Farbkarten ab, ohne sie einzeln aufzufuehren.
+SUFFIX_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
+    "Hue": ("Farbton", None),
+    "Sat": ("Saettigung", None),
+    "Bright": ("Helligkeit", None),
+}
+
+for _from_index, _from in enumerate(SONG_LEVEL_NAMES):
+    for _to in SONG_LEVEL_NAMES:
+        ADDRESS_LABELS["%smatrix/%s/%s" % (SONG_PREFIX, _from, _to)] = (
+            "%s → %s" % (_from, _to),
+            "Gewicht dafuer, dass auf „%s“ als naechstes „%s“ folgt. Die Zeile "
+            "muss sich nicht zu 100 summieren; ein Gewicht von 0 kommt nie "
+            "vor." % (_from, _to))
+    # Die zwei Grenzen einer Spanne unter der Ueberschrift „Verweildauer je
+    # Level“ erklaeren sich gegenseitig -- hier waere ein Satz Fuellmaterial.
+    ADDRESS_LABELS["%sdwell/%s/min" % (SONG_PREFIX, _from)] = (
+        "%s: kuerzeste Dauer" % _from, None)
+    ADDRESS_LABELS["%sdwell/%s/max" % (SONG_PREFIX, _from)] = (
+        "%s: laengste Dauer" % _from, None)
+del _from_index, _from, _to
+
+# Ziffernfolge hinter einem Buchstaben durch '#' ersetzen: aus
+# /net/sequencer/track3/energy wird /net/sequencer/track#/energy. Die
+# Einschraenkung "hinter einem Buchstaben" haelt Master/0/opacity/0.Impulse
+# und die Kanalnummern dort unberuehrt -- die sind echte, eigene Adressen und
+# haben ihren eigenen Eintrag.
+_PATTERN_DIGITS = re.compile(r"(?<=[A-Za-z])\d+(?=/|$)")
+
+
+def pattern_address(address: str) -> str:
+    """Die Adresse mit '#' statt einer Nummer im Segment (track0 -> track#)."""
+    return _PATTERN_DIGITS.sub("#", address)
+
+
+def label_for(address: str) -> Tuple[Optional[str], Optional[str]]:
+    """(Titel, Erklaerung) einer Adresse; (None, None) wenn unbekannt.
+
+    Drei Stufen, spezifisch vor allgemein: exakte Adresse, Ziffern-Muster,
+    letztes Segment. Ein unbekannter Parameter faellt damit auf die alte
+    Darstellung zurueck (Adresssegment als Titel, keine Erklaerung) statt zu
+    verschwinden -- ein neuer Regler im Sketch soll auch dann sichtbar sein,
+    wenn hier niemand eine Zeile ergaenzt hat.
+    """
+    entry = ADDRESS_LABELS.get(address)
+    if entry is None:
+        entry = ADDRESS_LABELS.get(pattern_address(address))
+    if entry is None:
+        entry = SUFFIX_LABELS.get(address.rpartition("/")[2])
+    if entry is None:
+        return None, None
+    return entry
 
 
 def build_song_structure(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
@@ -1035,21 +1396,28 @@ class Parameter:
 
     def as_dict(self) -> Dict[str, Any]:
         ui_min, ui_max = self.ui_range()
+        label, help_text = label_for(self.address)
         return {
             "kind": "param",
             "type": self.type,
             "address": self.address,
             "description": self.description,
+            # Sprechender Titel statt des letzten Adresssegments. None heisst
+            # "keine Zeile in ADDRESS_LABELS" -- das UI faellt dann auf das
+            # Segment zurueck, damit ein neuer Parameter nicht unbeschriftet
+            # ist.
+            "label": label,
             "min": ui_min,
             "max": ui_max,
             "step": self.step(),
             # 0/1-Ints bekommen einen Schalter statt eines Zweipunkt-Reglers
             "widget": "toggle" if (self.is_int and self.minimum == 0
                                    and self.maximum == 1) else "slider",
-            # Kurzerklaerung, wo die Adresse allein nicht reicht. None fuer
-            # alle anderen -- das UI zeigt dann nichts statt einer leeren
-            # Zeile.
-            "help": DESCRIPTIONS.get(self.address),
+            # Kurzerklaerung. None heisst entweder "selbsterklaerend" (Rot,
+            # Farbton, min/max unter einer eindeutigen Ueberschrift) oder
+            # "unbekannte Adresse" -- in beiden Faellen zeigt das UI nichts
+            # statt einer leeren Zeile.
+            "help": help_text,
         }
 
 
@@ -1470,10 +1838,16 @@ def build_groups(parameters: List[Parameter]) -> List[Dict[str, Any]]:
 
         controls: List[Dict[str, Any]] = []
         for base in color_bases:
+            # Der Titel einer Farbkarte haengt an ihrer BASIS, nicht an einer
+            # Adresse -- die Karte hat keine, sie hat drei darunter. Ohne
+            # Eintrag bleibt es beim letzten Segment ("fired"), das allein
+            # nicht verraet, wessen Zustand gemeint ist.
+            color_label, color_help = label_for(base)
             controls.append({
                 "kind": "color",
                 "base": base,
-                "label": base.split("/")[-1] or base,
+                "label": color_label or base.split("/")[-1] or base,
+                "help": color_help,
                 "components": {
                     "hue": by_address["%s/Hue" % base].as_dict(),
                     "sat": by_address["%s/Sat" % base].as_dict(),
@@ -1484,11 +1858,14 @@ def build_groups(parameters: List[Parameter]) -> List[Dict[str, Any]]:
             if param.address in consumed:
                 continue
             if param.address in TRIGGER_ADDRESSES:
+                trigger_label, trigger_help = label_for(param.address)
                 controls.append({
                     "kind": "trigger",
                     "type": param.type,
                     "address": param.address,
                     "description": param.description,
+                    "label": trigger_label,
+                    "help": trigger_help,
                     "min": param.minimum,
                     "max": param.maximum,
                 })

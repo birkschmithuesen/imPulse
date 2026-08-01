@@ -1171,6 +1171,116 @@ class SongStructureSectionTest(unittest.TestCase):
         self.assertIsNone(state["levelIndex"])
 
 
+class AddressLabelTest(unittest.TestCase):
+    """ADDRESS_LABELS: sprechende Titel statt des rohen Adresssegments.
+
+    Der Grund fuer die Tests hier ist derselbe wie bei TAB_RULES: die
+    Zuordnung ist eine inhaltliche Aussage ueber die Java-Seite und steht
+    deshalb auf der Server-Seite -- nur dort ist sie ohne jsdom pruefbar.
+    """
+
+    def test_exact_address_wins(self):
+        label, help_text = server.label_for("/net/impulse/speed")
+        self.assertEqual(label, "Grundgeschwindigkeit")
+        self.assertTrue(help_text)
+
+    def test_track_number_is_matched_by_pattern(self):
+        """Sechs Tracks, ein Eintrag -- sonst sechsmal derselbe Satz."""
+        for index in range(server.SEQUENCER_TRACK_COUNT):
+            label, help_text = server.label_for(
+                "/net/sequencer/track%d/energy" % index)
+            self.assertEqual(label, "Energie")
+            self.assertTrue(help_text)
+
+    def test_pattern_address_leaves_channel_numbers_alone(self):
+        """Master/0/opacity/... ist eine echte eigene Adresse, kein Muster."""
+        self.assertEqual(server.pattern_address("Master/0/opacity/0.Impulse"),
+                         "Master/0/opacity/0.Impulse")
+        self.assertEqual(server.pattern_address("/net/sequencer/track3/energy"),
+                         "/net/sequencer/track#/energy")
+
+    def test_colour_components_come_from_the_suffix(self):
+        """18 Farbkomponenten, drei Zeilen -- und bewusst ohne Erklaerung."""
+        label, help_text = server.label_for("/nodes/colors/outer/fired/Hue")
+        self.assertEqual(label, "Farbton")
+        self.assertIsNone(help_text)
+
+    def test_unknown_address_falls_back_to_nothing(self):
+        """Ein neuer Regler bleibt sichtbar, statt ohne Titel zu verschwinden."""
+        self.assertEqual(server.label_for("/gibt/es/nicht/xyz"), (None, None))
+
+    def test_self_explaining_parameters_carry_no_help(self):
+        """Birks Beispiel: ein Regler namens "Rot" braucht keinen Satz."""
+        for address in ("/net/impulse/color/r", "/net/impulse/color/g",
+                        "/net/impulse/color/b"):
+            label, help_text = server.label_for(address)
+            self.assertTrue(label)
+            self.assertIsNone(help_text)
+
+    def test_song_matrix_and_dwell_are_complete(self):
+        """16 Zellen und 8 Grenzen kommen aus einer Schleife, nicht von Hand."""
+        for frm in server.SONG_LEVEL_NAMES:
+            for to in server.SONG_LEVEL_NAMES:
+                label, help_text = server.label_for(
+                    "/songStructure/matrix/%s/%s" % (frm, to))
+                self.assertTrue(label, "%s->%s ohne Titel" % (frm, to))
+                self.assertTrue(help_text)
+            for edge in ("min", "max"):
+                label, _help = server.label_for(
+                    "/songStructure/dwell/%s/%s" % (frm, edge))
+                self.assertTrue(label, "%s/%s ohne Titel" % (frm, edge))
+
+    def test_every_known_address_has_a_label(self):
+        """Der eigentliche Punkt: KEIN Regler bleibt bei der rohen Adresse.
+
+        Die Adressliste kommt aus einem echten Preset (gleiches Format wie
+        remoteSettings.txt, das im Repo fehlt -- imPulse schreibt es erst beim
+        Start) plus den seither dazugekommenen Adressen.
+        """
+        preset = os.path.join(server.REPO_ROOT, "data", "presets", "random1.txt")
+        if not os.path.exists(preset):
+            self.skipTest("data/presets/random1.txt fehlt")
+        with open(preset, encoding="utf-8") as handle:
+            addresses = [p.address for p in parse_settings(handle.read())]
+        addresses += [
+            "/net/impulse/split/staggerEnabled",
+            "/net/impulse/split/staggerNoteValue",
+            "/net/impulse/split/weight/all",
+            "/net/impulse/split/weight/oneLess",
+            "/net/impulse/split/weight/single",
+            "/net/activateNode",
+            "/net/activateStripe",
+            "/preset/scheduler/enabled",
+            "/preset/scheduler/interval",
+            "/songStructure/enabled",
+        ]
+        addresses += ["/net/sequencer/track%d/originTreeFilter" % i
+                      for i in range(server.SEQUENCER_TRACK_COUNT)]
+        missing = [a for a in addresses if server.label_for(a)[0] is None]
+        self.assertEqual(missing, [], "ohne Titel in ADDRESS_LABELS: %s" % missing)
+
+    def test_as_dict_carries_label_and_help(self):
+        param = by_address(parse_settings(SAMPLE))["/net/impulse/nodeDeadTime"]
+        entry = param.as_dict()
+        self.assertEqual(entry["label"], "Totzeit pro Knoten")
+        self.assertTrue(entry["help"])
+
+    def test_colour_card_and_trigger_are_labelled(self):
+        """Beide tragen ihren Titel nicht in der Adresse: die Karte hat gar
+        keine, der Trigger nur ein Verb ("activateNode")."""
+        groups = {g["key"]: g for g in build_groups(parse_settings(SAMPLE))}
+        card = [c for c in groups["nodes/colors"]["controls"]
+                if c["kind"] == "color"][0]
+        self.assertEqual(card["label"], "Knotenhof: feuert")
+        self.assertTrue(card["help"])
+
+        trigger = Parameter("int", "/net/activateNode", "", 0, 0, 99)
+        control = [c for c in build_groups([trigger])[0]["controls"]
+                   if c["kind"] == "trigger"][0]
+        self.assertEqual(control["label"], "Knoten von Hand ausloesen")
+        self.assertTrue(control["help"])
+
+
 class ScParamTest(unittest.TestCase):
     """Die handgepflegte Spiegelung der SC-Registry."""
 
