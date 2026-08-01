@@ -315,6 +315,31 @@ class PresetStore {
       "/preset/scheduler/interval"
   };
 
+  // Wie EXCLUDED, aber fuer ganze Adressbaeume. Die Song-Struktur-Ebene ist
+  // ebenfalls Transport und nicht Inhalt: ein Preset, das die
+  // Uebergangsmatrix oder die Verweildauern mitbraechte, koennte die
+  // Dramaturgie beim naechsten Wechsel umschreiben - und das Preset, das sie
+  // geaendert hat, waere danach nicht mehr wiederzufinden.
+  //
+  // Ein Praefix und keine Liste von 25 Einzeladressen, damit ein spaeter
+  // ergaenzter Regler nicht still doch in die Presets wandert. Der Praefix
+  // endet auf '/': ein eigener Adressbaum, der nur so anfaengt, bleibt drin.
+  static final String[] EXCLUDED_PREFIXES = {
+      "/songStructure/"
+  };
+
+  static boolean isExcluded(String address) {
+    if (contains(EXCLUDED, address)) {
+      return true;
+    }
+    for (int i = 0; i < EXCLUDED_PREFIXES.length; i++) {
+      if (address.startsWith(EXCLUDED_PREFIXES[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Rueckgabewerte von PresetTarget.applyPreset
   static final int PRESET_NOT_MINE = 0;
   static final int PRESET_APPLIED = 1;
@@ -347,7 +372,7 @@ class PresetStore {
     }
     List<String[]> kept = new ArrayList<String[]>();
     for (int i = 0; i < all.size(); i++) {
-      if (!contains(EXCLUDED, all.get(i)[COL_ADDRESS])) {
+      if (!isExcluded(all.get(i)[COL_ADDRESS])) {
         kept.add(all.get(i));
       }
     }
@@ -363,7 +388,7 @@ class PresetStore {
     for (int i = 0; i < entries.size(); i++) {
       String[] entry = entries.get(i);
       String address = entry[COL_ADDRESS];
-      if (contains(SILENTLY_IGNORED, address) || contains(EXCLUDED, address)) {
+      if (contains(SILENTLY_IGNORED, address) || isExcluded(address)) {
         continue;
       }
       // Vor dem Zerlegen vermerken: eine Zeile mit unlesbarem Wert war da und
@@ -395,7 +420,7 @@ class PresetStore {
     }
     for (int i = 0; i < current.size(); i++) {
       String address = current.get(i)[COL_ADDRESS];
-      if (contains(EXCLUDED, address)) {
+      if (isExcluded(address)) {
         continue;
       }
       if (!seen.contains(address) && report.missing.indexOf(address) < 0) {

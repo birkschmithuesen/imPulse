@@ -395,6 +395,131 @@ def build_split(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Song-Struktur-Ebene
+#
+# Die Dramaturgie ueber eine ganze Nacht: eine Markov-Kette ueber vier
+# Energie-Level. Eigener Tab, weil eine 4x4-Matrix als sechzehn untereinander
+# stehende Regler nicht zu lesen ist -- ein Gitter zeigt in einem Blick, wovon
+# es eine Zeile und wovon eine Spalte gibt.
+#
+# SONG_LEVEL_NAMES spiegelt EnergyLevelStore.LEVEL_NAMES auf der Java-Seite;
+# ein Test vergleicht beide, damit die Reihenfolge nicht abdriftet. Sie steckt
+# in den Adressen selbst (/songStructure/matrix/<von>/<nach>), eine
+# Verschiebung waere also nicht nur eine falsche Beschriftung.
+# ---------------------------------------------------------------------------
+
+SONG_PREFIX = "/songStructure/"
+SONG_LEVEL_NAMES: List[str] = ["ruhig", "mittel", "dynamisch", "dramatisch"]
+
+# Manueller Levelwechsel. Ein KOMMANDO und deshalb bewusst nicht in
+# remoteSettings.txt (SongStructureParams.writeToStream() ist leer) -- ein
+# Regler waere hier sinnlos, "Wert halten" ergibt fuer einen Sprung keinen
+# Sinn. Argument 1..4, nicht 0..3: 0 waere von "kein Argument" nicht zu
+# unterscheiden.
+SONG_GOTO_ADDRESS = SONG_PREFIX + "goto"
+
+# Zustandsdatei, die imPulse bei jedem Levelwechsel schreibt. Der einzige Weg
+# zum Live-Zustand: es gibt keinen OSC-Rueckkanal hierher, imPulse sendet nur
+# an Port 8002 und dort hoert SuperCollider. Dieser Server laeuft auf
+# derselben Maschine, also wird die Datei direkt gelesen -- dasselbe Muster
+# wie die Preset-Liste, die auch vom Dateisystem kommt.
+DEFAULT_STATE_FILENAME = "songStructureState.txt"
+
+SONG_LEVEL_HINTS: List[str] = [
+    "wenig Bewegung, lange Lebensdauern, dunkel und kalt",
+    "spuerbarer Puls, aber kein Draengen",
+    "hohe Spawn-Rate, viel Bewegung im Netz",
+    "Maximalausschlag - kurz und intensiv, kein Dauerzustand",
+]
+
+
+def build_song_structure(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
+    """Struktur des Song-Struktur-Panels, oder None.
+
+    None heisst: dieser imPulse-Stand kennt die Ebene nicht (aeltere
+    remoteSettings.txt). Dann zeigt der Tab nichts, statt ein halbes Gitter
+    anzubieten -- eine Matrix mit einer fehlenden Zelle waere schlimmer als
+    keine: der Operator saehe vier Zeilen und wuesste nicht, dass eine Zelle
+    fehlt.
+    """
+    enabled = by_address.get(SONG_PREFIX + "enabled")
+    if enabled is None:
+        return None
+    matrix: List[List[Dict[str, Any]]] = []
+    for frm in SONG_LEVEL_NAMES:
+        row: List[Dict[str, Any]] = []
+        for to in SONG_LEVEL_NAMES:
+            param = by_address.get("%smatrix/%s/%s" % (SONG_PREFIX, frm, to))
+            if param is None:
+                return None
+            entry = param.as_dict()
+            entry["from"] = frm
+            entry["to"] = to
+            row.append(entry)
+        matrix.append(row)
+    dwell: List[Dict[str, Any]] = []
+    for level in SONG_LEVEL_NAMES:
+        low = by_address.get("%sdwell/%s/min" % (SONG_PREFIX, level))
+        high = by_address.get("%sdwell/%s/max" % (SONG_PREFIX, level))
+        if low is None or high is None:
+            return None
+        dwell.append({"level": level, "min": low.as_dict(), "max": high.as_dict()})
+    return {
+        "enabled": enabled.as_dict(),
+        "levels": list(SONG_LEVEL_NAMES),
+        "hints": list(SONG_LEVEL_HINTS),
+        "matrix": matrix,
+        "dwell": dwell,
+        "gotoAddress": SONG_GOTO_ADDRESS,
+    }
+
+
+def song_structure_addresses(song: Optional[Dict[str, Any]]) -> Set[str]:
+    """Adressen, die das Song-Struktur-Panel selbst rendert."""
+    taken: Set[str] = set()
+    if not song:
+        return taken
+    taken.add(song["enabled"]["address"])
+    for row in song["matrix"]:
+        for cell in row:
+            taken.add(cell["address"])
+    for entry in song["dwell"]:
+        taken.add(entry["min"]["address"])
+        taken.add(entry["max"]["address"])
+    return taken
+
+
+def read_song_state(path: str) -> Optional[Dict[str, Any]]:
+    """Liest data/songStructureState.txt, oder None.
+
+    None ist der NORMALFALL beim Start: imPulse schreibt die Datei erst beim
+    ersten Levelwechsel. Eine kaputte Zeile wird uebersprungen statt zum
+    Fehler gemacht -- die Anzeige ist Beiwerk, sie darf die Seite nicht
+    zerlegen.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    state: Dict[str, Any] = {"level": None, "levelIndex": None, "preset": None,
+                             "sinceMillis": None, "dwellSeconds": None}
+    numeric = ("levelIndex", "sinceMillis", "dwellSeconds")
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2 or parts[0] not in state:
+            continue
+        if parts[0] in numeric:
+            try:
+                state[parts[0]] = int(parts[1].strip())
+            except ValueError:
+                continue
+        else:
+            state[parts[0]] = parts[1].strip()
+    return state
+
+
 def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
                         speed: Optional[Dict[str, Any]],
                         split: Optional[Dict[str, Any]] = None) -> Set[str]:
@@ -444,6 +569,7 @@ TAB_SPAWN = "spawn"
 TAB_NOTES = "noten"
 TAB_PHYSICS = "physik"
 TAB_COLORS = "farben"
+TAB_SONG = "song"
 
 TAB_TITLES: List[Tuple[str, str]] = [
     (TAB_MIXER, "Mixer"),
@@ -455,10 +581,16 @@ TAB_TITLES: List[Tuple[str, str]] = [
     # wie sie ist. Farbe ist Gestaltung und wird am Stueck angefasst, nicht
     # zwischen Physik-Reglern verstreut.
     (TAB_COLORS, "Farben"),
+    # Steht als letzter: die Song-Struktur ist die Ebene UEBER allen anderen
+    # Tabs -- sie waehlt aus, welcher Wertesatz gerade gefahren wird. Ein
+    # Platz vorn wuerde nahelegen, dass man hier anfaengt; man faengt aber mit
+    # den Presets an, aus denen sie waehlt.
+    (TAB_SONG, "Song-Struktur"),
 ]
 
 # Reihenfolge zaehlt: die erste passende Regel gewinnt.
 TAB_RULES: List[Tuple[str, str]] = [
+    ("/songStructure/", TAB_SONG),
     ("/master/", TAB_MIXER),
     ("Master/", TAB_MIXER),
     # speedQuantize VOR /net/impulse/, sonst faengt die Physik-Regel es ab.
@@ -528,6 +660,9 @@ TAB_PRIMARY: Dict[str, List[str]] = {
         "/net/impulse/splitSpeedJitter",
         "/net/impulse/splitLifetimeJitter",
     ],
+    # Leer: der Song-Struktur-Tab besteht ausschliesslich aus seinem eigenen
+    # Panel. Stuende hier eine Adresse, waere sie zweimal auf der Seite.
+    TAB_SONG: [],
 }
 
 
@@ -622,7 +757,8 @@ def tab_for_address(address: str) -> str:
 def build_tabs(groups: List[Dict[str, Any]],
                sequencer: Optional[Dict[str, Any]],
                speed: Optional[Dict[str, Any]],
-               split: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+               split: Optional[Dict[str, Any]] = None,
+               song: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Verteilt Gruppen, Spezial-Sektionen und SC-Parameter auf die Tabs.
 
     Eine Gruppe geht als GANZES in einen Tab (bestimmt von ihrem ersten
@@ -655,6 +791,8 @@ def build_tabs(groups: List[Dict[str, Any]],
     by_tab[TAB_COLORS]["sections"].append("palette")
     if split:
         by_tab[TAB_NOTES]["sections"].append("split")
+    if song:
+        by_tab[TAB_SONG]["sections"].append("songStructure")
 
     # SC-Parameter je Eintrag, nicht je Gruppe: masterVolume gehoert in den
     # Mixer, brightness ins Sound Design, obwohl beide "Master"/"Glocke"
@@ -1477,7 +1615,9 @@ class ParameterStore:
             sequencer = build_sequencer(self.by_address)
             speed = build_speed_classes(self.by_address)
             split = build_split(self.by_address)
+            song = build_song_structure(self.by_address)
             taken = sequencer_addresses(sequencer, speed, split)
+            taken |= song_structure_addresses(song)
             generic = [p for p in self.parameters if p.address not in taken]
             groups = build_groups(generic)
             return {
@@ -1486,7 +1626,8 @@ class ParameterStore:
                 "sequencer": sequencer,
                 "speedClasses": speed,
                 "split": split,
-                "tabs": build_tabs(groups, sequencer, speed, split),
+                "songStructure": song,
+                "tabs": build_tabs(groups, sequencer, speed, split, song),
                 "scParams": {
                     "port": SC_OSC_PORT,
                     "groups": sc_param_groups(),
@@ -1582,11 +1723,15 @@ def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Para
 
 
 def create_app(settings_path: str, osc_host: str, osc_port: int,
-               presets_path: str, palette_path: Optional[str] = None):
+               presets_path: str, palette_path: Optional[str] = None,
+               state_path: Optional[str] = None):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
     app = Flask(__name__)
+    if state_path is None:
+        state_path = os.path.join(os.path.dirname(settings_path),
+                                  DEFAULT_STATE_FILENAME)
     store = ParameterStore(path=settings_path)
     store.refresh(force=True)
     sender = OscSender(osc_host, osc_port)
@@ -1646,6 +1791,7 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                 },
                 "presets": preset_list_payload(),
                 "palette": palette_payload(),
+                "songState": read_song_state(state_path),
             }),
         )
 
@@ -1724,6 +1870,41 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                         for a in applied],
             "skipped": skipped,
         })
+
+    @app.route("/api/songstructure")
+    def api_song_structure():
+        """Der Live-Zustand der Song-Struktur, gelesen vom Dateisystem.
+
+        Kein OSC: imPulse sendet nur an Port 8002, und dort hoert
+        SuperCollider. Dieser Server laeuft auf derselben Maschine wie imPulse
+        und liest die Datei direkt -- genau wie die Preset-Liste.
+
+        ``state: null`` ist der Normalfall vor dem ersten Levelwechsel und
+        kein Fehler; das UI sagt dann "noch kein Wechsel".
+        """
+        return jsonify({"ok": True, "state": read_song_state(state_path),
+                        "path": state_path})
+
+    @app.route("/api/goto", methods=["POST"])
+    def api_goto():
+        """Manueller Levelwechsel.
+
+        Eigene Route, weil /songStructure/goto ein KOMMANDO ist und bewusst
+        nicht in remoteSettings.txt steht -- /api/set kennt nur Adressen aus
+        dem Dump und wuerde es mit 400 ablehnen.
+        """
+        body = request.get_json(silent=True) or {}
+        try:
+            level = int(body.get("level"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Level ist keine Zahl"}), 400
+        if not 1 <= level <= len(SONG_LEVEL_NAMES):
+            return jsonify({"ok": False,
+                            "error": "Level ausserhalb 1..%d"
+                                     % len(SONG_LEVEL_NAMES)}), 400
+        sender.send(SONG_GOTO_ADDRESS, level)
+        return jsonify({"ok": True, "level": level,
+                        "name": SONG_LEVEL_NAMES[level - 1]})
 
     @app.route("/api/presets")
     def api_presets():
@@ -1826,6 +2007,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=os.environ.get("IMPULSE_PALETTE"),
                         help="Datei mit der Farbpalette "
                              "(Vorgabe: colorPalettes.txt neben --settings)")
+    parser.add_argument("--state",
+                        default=os.environ.get("IMPULSE_SONG_STATE"),
+                        help="Zustandsdatei der Song-Struktur "
+                             "(Vorgabe: %s neben --settings)"
+                             % DEFAULT_STATE_FILENAME)
     parser.add_argument("--osc-host",
                         default=os.environ.get("IMPULSE_OSC_HOST", DEFAULT_OSC_HOST),
                         help="Ziel-Host fuer OSC (Vorgabe: %(default)s)")
@@ -1847,12 +2033,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else default_presets_path(settings_path))
     palette_path = (os.path.abspath(args.palette) if args.palette
                     else default_palette_path(settings_path))
+    state_path = (os.path.abspath(args.state) if args.state
+                  else os.path.join(os.path.dirname(settings_path),
+                                    DEFAULT_STATE_FILENAME))
     app = create_app(settings_path, args.osc_host, args.osc_port, presets_path,
-                     palette_path)
+                     palette_path, state_path)
 
     print("[webui] remoteSettings: %s" % settings_path)
     print("[webui] Presets:        %s" % presets_path)
     print("[webui] Palette:        %s" % palette_path)
+    print("[webui] Song-Zustand:   %s" % state_path)
     print("[webui] OSC-Ziel:       %s:%d" % (args.osc_host, args.osc_port))
     print("[webui] HTTP:           http://%s:%d" % (args.host, args.port))
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

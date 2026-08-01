@@ -75,7 +75,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`, `WeightedChoice`, `SpeedQuantizer`, `SplitFanout`, `SplitStagger`, `StripeTreeStore`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`, `WeightedChoice`, `SpeedQuantizer`, `SplitFanout`, `SplitStagger`, `StripeTreeStore`, `EnergyLevelStore`, `SongStructureDirector`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
@@ -97,6 +97,9 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `SpeedQuantizerTest` — die gewichtete Auswahl der Speed-Klasse: die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, Normalisierung nicht-prozentualer Gewichte, entartete Gewichte (alle 0, negativ, NaN)
 - `PresetStoreTest` — Format, Datei, Snapshot und Anwenden eines Presets, inklusive der ausgeschlossenen und still übergangenen Adressen
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
+- `WeightedChoiceTest` — die gewichtete Ziehung, aus `SpeedQuantizer` herausgezogen: Verteilung über 100 000 Ziehungen, Gewicht 0 wird nie gezogen, Normalisierung, Gewichte hinter `count` zählen nicht mit, entartete Eingaben (null, `count` zu gross, alle 0, negativ, NaN)
+- `EnergyLevelStoreTest` — die Energie-Level-Klassifikation: Parsen samt Kommentaren, unbekanntes Level, doppelter Name (letzte Zeile gewinnt), Rückfall auf *mittel*, `presetsForLevel` liefert eine **leere Liste** statt `null`, fehlende Datei, Gegenprobe an der echten `data/energyLevels.txt` gegen `data/presets/` (jedes Preset getaggt, mindestens zwei je Level — aus dem Verzeichnis gerechnet, nicht als Zahl notiert)
+- `SongStructureDirectorTest` — die Dramaturgie-Ebene: Startlevel fest *ruhig*, Verweildauer in der Spanne des Levels, vertauschte min/max, live verengte Spanne klemmt die laufende Dauer, die Verteilung jeder Matrixzeile über 100 000 Übergänge, Gewicht 0 kommt nie vor, Nullzeile fällt auf *mittel* zurück, „zuletzt gespielt vermeiden", leerer Pool, manueller Sprung samt Verfall, `noteLoaded()`-Synchronisierung, ausgeschaltet zieht den Timer mit
 
 Daneben liegen im selben Ordner drei Sonden, die **echte Hardware ansprechen** und deshalb nicht Teil der Default-Suite sind: `TimingProbe` (misst den 40-Hz-Sendetakt am echten Netz), `PollProbe` (fragt die Controller per ArtPoll nach ihrem Befinden ab) und `PatternProbe` (speist die fünf Testbilder direkt über `ArtNetOutput` ein, ohne Processing-Laufzeit). Diese drei gezielt einzeln aufrufen, z. B. `test/run.sh TimingProbe`, niemals ungefragt gegen die Installation.
 
@@ -155,9 +158,10 @@ Zwei Dinge, die man beim Ändern kennen muss:
 - **Nach dem Laden zieht der Server die Regleranzeige nach**, indem er dieselbe Preset-Datei mit `parse_settings()` liest — das geht, weil Preset- und `remoteSettings.txt`-Format identisch sind. Die Werte gehen in der HTTP-Antwort zurück und werden im Browser *still* gesetzt (kein zweites OSC); geklemmt wird auf die Range aus `remoteSettings.txt`, nicht auf die aus der Preset-Datei — dieselbe Regel wie `PresetStore.applyPreset()`. Adressen, die der Dump nicht kennt, und Werte ausserhalb der verengten UI-Range (`UI_RANGE_OVERRIDES`) nennt die Statuszeile, statt sie zu verschlucken.
 - **Speichern wartet auf die Datei.** `/preset/save` ist asynchron (imPulse schreibt erst im nächsten `draw()`), also pollt der Endpoint bis zu 1 s auf eine geänderte `mtime` und antwortet sonst mit 504 statt Erfolg zu behaupten — der häufigste Fehlerfall ist „Web-UI läuft, imPulse nicht". `valid_preset_name()` in `server.py` und die Regex im JS spiegeln `PresetStore.isValidName()`; Autorität bleibt Java, dort geht es um Pfad-Traversal.
 
-**Sechs Themen-Tabs** (Mixer, Sound Design, Spawn-Verhalten, Noten-Verhalten,
-Impuls-Verhalten, Farben) statt einer langen Liste. Welche Adresse in welchen
-Tab gehört, entscheidet `TAB_RULES`/`TAB_PRIMARY` in `server.py` — dort ist es
+**Sieben Themen-Tabs** (Mixer, Sound Design, Spawn-Verhalten, Noten-Verhalten,
+Impuls-Verhalten, Farben, Song-Struktur) statt einer langen Liste. Welche
+Adresse in welchen Tab gehört, entscheidet `TAB_RULES`/`TAB_PRIMARY` in
+`server.py` — dort ist es
 prüfbar, und `test_webui.py` stellt sicher, dass **jeder** Regler in genau
 einem Tab landet und keiner doppelt. Oben je Tab die kuratierten Regler,
 darunter ein eingeklapptes `<details>` mit dem Rest.
@@ -196,11 +200,11 @@ Kopfzeile, Statuszeile und Preset-Sektion stehen bewusst **über** der
 Tab-Leiste: sie gelten für alle Tabs, und ein Preset-Feld, das nur auf einem
 Tab sichtbar wäre, wäre eine Falle.
 
-**Vier Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
+**Sechs Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
 flache Liste aus 38 Sequencer-Reglern unbedienbar wäre. Der Server liefert
 dafür Struktur statt einer Reglerliste (`build_sequencer`,
-`build_speed_classes`, `sc_param_groups` in `server.py`), das Aussehen macht
-`app.js`:
+`build_speed_classes`, `build_split`, `build_song_structure`,
+`sc_param_groups` in `server.py`), das Aussehen macht `app.js`:
 
 - **Sequencer** — BPM als große Ziffer, eigener Not-Aus, sechs Track-Karten
   mit je eigener Spurfarbe; Notenwerte als segmentierte Leiste mit **Symbol
@@ -209,6 +213,17 @@ dafür Struktur statt einer Reglerliste (`build_sequencer`,
   **Auswahlbalken** mit fünf Klartext-Zuständen, siehe unten.
 - **Speed-Klassen** — die fünf Gewichte plus ein Verteilungsbalken, der sie
   normiert zeigt; die Gewichte selbst summieren sich bewusst nicht auf 100.
+- **Split-Verhalten** — zwei Verteilungen untereinander (Zweigzahl, Notenwert
+  des Versatzes), im selben Tab wie die Speed-Klassen. Details unter
+  „Split-Anzahl und Split-Versatz".
+- **Song-Struktur** — Not-Aus, Live-Zustand, die Übergangsmatrix als
+  **4×4-Gitter** und die vier Verweildauer-Spannen, dazu vier Knöpfe für den
+  manuellen Levelsprung. Ein Gitter und keine Liste aus sechzehn Reglern:
+  „Zeile = wo ich bin, Spalte = wo ich hinkönnte" ist nur so auf einen Blick
+  zu sehen. Neben jedem Regler steht der **normierte** Anteil, der Regler
+  selbst zeigt das rohe Gewicht — die zwei Zahlen unterscheiden sich, sobald
+  eine Zeile sich nicht zu 100 summiert, und genau das ist erlaubt. Details
+  unter „Song-Struktur-Dramaturgie".
 - **Sound (SuperCollider)** — die `/klangnetz/param/*`-Adressen, die
   **nicht** durch `remoteSettings.txt` laufen.
 - **Palette** — die Farbpalette im Farben-Tab, siehe unten. Als einzige
@@ -249,12 +264,26 @@ eine Sammlung wiederverwendbarer Farben. Dieselbe Swatch-Reihe steht unter
 - **Kein Preset-Ersatz.** Sie hält nur Farbwerte, nicht welche Karte welche
   Farbe trägt — das können die Presets schon.
 
-Vier Dinge, die man beim Ändern kennen muss:
+Sieben Dinge, die man beim Ändern kennen muss:
 
-- **`sequencer_addresses()` nimmt die Adressen der Spezial-Sektionen aus dem
-  generischen Rendering.** Ohne das stünde jeder Sequencer-Regler zweimal auf
-  der Seite — zwei Bedienelemente für denselben Parameter, die auseinander
-  laufen können. `test_webui.py` prüft das an einem echten Snapshot.
+- **`sequencer_addresses()` und `song_structure_addresses()` nehmen die
+  Adressen der Spezial-Sektionen aus dem generischen Rendering.** Ohne das
+  stünde jeder Sequencer- und Matrix-Regler zweimal auf der Seite — zwei
+  Bedienelemente für denselben Parameter, die auseinander laufen können.
+  `test_webui.py` prüft das an einem echten Snapshot.
+- **`build_song_structure()` liefert `None`, sobald auch nur EINE Matrixzelle
+  fehlt** (älterer imPulse-Stand). Ein halbes Gitter wäre schlimmer als gar
+  keins: der Operator sähe vier Zeilen und wüsste nicht, dass eine Zelle
+  fehlt. Der Tab bleibt dann leer, statt eine Lücke als Null anzuzeigen.
+- **Der Live-Zustand kommt aus `data/songStructureState.txt`, nicht per OSC.**
+  Es gibt keinen Rückkanal ins UI — imPulse sendet nur an 8002, und dort hört
+  SuperCollider. `server.py` läuft auf derselben Maschine und liest die Datei
+  direkt (`/api/songstructure`, gepollt alle 5 s; die kürzeste Verweildauer
+  sind 30 s). Dasselbe Muster wie die Preset-Liste. `state: null` ist der
+  **Normalfall** vor dem ersten Levelwechsel, kein Fehler.
+- **`/songStructure/goto` geht über `/api/goto`, nicht über `/api/set`.** Es
+  ist ein Kommando und steht bewusst nicht in `remoteSettings.txt`; `/api/set`
+  kennt nur Adressen aus dem Dump und würde es mit 400 ablehnen.
 - **`SC_PARAMS` ist eine handgepflegte Kopie der `~registerParam`-Registry
   aus der `.scd`** und geht über einen **zweiten** `OscSender` auf Port
   **8002**. Zwei Tests vergleichen die Tabelle in beide Richtungen mit der
@@ -267,10 +296,11 @@ Vier Dinge, die man beim Ändern kennen muss:
   heißt deshalb im UI „Raster" und behauptet nirgends „feuert jetzt". Ihre
   Phase kann gegenüber dem Sketch beliebig verschoben sein; was sie zeigt,
   ist der *Abstand* — welcher Track dicht und welcher dünn läuft.
-- **Der Verteilungsbalken hängt an der `set()`-Methode der Regler, nicht am
+- **Der Verteilungsbalken der Speed-Klassen und die Prozentanzeige der
+  Song-Matrix hängen an der `set()`-Methode der Regler, nicht am
   `input`-Event.** Das Laden eines Presets ruft `control.set(wert, true)` und
-  löst bewusst kein `input` aus; an einem reinen Event-Listener bliebe der
-  Balken danach auf der alten Verteilung stehen.
+  löst bewusst kein `input` aus; an einem reinen Event-Listener blieben beide
+  danach auf der alten Verteilung stehen.
 
 Für die UI-Schicht selbst gibt es **kein** Testgerüst im Repo — `webui/` soll
 ohne Node/npm auskommen, und ein jsdom-Test würde genau das einführen. Geprüft
@@ -660,6 +690,161 @@ und der Name stünde danach nur auf einer der zwei Seiten. Ohne die
 Weiterleitung erfasste „Speichern" im Web-UI still nur das Licht: die Szene
 käme später optisch zurück und klanglich nicht, ohne Fehlermeldung. Was
 SuperCollider damit tut, steht unter „Klangseite".
+
+### Song-Struktur-Dramaturgie (SongStructureDirector.java, EnergyLevelStore.java, SongStructureParams.java)
+
+Die Dramaturgie über eine ganze Nacht: eine **Markov-Kette über vier
+Energie-Level**, die bei jedem fälligen Wechsel zuerst das nächste *Level*
+würfelt und danach ein Preset *innerhalb* dieses Levels wählt. Diese zwei
+Stufen sind der ganze Unterschied zum alphabetischen Umlauf — ein flacher
+Zufall über alle Presets kennt keinen Spannungsbogen. Konzept und Abwägungen:
+`docs/superpowers/specs/2026-08-01-song-struktur-dramaturgie-konzept.md`,
+Umsetzungsplan: `docs/superpowers/plans/2026-08-01-song-struktur-dramaturgie.md`.
+
+**`PresetScheduler.java` ist dabei unverändert geblieben.** Die neue Schicht
+sitzt **oberhalb** und ersetzt nicht dessen Zeitlogik, sondern die
+**Namensquelle**, die er bedient. Geladen wird über den bestehenden Weg
+(`PresetManager.load()`, das `scheduler.noteLoaded()` ohnehin ruft) — der im
+Konzept angedachte Umweg über `advance(now, singletonList(name))` entfällt.
+
+Die vier Level heissen `ruhig | mittel | dynamisch | dramatisch`
+(`EnergyLevelStore.LEVEL_NAMES`). **Diese Reihenfolge ist die Indexreihenfolge
+überall**: in der Matrix, in den Verweildauern, in `/songStructure/goto` und im
+Web-UI. Sie steckt ausserdem in den Adressen selbst
+(`/songStructure/matrix/<von>/<nach>`) — eine Umsortierung wäre also nicht nur
+eine falsche Beschriftung.
+
+**Die Klassifikation ist manuell** (`data/energyLevels.txt`, Format
+`name <TAB> level`, `#` als Kommentar — Stil wie `data/stripeTrees.txt`). Rund
+fünfzig Parameter tragen sehr unterschiedlich und nicht linear zur
+wahrgenommenen Energie bei, die Farben tragen ebenfalls bei, ohne sich in
+einer Formel fassen zu lassen; eine Gewichtungsformel wäre eine Blackbox, die
+öfter korrigiert als bestätigt würde. Das Level ist eine **künstlerische**
+Einschätzung und wird vergeben, wenn ein Preset am Gerät gehört und gesehen
+wurde.
+
+Drei Regeln der Datei, die man kennen muss:
+- **Sie liegt in `data/`, NICHT in `data/presets/`** — anders als im Konzept
+  vorgeschlagen. `PresetStore.list()` sammelt jede `*.txt` im Preset-Ordner
+  ein; `energyLevels.txt` entginge dem heute nur, weil `isValidName()`
+  Grossbuchstaben ablehnt. Eine Umbenennung nach `energylevels.txt` machte
+  daraus stillschweigend ein Preset, das der Scheduler zu laden versucht.
+- **Bei doppeltem Namen gewinnt die LETZTE Zeile**, wie bei
+  `stripeTrees.txt`: die natürliche Handkorrektur ist eine angehängte Zeile.
+- **Gefiltert wird gegen die Liste der vorhandenen Presets**, nicht aus der
+  Datei heraus. Ein Eintrag, dessen Preset-Datei gelöscht wurde, wäre sonst
+  ein Name, den der Director bei jedem Besuch dieses Levels vergeblich lädt.
+  Fehlt ein Preset in der Datei, gilt **mittel** — nicht ruhig (das dämpfte
+  einen unklassifizierten dramatischen Moment fälschlich) und nicht
+  dramatisch (das verschärfte ihn fälschlich); die Zahl steht im Startbericht.
+
+**Übergangsmatrix** (Auslieferungswerte, Zeile = aktuelles Level, Zeilensumme
+100, aber nicht erzwungen):
+
+| von \ nach | ruhig | mittel | dynamisch | dramatisch |
+|---|---|---|---|---|
+| **ruhig** | 20 | 40 | 30 | 10 |
+| **mittel** | 25 | 30 | 30 | 15 |
+| **dynamisch** | 35 | 30 | 20 | 15 |
+| **dramatisch** | 60 | 25 | 10 | 5 |
+
+Der Kern ist die Anti-Monotonie-Regel: nach `dramatisch` gehen 85 % zurück
+nach ruhig/mittel, und ein sofortiges zweites `dramatisch` ist mit 5 % der
+seltenste Übergang der ganzen Matrix — aber nicht unmöglich. Gezogen wird über
+`WeightedChoice.pick()`, dieselbe Rechnung wie beim `SpeedQuantizer`
+(normalisiert, Gewicht 0 wird **nie** gezogen, eine Nullzeile fällt auf
+*mittel* zurück).
+
+**Verweildauern** (Birk, 2026-08-01 — bewusst kurze Zyklen zum Ausprobieren;
+das Konzept schlug 15–35 / 10–20 / 6–14 / 3–8 Minuten vor):
+
+| Level | Verweildauer |
+|---|---|
+| ruhig | 3–5 min |
+| mittel | 2–3 min |
+| dynamisch | 1–2 min |
+| dramatisch | 0,5–1 min |
+
+Gleichverteilt gezogen, sobald ein Level beginnt. **Nicht** in jedem Frame neu
+— sonst käme der Wechsel, sobald einmal eine kleine Zahl gezogen wird.
+
+Sechs Dinge, die man beim Ändern kennen muss:
+
+- **Die gezogene Dauer wird bei jedem `isDue()` auf die AKTUELLE Spanne
+  geklemmt.** Ohne diese Klemmung hätte ein Operator, der während eines
+  laufenden Abschnitts von 30 auf 3 Minuten verengt, trotzdem noch 30 Minuten
+  zu warten — ohne Fehler, ohne Symptom, nur Stillstand.
+- **Vorrang vor dem alphabetischen Wechsler.** Ist `/songStructure/enabled`
+  an, übernimmt die Ebene, und `PresetScheduler` zieht nur seinen Timer mit
+  (`isDue(now, false, …)`). Zwei Wechsler auf derselben Szene nähmen sich
+  gegenseitig die Presets weg — ohne Fehlermeldung, nur mit einem Bild, das
+  öfter springt als eingestellt. Der mitgezogene Timer sorgt dafür, dass ein
+  späteres Abschalten der Song-Struktur nicht sofort einen Wechsel auslöst.
+- **`noteLoaded()` synchronisiert bei jedem `/preset/load`** Level und Timer
+  auf das geladene Preset, und merkt es als „zuletzt in diesem Level". Sonst
+  überschriebe der nächste fällige Wechsel einen manuellen Eingriff womöglich
+  Sekunden später — der Eingriff wäre sinnlos, ohne dass das jemand sähe.
+- **Das zuletzt in einem Level gespielte Preset wird beim nächsten Besuch
+  übersprungen**, solange es Alternativen gibt. Bei genau einem Preset im
+  Level wird es wiederholt statt zu verstummen.
+- **Ein leeres Level hält die Show nicht an**: das aktuelle Level bleibt
+  stehen; ist auch das leer, wird aus allen Namen gewählt. Beides wird
+  gemeldet. `nextPreset()` liefert nur `null`, wenn es überhaupt kein Preset
+  gibt.
+- **Startlevel ist fest `ruhig`**, nicht gewürfelt: die Installation fährt
+  sanft hoch, und ein Neustart mitten in der Nacht beginnt nicht mit einem
+  Drop. Es gibt **keine Tageszeit-Kopplung** (Birk, 2026-08-01) — die
+  Dramaturgie soll auch tagsüber und bei einer kurzen Session funktionieren.
+
+**25 Parameter, ein Kommando.** `/songStructure/enabled` (int 0/1, Default
+**0** — die neue Schicht darf eine laufende Show nicht ohne Zutun übernehmen),
+16 × `/songStructure/matrix/<von>/<nach>` (float 0..100) und 8 ×
+`/songStructure/dwell/<level>/{min,max}` (float, **Minuten**, 0,5..60 — die
+Obergrenze lässt die ursprünglichen Konzeptwerte wieder einstellen, ohne den
+Code anzufassen). Die Gewichte sind 0..100 **ohne Summenbedingung**,
+normalisiert wird beim Ziehen — dieselbe Konvention wie
+`/net/impulse/speedQuantize/weight/*`.
+
+`/songStructure/goto <1..4>` ist ein **Kommando**, kein Parameter: dieselbe
+Konstruktion wie `/net/activateNode`. `SongStructureParams` implementiert
+`PresetTarget` nicht und hat ein leeres `writeToStream()`, das Kommando kann
+also per Konstruktion weder in ein Preset geraten noch im Web-UI zu einem
+Regler werden. Argument 1..4 und nicht 0..3, weil 0 von „kein Argument" nicht
+zu unterscheiden wäre. Der Wunsch wirkt **einmal** und verfällt danach.
+
+**Alle `/songStructure/`-Adressen sind von jedem Preset ausgeschlossen**
+(`PresetStore.EXCLUDED_PREFIXES`) — Transport, nicht Inhalt, genau wie die
+zwei Scheduler-Parameter. Ein Preset, das die Matrix mitbrächte, könnte die
+Dramaturgie beim nächsten Wechsel umschreiben, und das Preset, das sie
+geändert hat, wäre danach nicht mehr wiederzufinden. Ein **Präfix** statt 25
+Einzeladressen, damit ein später ergänzter Regler nicht still doch in die
+Presets wandert; der Präfix endet auf `/`, ein Adressbaum, der nur so anfängt,
+bleibt drin. Beim Laden werden sie zusätzlich still übergangen — eine von Hand
+aus `remoteSettings.txt` kopierte Datei brächte sonst 25 Warnungen je
+Ladevorgang.
+
+**`data/songStructureState.txt`** wird bei jedem Levelwechsel atomar
+geschrieben (Level, Index, Preset, Startzeit, gezogene Dauer). Das ist der
+**einzige** Weg, auf dem das Web-UI den Live-Zustand erfährt: es gibt keinen
+OSC-Rückkanal dorthin, imPulse sendet nur an 8002 und dort hört SuperCollider.
+`server.py` läuft auf derselben Maschine und liest die Datei direkt — dasselbe
+Muster wie die Preset-Liste. Alle paar Minuten eine Datei zu schreiben ist
+vertretbar; in jedem Frame wäre es das nicht. Schlägt das Schreiben fehl, wird
+das **einmal** gemeldet (eine Warnung alle paar Minuten über eine Nacht wäre
+ein volles Log ohne neuen Inhalt) und die Show läuft weiter.
+
+**Aufteilung:** `WeightedChoice`, `EnergyLevelStore` und
+`SongStructureDirector` (samt `SongStructureConfig`) sind frei von Processing
+und oscP5 und deshalb in `test/run.sh` geprüft. `SongStructureParams` kennt
+oscP5 und darf dort **nicht** aufgenommen werden — dieselbe Trennung wie
+`PresetManager` gegenüber `PresetStore`/`PresetScheduler`. Der Zufall wird als
+`RandomSource` hereingereicht (das Interface aus `OriginSequencer.java`).
+
+**Acht mitgelieferte Presets** (`data/presets/nacht_*.txt`), zwei je Level,
+erzeugt aus `random1.txt` als Vorlage, damit die Adressmenge exakt der des
+laufenden Sketches entspricht. Die zwei eines Levels unterscheiden sich in
+Farbe und in der Verteilung innerhalb der Spannen — ein wiederbesuchtes Level
+soll nicht identisch aussehen.
 
 ### Ausgabepfade
 

@@ -325,6 +325,7 @@ Parameterdatei mitgeben.
 | `--settings` / `IMPULSE_SETTINGS`         | `<repo>/data/remoteSettings.txt` |
 | `--presets` / `IMPULSE_PRESETS`           | `presets/` neben `--settings`    |
 | `--palette` / `IMPULSE_PALETTE`           | `colorPalettes.txt` neben `--settings` |
+| `--state` / `IMPULSE_SONG_STATE`          | `songStructureState.txt` neben `--settings` |
 | `--osc-host` / `IMPULSE_OSC_HOST`         | `127.0.0.1`                 |
 | `--osc-port` / `IMPULSE_OSC_PORT`         | `8001`                      |
 | `--host` / `IMPULSE_WEBUI_HOST`           | `0.0.0.0`                   |
