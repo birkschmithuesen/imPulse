@@ -788,16 +788,24 @@ class TabLayoutTest(unittest.TestCase):
         for suffix, _label in server.SPEED_CLASSES:
             lines.append("float\t%s%s\tx\t0\t0\t100"
                          % (server.SPEED_WEIGHT_PREFIX, suffix))
+        lines.append("int\t/songStructure/enabled\tx\t0\t0\t1")
+        for frm in server.SONG_LEVEL_NAMES:
+            for to in server.SONG_LEVEL_NAMES:
+                lines.append("float\t/songStructure/matrix/%s/%s\tx\t25\t0\t100"
+                             % (frm, to))
+        for level in server.SONG_LEVEL_NAMES:
+            lines.append("float\t/songStructure/dwell/%s/min\tx\t3\t0.5\t60" % level)
+            lines.append("float\t/songStructure/dwell/%s/max\tx\t5\t0.5\t60" % level)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
         store = ParameterStore(path=path)
         store.refresh(force=True)
         return store.snapshot()
 
-    def test_five_tabs_in_the_briefed_order(self):
+    def test_six_tabs_in_the_briefed_order(self):
         tabs = self._snapshot()["tabs"]
         self.assertEqual([t["id"] for t in tabs],
-                         ["mixer", "sound", "spawn", "noten", "physik"])
+                         ["mixer", "sound", "spawn", "noten", "physik", "song"])
 
     def test_every_control_lands_in_exactly_one_tab(self):
         """Der eigentliche Zweck: kein Regler faellt beim Umbau heraus."""
@@ -823,7 +831,16 @@ class TabLayoutTest(unittest.TestCase):
         tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
         self.assertIn("sequencer", tabs["spawn"]["sections"])
         self.assertIn("speedClasses", tabs["noten"]["sections"])
+        self.assertIn("songStructure", tabs["song"]["sections"])
         self.assertEqual(tabs["mixer"]["sections"], [])
+
+    def test_song_tab_holds_nothing_but_its_own_panel(self):
+        """Alle /songStructure/-Adressen rendert das Panel selbst. Bliebe eine
+        als generischer Regler uebrig, stuende sie zweimal auf der Seite."""
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        self.assertEqual(tabs["song"]["groups"], [])
+        self.assertEqual(tabs["song"]["primary"], [])
+        self.assertEqual(tabs["song"]["scParams"], [])
 
     def test_addresses_go_where_the_brief_says(self):
         self.assertEqual(server.tab_for_address("/master/level"), "mixer")
@@ -840,6 +857,11 @@ class TabLayoutTest(unittest.TestCase):
         self.assertEqual(server.tab_for_address("/net/impulse/speed"), "physik")
         self.assertEqual(server.tab_for_address("/net/impulse/color/r"), "physik")
         self.assertEqual(server.tab_for_address("/nodes/times/recover"), "physik")
+        self.assertEqual(server.tab_for_address("/songStructure/enabled"), "song")
+        self.assertEqual(
+            server.tab_for_address("/songStructure/matrix/dramatisch/ruhig"), "song")
+        self.assertEqual(
+            server.tab_for_address("/songStructure/dwell/ruhig/min"), "song")
         # Unbekanntes verschwindet nicht, es landet sichtbar in der Physik
         self.assertEqual(server.tab_for_address("/etwas/ganz/neues"), "physik")
 
@@ -888,6 +910,118 @@ class TabLayoutTest(unittest.TestCase):
                 self.assertTrue(address in known or address in taken,
                                 "%s (Tab %s) gibt es im Dump nicht"
                                 % (address, tab_id))
+
+
+class SongStructureSectionTest(unittest.TestCase):
+    """build_song_structure und die Anzeige des Live-Zustands.
+
+    Wie beim Sequencer wird die Parameterliste selbst gebaut --
+    remoteSettings.txt liegt nicht im Repo und haengt am zuletzt gestarteten
+    imPulse.
+    """
+
+    def _lines(self):
+        lines = ["int\t/songStructure/enabled\tx\t0\t0\t1"]
+        for frm in server.SONG_LEVEL_NAMES:
+            for to in server.SONG_LEVEL_NAMES:
+                lines.append("float\t/songStructure/matrix/%s/%s\tx\t25\t0\t100"
+                             % (frm, to))
+        for level in server.SONG_LEVEL_NAMES:
+            lines.append("float\t/songStructure/dwell/%s/min\tx\t3\t0.5\t60" % level)
+            lines.append("float\t/songStructure/dwell/%s/max\tx\t5\t0.5\t60" % level)
+        return lines
+
+    def _params(self):
+        return {p.address: p for p in parse_settings("\n".join(self._lines()))}
+
+    def test_section_carries_matrix_and_dwell(self):
+        song = server.build_song_structure(self._params())
+        self.assertIsNotNone(song)
+        self.assertEqual(song["levels"], server.SONG_LEVEL_NAMES)
+        self.assertEqual(len(song["matrix"]), len(server.SONG_LEVEL_NAMES))
+        for row in song["matrix"]:
+            self.assertEqual(len(row), len(server.SONG_LEVEL_NAMES))
+            for cell in row:
+                self.assertTrue(cell["address"].startswith("/songStructure/matrix/"))
+        self.assertEqual(len(song["dwell"]), len(server.SONG_LEVEL_NAMES))
+        for entry in song["dwell"]:
+            self.assertIn("min", entry)
+            self.assertIn("max", entry)
+
+    def test_goto_is_a_command_not_a_slider(self):
+        """Es steht bewusst NICHT in remoteSettings.txt.
+
+        SongStructureParams.writeToStream() ist leer, damit das UI keinen
+        Regler daraus baut -- dieselbe Falle wie bei /net/activate*.
+        """
+        song = server.build_song_structure(self._params())
+        self.assertEqual(song["gotoAddress"], "/songStructure/goto")
+        self.assertNotIn("/songStructure/goto", self._params())
+
+    def test_missing_section_yields_none_not_an_empty_panel(self):
+        by_address = {p.address: p for p in
+                      parse_settings("float\t/net/impulse/speed\tx\t16\t1\t1500")}
+        self.assertIsNone(server.build_song_structure(by_address))
+
+    def test_incomplete_matrix_yields_none(self):
+        """Ein halbes Gitter waere schlimmer als gar keins: der Operator
+        saehe vier Zeilen und wuesste nicht, dass eine fehlt."""
+        lines = [l for l in self._lines()
+                 if not l.startswith("float\t/songStructure/matrix/ruhig/mittel\t")]
+        by_address = {p.address: p for p in parse_settings("\n".join(lines))}
+        self.assertIsNone(server.build_song_structure(by_address))
+
+    def test_level_names_match_the_java_constant(self):
+        """Driftet LEVEL_NAMES in EnergyLevelStore.java, faellt es hier auf."""
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "EnergyLevelStore.java")
+        if not os.path.exists(path):
+            self.skipTest("EnergyLevelStore.java nicht gefunden")
+        with open(path, encoding="utf-8") as handle:
+            java = handle.read()
+        match = re.search(r"LEVEL_NAMES\s*=\s*\{([^}]*)\}", java)
+        self.assertIsNotNone(match, "LEVEL_NAMES nicht gefunden")
+        self.assertEqual(re.findall(r'"([^"]+)"', match.group(1)),
+                         server.SONG_LEVEL_NAMES)
+
+    def test_all_addresses_are_taken_out_of_the_generic_rendering(self):
+        params = self._params()
+        song = server.build_song_structure(params)
+        taken = server.song_structure_addresses(song)
+        self.assertEqual(taken, set(params),
+                         "eine /songStructure/-Adresse stuende zweimal auf der Seite")
+
+    def test_state_file_is_read_from_disk_not_osc(self):
+        """Es gibt keinen OSC-Rueckkanal: imPulse sendet nur an 8002."""
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, "songStructureState.txt")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("level\tdynamisch\nlevelIndex\t2\n"
+                         "preset\tnacht_dynamisch_schwarm\n"
+                         "sinceMillis\t1754049600000\ndwellSeconds\t95\n")
+        state = server.read_song_state(path)
+        self.assertEqual(state["level"], "dynamisch")
+        self.assertEqual(state["levelIndex"], 2)
+        self.assertEqual(state["preset"], "nacht_dynamisch_schwarm")
+        self.assertEqual(state["sinceMillis"], 1754049600000)
+        self.assertEqual(state["dwellSeconds"], 95)
+
+    def test_missing_state_file_is_not_an_error(self):
+        """Vor dem ersten Levelwechsel gibt es sie nicht -- das ist der
+        Normalfall beim Start, kein Fehler."""
+        state = server.read_song_state(os.path.join(tempfile.mkdtemp(), "fehlt.txt"))
+        self.assertIsNone(state)
+
+    def test_broken_state_line_is_skipped_not_fatal(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, "songStructureState.txt")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("level\truhig\nkaputt\nlevelIndex\tkeineZahl\n")
+        state = server.read_song_state(path)
+        self.assertEqual(state["level"], "ruhig")
+        self.assertIsNone(state["levelIndex"])
 
 
 class ScParamTest(unittest.TestCase):
