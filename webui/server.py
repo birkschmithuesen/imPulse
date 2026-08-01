@@ -1393,6 +1393,8 @@ SC_PRIMARY: Dict[str, List[str]] = {
     TAB_MIXER: ["masterVolume", "bellVolume", "droneVolume", "tailVolume",
                 "reverbMix"],
     TAB_SOUND: ["travelMix", "brightness", "detune", "treeBiasAmount",
+                "tailShimmerAmp", "tailWhooshAmp", "tailFmglideAmp",
+                "tailGranularAmp", "tailSubglowAmp",
                 "tailOrbitRadius", "tailOrbitSpeed",
                 "travelRq", "travelGrainRatio"],
     TAB_NOTES: ["melodyMode", "melodyRootMidiNote", "melodyNumOctaves"],
