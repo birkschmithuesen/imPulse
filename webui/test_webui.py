@@ -866,11 +866,13 @@ class TabLayoutTest(unittest.TestCase):
 
     def test_curated_sc_params_come_first_and_are_flagged(self):
         tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        curated = server.SC_PRIMARY["mixer"]
+        count = len(curated)
         names = [p["name"] for p in tabs["mixer"]["scParams"]]
-        self.assertEqual(names[:4], server.SC_PRIMARY["mixer"])
+        self.assertEqual(names[:count], curated)
         flags = [p["primary"] for p in tabs["mixer"]["scParams"]]
-        self.assertEqual(flags[:4], [True]*4)
-        self.assertNotIn(True, flags[4:])
+        self.assertEqual(flags[:count], [True] * count)
+        self.assertNotIn(True, flags[count:])
 
     def test_every_tab_primary_address_is_real(self):
         """Eine Adresse in TAB_PRIMARY, die es nicht gibt, faellt sonst nur auf,
@@ -903,9 +905,21 @@ class ScParamTest(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
 
     def test_groups_keep_insertion_order(self):
+        """Die Gruppen erscheinen in der Reihenfolge ihres ERSTEN Auftretens.
+
+        Geprueft wird die Regel, nicht die Liste: eine fest eingetragene
+        Titelliste waere bei jeder neuen Klangschicht falsch (siehe die
+        Bell-Tails, 2026-08-01).
+        """
         groups = server.sc_param_groups()
-        self.assertEqual([g["title"] for g in groups],
-                         ["Master", "Glocke", "Travel-Sound"])
+        first_seen = []
+        for entry in server.SC_PARAMS:
+            if entry["group"] not in first_seen:
+                first_seen.append(entry["group"])
+        self.assertEqual([g["title"] for g in groups], first_seen)
+        self.assertEqual(groups[0]["title"], "Master")
+        self.assertEqual(sum(len(g["params"]) for g in groups),
+                         len(server.SC_PARAMS))
         for group in groups:
             for param in group["params"]:
                 self.assertTrue(param["address"].startswith("/klangnetz/param/"))

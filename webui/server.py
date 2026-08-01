@@ -351,8 +351,10 @@ TAB_RULES: List[Tuple[str, str]] = [
 # Kuratierte SC-Parameter je Tab (Namen, nicht Adressen). Der Rest desselben
 # Tabs landet im Erweitert-Bereich.
 SC_PRIMARY: Dict[str, List[str]] = {
-    TAB_MIXER: ["masterVolume", "bellVolume", "droneVolume", "reverbMix"],
+    TAB_MIXER: ["masterVolume", "bellVolume", "droneVolume", "tailVolume",
+                "reverbMix"],
     TAB_SOUND: ["travelMix", "brightness", "detune", "regionBiasAmount",
+                "tailOrbitRadius", "tailOrbitSpeed",
                 "travelRq", "travelGrainRatio"],
 }
 
@@ -410,9 +412,12 @@ SC_PARAMS: List[Dict[str, Any]] = [
     {"name": "bellVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
      "group": "Master", "description":
      "Layer-Fader der Glocken, vor masterVolume. Wirkt auf den naechsten Ton."},
-    {"name": "droneVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
+    {"name": "droneVolume", "tab": TAB_MIXER, "default": 0.0, "min": 0.0, "max": 1.5,
      "group": "Master", "description":
      "Layer-Fader der Impuls-Drohnen, vor masterVolume. Wirkt sofort."},
+    {"name": "tailVolume", "tab": TAB_MIXER, "default": 0.5, "min": 0.0, "max": 1.5,
+     "group": "Master", "description":
+     "Layer-Fader der fuenf Bell-Tails, vor masterVolume. 0 spart auch Stimmen."},
     {"name": "reverbMix", "tab": TAB_MIXER, "default": 0.35, "min": 0.0, "max": 1.0,
      "group": "Master", "description": "Trocken/nass des Halls hinter dem Panning."},
     {"name": "reverbRoom", "tab": TAB_MIXER, "default": 0.5, "min": 0.0, "max": 1.0,
@@ -455,6 +460,82 @@ SC_PARAMS: List[Dict[str, Any]] = [
      "group": "Travel-Sound", "description": "Untere harte Grenze."},
     {"name": "travelFreqMax", "tab": TAB_SOUND, "default": 6000.0, "min": 200.0, "max": 16000.0,
      "group": "Travel-Sound", "description": "Obere harte Grenze."},
+    # ---- Bell-Tails: Orbit (fuenf globale Regler fuer alle fuenf Tails) ----
+    {"name": "tailOrbitRadius", "tab": TAB_SOUND, "default": 0.25, "min": 0.0, "max": 2.0,
+     "group": "Tail-Orbit", "description":
+     "Kreisradius um den Ausloeseort, NORMIERT: 1.0 = Boxabstand. 0 = keine Rotation."},
+    {"name": "tailOrbitSpeed", "tab": TAB_SOUND, "default": 0.5, "min": 0.0, "max": 4.0,
+     "group": "Tail-Orbit", "description":
+     "Umdrehungen/s bei voller Huellkurve. Eine volle Umdrehung ueber 4 s braucht ~1.08."},
+    {"name": "tailOrbitEnvExp", "tab": TAB_SOUND, "default": 1.0, "min": 0.25, "max": 4.0,
+     "group": "Tail-Orbit", "description":
+     "Exponent auf die Huellkurve. < 1 = Rotation haelt in den Ausklang hinein."},
+    {"name": "tailOrbitDirLock", "tab": TAB_SOUND, "default": 0.0, "min": -1.0, "max": 1.0,
+     "group": "Tail-Orbit", "description":
+     "0 = Richtung je Tail zufaellig (Betrieb), +-1 = erzwungen (zum Pruefen)."},
+    {"name": "tailOrbitMinRadius", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 0.5,
+     "group": "Tail-Orbit", "description":
+     "Untergrenze des Radius. Ueber 0 ist tailOrbitRadius kein Aus-Schalter mehr."},
+    # ---- Bell-Tails: Huellkurve und Pegel je Schicht ----------------------
+    # Alle fuenf nach demselben Muster: Attack/Decay/Sustain/Release/Amp.
+    # Sustain ist ein PLATEAU-PEGEL, kein gehaltenes Segment -- die Tails sind
+    # One-Shots wie die Glocke (Begruendung in der .scd).
+    {"name": "tailShimmerAttack", "tab": TAB_SOUND, "default": 0.02, "min": 0.001, "max": 2.0,
+     "group": "Tail 1 Glass Shimmer", "description": "Einschwingzeit in s."},
+    {"name": "tailShimmerDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 1 Glass Shimmer", "description": "Abfall zum Sustain-Plateau. 0 = kein Knick."},
+    {"name": "tailShimmerSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 1 Glass Shimmer", "description": "Plateau-Pegel nach dem Decay."},
+    {"name": "tailShimmerRelease", "tab": TAB_SOUND, "default": 4.5, "min": 0.2, "max": 12.0,
+     "group": "Tail 1 Glass Shimmer", "description": "Ausklingzeit in s."},
+    {"name": "tailShimmerAmp", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 1 Glass Shimmer", "description": "Pegel dieser Schicht. 0 = Synth entsteht nicht."},
+    {"name": "tailWhooshAttack", "tab": TAB_SOUND, "default": 0.02, "min": 0.001, "max": 2.0,
+     "group": "Tail 2 Digital Whoosh", "description": "Einschwingzeit in s."},
+    {"name": "tailWhooshDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 2 Digital Whoosh", "description": "Abfall zum Sustain-Plateau. 0 = kein Knick."},
+    {"name": "tailWhooshSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 2 Digital Whoosh", "description": "Plateau-Pegel nach dem Decay."},
+    {"name": "tailWhooshRelease", "tab": TAB_SOUND, "default": 3.2, "min": 0.2, "max": 12.0,
+     "group": "Tail 2 Digital Whoosh", "description":
+     "Ausklingzeit UND Laufzeit des Bandpass-Sweeps in s."},
+    {"name": "tailWhooshAmp", "tab": TAB_SOUND, "default": 3.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 2 Digital Whoosh", "description":
+     "Pegel dieser Schicht. Default 3.0, weil gefiltertes Rauschen gemessen ~10 dB leiser ist."},
+    {"name": "tailFmglideAttack", "tab": TAB_SOUND, "default": 0.7, "min": 0.001, "max": 2.0,
+     "group": "Tail 3 FM-Glide", "description":
+     "Einschwingzeit in s. Bewusst lang -- Teil des abgenommenen Klangs."},
+    {"name": "tailFmglideDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 3 FM-Glide", "description": "Abfall zum Sustain-Plateau. 0 = kein Knick."},
+    {"name": "tailFmglideSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 3 FM-Glide", "description": "Plateau-Pegel nach dem Decay."},
+    {"name": "tailFmglideRelease", "tab": TAB_SOUND, "default": 3.8, "min": 0.2, "max": 12.0,
+     "group": "Tail 3 FM-Glide", "description":
+     "Ausklingzeit UND Laufzeit von Tonhoehen-Glide und FM-Index in s."},
+    {"name": "tailFmglideAmp", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 3 FM-Glide", "description": "Pegel dieser Schicht. 0 = Synth entsteht nicht."},
+    {"name": "tailGranularAttack", "tab": TAB_SOUND, "default": 0.7, "min": 0.001, "max": 2.0,
+     "group": "Tail 4 Granularer Zerfall", "description":
+     "Einschwingzeit in s. Bewusst lang -- Teil des abgenommenen Klangs."},
+    {"name": "tailGranularDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 4 Granularer Zerfall", "description": "Abfall zum Sustain-Plateau."},
+    {"name": "tailGranularSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 4 Granularer Zerfall", "description": "Plateau-Pegel nach dem Decay."},
+    {"name": "tailGranularRelease", "tab": TAB_SOUND, "default": 3.5, "min": 0.2, "max": 12.0,
+     "group": "Tail 4 Granularer Zerfall", "description":
+     "Ausklingzeit UND Zeit, in der die Koernerdichte von 35 auf 5 je s faellt."},
+    {"name": "tailGranularAmp", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 4 Granularer Zerfall", "description": "Pegel dieser Schicht."},
+    {"name": "tailSubglowAttack", "tab": TAB_SOUND, "default": 0.03, "min": 0.001, "max": 2.0,
+     "group": "Tail 5 Sub-Glow", "description": "Einschwingzeit in s."},
+    {"name": "tailSubglowDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 5 Sub-Glow", "description": "Abfall zum Sustain-Plateau. 0 = kein Knick."},
+    {"name": "tailSubglowSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 5 Sub-Glow", "description": "Plateau-Pegel nach dem Decay."},
+    {"name": "tailSubglowRelease", "tab": TAB_SOUND, "default": 4.2, "min": 0.2, "max": 12.0,
+     "group": "Tail 5 Sub-Glow", "description": "Ausklingzeit in s."},
+    {"name": "tailSubglowAmp", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 5 Sub-Glow", "description": "Pegel dieser Schicht. 0 = Synth entsteht nicht."},
 ]
 
 

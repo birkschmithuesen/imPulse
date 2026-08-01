@@ -122,17 +122,24 @@
 // OSC-STEUERBARER SOUND-PARAMETER-LAYER  (Stand 2026-07-30)
 // =====================================================================
 //
-// Sieben Klangparameter sind zur Laufzeit per OSC einstellbar, unabhängig
+// Die Klangparameter sind zur Laufzeit per OSC einstellbar, unabhängig
 // vom imPulse-Netz-Traffic (eigener Port, eigenes Adress-Präfix). Jeder
 // Parameter klemmt eingehende Werte auf einen festen Bereich (siehe unten)
 // und quittiert den Empfang mit einer postln-Zeile — das ist bewusst KEIN
 // generisches Framework wie `AbstractParameter.java`/`remoteSettings.txt`
 // auf der imPulse-Seite, sondern eine kleine, für genau diese Datei
 // gebaute Registry (~params, ~registerParam), siehe deren Definition
-// weiter unten. Die Liste hier ist die Referenz für eine spätere
-// WebUI-Anbindung (siehe `webui/server.py`, das aktuell nur an Port 8001
-// sendet, also an imPulse — für diese Klangparameter bräuchte es einen
-// zweiten Sender an Port 8002 mit dieser Adressliste).
+// weiter unten.
+//
+// WEBUI: die Anbindung EXISTIERT seit dem Umbau auf die fünf Themen-Tabs —
+// `webui/server.py` hält in `SC_PARAMS` eine handgepflegte Kopie dieser
+// Registry und schickt sie über einen ZWEITEN OscSender an Port 8002 (der
+// erste geht an imPulse auf 8001). Zwei Tests in `webui/test_webui.py`
+// vergleichen Tabelle und Datei in BEIDE Richtungen, damit sie nicht
+// abdriften; wer hier einen ~registerParam ergänzt, bekommt dort eine rote
+// Prüfung, bis die Kopie nachgezogen ist. Das ist Absicht. Was es weiterhin
+// nicht gibt, ist ein RÜCKKANAL: die im Browser angezeigten Werte sind diese
+// Defaults, nicht der Live-Zustand.
 //
 // Alle Adressen empfangen EINEN Float als erstes Argument, Port 8002
 // (~oscListenPort, derselbe wie /net/hitNode und /net/impulse):
@@ -145,13 +152,15 @@
 //     dahinter fängt das ab, bevor es hart clippt.
 //
 //   /klangnetz/param/bellVolume     0.0 .. 1.5   Default 1.0
-//   /klangnetz/param/droneVolume    0.0 .. 1.5   Default 1.0
+//   /klangnetz/param/droneVolume    0.0 .. 1.5   Default 0.0
+//   /klangnetz/param/tailVolume     0.0 .. 1.5   Default 0.5
 //     Layer-Fader je Klangschicht, multiplikativ VOR masterVolume:
 //     bellVolume in \glockenBell (Node-Treffer), droneVolume in
-//     \impulseDrone (reisende Impulse). Damit laesst sich das Verhaeltnis
-//     der zwei Schichten vor Ort einstellen, ohne ~maxAmp/~droneAmpScale
-//     im Code anzufassen. droneVolume wirkt SOFORT auf laufende Drohnen,
-//     bellVolume erst auf den naechsten Ton (One-Shot, wie brightness).
+//     \impulseDrone (reisende Impulse), tailVolume in den fuenf Bell-Tails
+//     (siehe unten). Damit laesst sich das Verhaeltnis der Schichten vor Ort
+//     einstellen, ohne ~maxAmp/~droneAmpScale/~tailAmpScale im Code
+//     anzufassen. droneVolume wirkt SOFORT auf laufende Drohnen, bellVolume
+//     und tailVolume erst auf den naechsten Ton (One-Shots, wie brightness).
 //
 //   /klangnetz/param/reverbMix      0.0 .. 1.0   Default 0.15
 //   /klangnetz/param/reverbRoom     0.0 .. 1.0   Default 0.5
@@ -243,6 +252,64 @@
 //     damit der Jitter die Zuordenbarkeit nicht verschmiert. Wirken erst
 //     auf NEUE Drohnen -- die Umrechnung passiert in sclang beim Anlegen
 //     des Synths.
+//
+//   ---- Bell-Tails: fuenf additive Schweife je Node-Treffer ----------
+//   Der Glockenanschlag bleibt unveraendert; ZUSAETZLICH klingen bei jedem
+//   Treffer fuenf digitale Schweife mit (Glass Shimmer, Digital Whoosh,
+//   FM-Glide, Granularer Zerfall, Sub-Glow -- akustisch abgenommen am
+//   2026-08-01). ALLE FUENF gleichzeitig, nicht einer nach Auswahl. Ein
+//   Treffer kostet damit sechs Synths statt einem; ~maxPolyphony steht
+//   deshalb auf 16 statt 24.
+//
+//   ONE-SHOT, KEIN GATE: /net/hitNode ist ein Impuls ohne Ende-Ereignis.
+//   "Sustain" ist folglich ein PLATEAU-PEGEL im festen Envelope
+//   (Env([0, 1, sustain, 0], [attack, decay, release])), kein gehaltenes
+//   Segment. Die Defaults decay = 0 und sustain = 1 halten die Kurve
+//   formgleich mit dem abgenommenen Stand.
+//
+//   Je Tail fuenf Adressen, <Tail> = Shimmer | Whoosh | Fmglide |
+//   Granular | Subglow:
+//
+//   /klangnetz/param/tail<Tail>Attack    0.001 .. 2.0
+//     Einschwingzeit in s. Defaults 0.02 (Shimmer), 0.02 (Whoosh),
+//     0.03 (Sub-Glow) -- diese drei starten auf Birks Wunsch sofort mit
+//     voller Kraft. FM-Glide und Granular behalten ihre 0.7 s, der lange
+//     Einschwinger ist dort Teil des abgenommenen Klangs.
+//     NEBENWIRKUNG: dieselbe Zeit ist die Rampe, ueber die der Orbit-Radius
+//     von 0 auf seinen Wert waechst (siehe ~tailOrbitOut).
+//   /klangnetz/param/tail<Tail>Decay     0.0 .. 4.0     Default 0.0
+//     Abfall vom Scheitel auf das Sustain-Plateau. 0 = kein Knick.
+//   /klangnetz/param/tail<Tail>Sustain   0.0 .. 1.0     Default 1.0
+//     Plateau-Pegel nach dem Decay.
+//   /klangnetz/param/tail<Tail>Release   0.2 .. 12.0
+//     Ausklingzeit in s -- Defaults 4.5 / 3.2 / 3.8 / 3.5 / 4.2. Diese Zahl
+//     ist bei Whoosh, FM-Glide und Granular ZUGLEICH die Laufzeit der
+//     internen Sweeps (Bandpass, Tonhoehen-Glide, Koernerdichte): der Regler
+//     dehnt die ganze Geste, nicht nur ihr Ende.
+//   /klangnetz/param/tail<Tail>Amp       0.0 .. 4.0     Default 1.0
+//     Pegel dieser Schicht. 0 heisst: der Synth entsteht beim Treffer gar
+//     nicht erst -- der Regler spart Stimmen, nicht nur Pegel. AUSNAHME
+//     tailWhooshAmp mit Default 3.0: gefiltertes Rauschen traegt wenig
+//     Energie und liegt gemessen rund 10 dB unter den anderen vier
+//     (NRT, 2026-08-01).
+//
+//   ---- Tail-Orbit: Kreisbewegung um den Ausloeseort ------------------
+//   Fuenf GLOBALE Regler fuer alle fuenf Tails (nicht fuenf mal fuenf).
+//   Entwurf und Herleitung:
+//   docs/superpowers/specs/2026-08-01-tail-synth-orbit-design.md.
+//
+//   /klangnetz/param/tailOrbitRadius     0.0 .. 2.0     Default 0.25
+//     Radius, NORMIERT: 1.0 = Boxabstand, nicht Meter. 0 = keine Rotation
+//     (der Aus-Schalter, bitgleich mit einem Tail ohne dieses Feature).
+//   /klangnetz/param/tailOrbitSpeed      0.0 .. 4.0     Default 0.5
+//     Umdrehungen/s BEI VOLLER HUELLKURVE. Der Gesamtwinkel haengt am
+//     Integral der Huellkurve: eine volle Umdrehung ueber einen
+//     4-Sekunden-Tail braucht rund 1.08.
+//   /klangnetz/param/tailOrbitEnvExp     0.25 .. 4.0    Default 1.0
+//   /klangnetz/param/tailOrbitDirLock    -1.0 .. 1.0    Default 0.0
+//     0 = Richtung je Tail-Synth zufaellig, +-1 = erzwungen (zum Pruefen).
+//   /klangnetz/param/tailOrbitMinRadius  0.0 .. 0.5     Default 0.0
+//     Alle fuenf wirken auf NEUE Tails, wie brightness/detune.
 // =====================================================================
 
 (
