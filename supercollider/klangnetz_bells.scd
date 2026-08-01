@@ -644,6 +644,104 @@ s.options.numInputBusChannels = 2;
 ~registerParam.(\travelFreqMin,   80.0,  20.0,  2000.0, nil);
 ~registerParam.(\travelFreqMax, 6000.0, 200.0, 16000.0, nil);
 
+// ---- Bell-Tails: fuenf additive Schweife je Node-Treffer ---------------
+// Der Glockenanschlag (\glockenBell) bleibt unveraendert; ZUSAETZLICH klingen
+// bei JEDEM Treffer fuenf digitale Schweife mit ("ein Wusch", Birk). Die
+// Klangerzeugung stammt 1:1 aus der abgenommenen Hoerprobe (v3, 2026-08-01):
+// Glass Shimmer, Digital Whoosh, FM-Glide, Granularer Zerfall, Sub-Glow.
+//
+// ALLE FUENF GLEICHZEITIG, nicht einer nach Auswahl -- das ist die
+// Entscheidung, nicht ein Zwischenstand. Wer einen davon nicht will, zieht
+// seinen Amp-Regler auf 0; das ist bitgleich mit "nicht getriggert", nur ohne
+// Neustart. Deshalb gibt es auch keinen Auswahl-Parameter.
+//
+// ONE-SHOT, KEIN GATE (Entscheidung 2026-08-01): ein Node-Treffer hat kein
+// Ende-Ereignis -- /net/hitNode ist ein Impuls, kein Halten. Ein echtes Gate
+// wie bei \impulseDrone braeuchte eine Freigabelogik und einen Reaper; die hat
+// die Drohne nur, weil /net/impulse das AUSBLEIBEN eines Impulses meldet. Fuer
+// Treffer gibt es diese Meldung nicht, ein gehaltener Tail liefe also entweder
+// ewig oder an einem erfundenen Timeout. "Sustain" ist hier folglich ein
+// PLATEAU-PEGEL im festen Envelope, kein gehaltenes Segment:
+//   Env([0, 1, sustain, 0], [attack, decay, release])
+//
+// Defaults decay = 0 und sustain = 1 machen diese Kurve FORMGLEICH mit dem
+// abgenommenen Stand (dort Env([0,1,0],[attack,release])) -- der ADS-Regler
+// ist ein Werkzeug, keine Klangaenderung hinter Birks Ruecken. Wer Decay
+// aufdreht, bekommt den Knick zum Plateau dazu.
+//
+// ATTACK-DEFAULTS: Shimmer, Whoosh und Sub-Glow starten sofort (0.02-0.03 s
+// statt 0.6-0.9 s im Hoerprobenstand) -- Birks Rueckmeldung: "soll nicht so'n
+// langes Attack-Intro haben, soll sofort mit voller Power losgehen und dann
+// nur noch abschwellen." FM-Glide und Granular waren nicht Teil dieser
+// Rueckmeldung und behalten ihre 0.7 s; der Parameter existiert fuer alle
+// fuenf gleichermassen.
+//
+// RELEASE ist die Zeit, die im Hoerprobenstand "dur" hiess: sie ist nicht nur
+// die Ausklingdauer, sondern auch die Laufzeit der internen Sweeps (Whoosh-
+// Bandpass, FM-Glide-Tonhoehe, Koernerdichte des Granulars). Ein Regler daran
+// dehnt also die ganze Geste, nicht nur ihr Ende -- gewollt, und der Grund,
+// warum Release ueberhaupt ein Parameter ist und nicht eine Konstante je
+// SynthDef.
+~tailDefs = [
+    [\tail1_shimmer,  "tailShimmer"],
+    [\tail2_whoosh,   "tailWhoosh"],
+    [\tail3_fmglide,  "tailFmglide"],
+    [\tail4_granular, "tailGranular"],
+    [\tail5_subglow,  "tailSubglow"]
+];
+
+// Verhaeltnis Tail-Amp zu Bell-Amp aus dem abgenommenen Render (dort 0.18 zu
+// 0.3). Konstante, kein Parameter: die Balance ZWISCHEN den Schichten macht
+// tailVolume, die Balance INNERHALB der Tails die fuenf *Amp-Regler -- ein
+// dritter Regler mit derselben Bedeutung waere eine Zahl zum Suchen.
+~tailAmpScale = 0.6;
+
+// Layer-Fader der gesamten Tail-Schicht, neben bellVolume und droneVolume.
+// Default 0.5 und nicht 1.0: fuenf unkorrelierte Schichten addieren sich in
+// der LEISTUNG, nicht in der Amplitude (~sqrt(5) = 2.24-facher Einzelpegel).
+// Bei 1.0 waere der Schweif lauter als der Anschlag, den er begleiten soll.
+// 0 schaltet die ganze Schicht stumm -- die Synths laufen dann trotzdem, der
+// Aus-Schalter fuer die LAST sind die fuenf Amp-Regler (siehe dort).
+~registerParam.(\tailVolume, 0.5, 0.0, 1.5, nil);
+
+// Je Tail funf Regler: Attack, Decay, Sustain, Release, Amp. Kein
+// onSet-Callback -- ein Tail ist ein One-Shot mit doneAction 2, die Werte sind
+// Start-Argumente und wirken auf den NAECHSTEN Treffer (wie brightness/detune
+// und bellVolume, siehe deren Begruendung oben). Bei der Trefferrate der
+// Installation ist das praktisch sofort.
+~registerParam.(\tailShimmerAttack,   0.02, 0.001, 2.0,  nil);
+~registerParam.(\tailShimmerDecay,    0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailShimmerSustain,  1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailShimmerRelease,  4.5,  0.2,  12.0,  nil);
+~registerParam.(\tailShimmerAmp,      1.0,  0.0,   2.0,  nil);
+
+~registerParam.(\tailWhooshAttack,    0.02, 0.001, 2.0,  nil);
+~registerParam.(\tailWhooshDecay,     0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailWhooshSustain,   1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailWhooshRelease,   3.2,  0.2,  12.0,  nil);
+~registerParam.(\tailWhooshAmp,       1.0,  0.0,   2.0,  nil);
+
+// FM-Glide und Granular: Attack bewusst bei 0.7 s (keine Rueckmeldung dazu,
+// siehe Block oben) -- der langsame Einschwinger ist bei diesen zweien Teil
+// des abgenommenen Klangs.
+~registerParam.(\tailFmglideAttack,   0.7,  0.001, 2.0,  nil);
+~registerParam.(\tailFmglideDecay,    0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailFmglideSustain,  1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailFmglideRelease,  3.8,  0.2,  12.0,  nil);
+~registerParam.(\tailFmglideAmp,      1.0,  0.0,   2.0,  nil);
+
+~registerParam.(\tailGranularAttack,  0.7,  0.001, 2.0,  nil);
+~registerParam.(\tailGranularDecay,   0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailGranularSustain, 1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailGranularRelease, 3.5,  0.2,  12.0,  nil);
+~registerParam.(\tailGranularAmp,     1.0,  0.0,   2.0,  nil);
+
+~registerParam.(\tailSubglowAttack,   0.03, 0.001, 2.0,  nil);
+~registerParam.(\tailSubglowDecay,    0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailSubglowSustain,  1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailSubglowRelease,  4.2,  0.2,  12.0,  nil);
+~registerParam.(\tailSubglowAmp,      1.0,  0.0,   2.0,  nil);
+
 // ---- Einen Parameterwert anwenden --------------------------------------
 // DER einzige Ort, an dem ein Sound-Parameter seinen Wert bekommt. Sowohl
 // der OSC-Empfang (/klangnetz/param/<name>) als auch das Preset-Laden gehen
@@ -914,6 +1012,29 @@ s.waitForBoot({
         Pan4.ar(sig, (xw - yw), (xw + yw), 1.0)
     };
 
+    // ---- Huellkurve der Bell-Tails ------------------------------------
+    // EIN Ort fuer die Kurve aller fuenf Tails statt fuenf Kopien -- dasselbe
+    // Muster wie ~toQuad: ein sclang-Lambda, das beim .add in jeden Graphen
+    // eingerechnet wird.
+    //
+    // Vier Segmente ueber drei Zeiten: 0 -> 1 (attack, \sin wie im
+    // abgenommenen Stand) -> sustain (decay) -> 0 (release, exponentiell mit
+    // der tailtypischen Kruemmung). SCHEITELWERT 1 ist Pflicht, nicht Zufall:
+    // dieselbe Kurve steuert die Winkelgeschwindigkeit des Orbits, und
+    // tailOrbitSpeed ist als "Umdrehungen pro Sekunde bei env = 1" definiert
+    // (siehe ~tailOrbitOut). Ein anderer Scheitel skalierte die Rotation
+    // stillschweigend mit.
+    //
+    // doneAction 2 sitzt HIER, an der Amplitudenhuelle -- der Orbit fuegt
+    // keine eigene Lebensdauer hinzu und beendet nichts.
+    ~tailEnv = { |attack, decay, sustain, release, releaseCurve|
+        EnvGen.kr(
+            Env([0, 1, sustain, 0], [attack, decay, release],
+                curve: [\sin, releaseCurve, releaseCurve]),
+            doneAction: 2
+        )
+    };
+
     // ---- SynthDef: Glockenspiel-Ton ----------------------------------
     // Mehrere Sinus-Partialtöne mit leicht unharmonischen Frequenzverhältnissen
     // (typisch für Glocken-/Metallophon-Klänge) und je eigener Decay-Zeit:
@@ -981,6 +1102,97 @@ s.waitForBoot({
         sig = (bellSig + grit) * amp * bellVolume;
         // Position je Ton fest — eine Glocke wandert nicht. Kein Lag nötig.
         Out.ar(out, ~toQuad.(sig, x, y));
+    }).add;
+
+    // ---- SynthDefs: die fuenf Bell-Tails ------------------------------
+    // Klangerzeugung 1:1 aus der abgenommenen Hoerprobe (v3, 2026-08-01),
+    // Begruendung und Parametertabelle bei den ~registerParam-Aufrufen oben.
+    // Drei Dinge sind gegenueber der Hoerprobe geaendert, alle drei aus dem
+    // Vertrag an die Spatialisierung, nicht aus dem Klang heraus:
+    //
+    //  * MONO statt "sig ! 2". Die Hoerprobe war ein Stereo-Render; hier geht
+    //    ein einkanaliges Signal in ~toQuad, den EINZIGEN Encoder. Zwei
+    //    Panning-Pfade waeren eine zweite Wahrheit, die bei der naechsten
+    //    Verkabelungsmessung auseinanderfaellt (dieselbe Ueberlegung, aus der
+    //    der Hall hinter dem Decoder sitzt).
+    //  * \tail4_granular: GrainSin mit numChannels 1 und OHNE pan-Argument.
+    //    Das pan war ein zweiter Panner INNERHALB des Synths. Die Bewegung,
+    //    die es leisten sollte, liefert jetzt der Orbit -- und zwar im echten
+    //    Raum statt im Stereobild.
+    //  * "dur" heisst jetzt "release" und kommt aus der Registry. Es ist
+    //    dieselbe Zahl an derselben Stelle (Ausklingdauer UND Laufzeit der
+    //    internen Sweeps), nur nicht mehr fest im SynthDef.
+    //
+    // BEWUSST GEBLIEBEN ist der FreeVerb in Shimmer, FM-Glide und Sub-Glow,
+    // obwohl diese Datei sonst "Hall NACH dem Panning" durchhaelt (siehe
+    // \masterReverb): er ist Teil des abgenommenen Klangs. Ein Hall vor dem
+    // Encoder wird selbst raeumlich codiert und wandert mit -- bei einer
+    // ROTIERENDEN Quelle ist das ein bekanntes Artefakt und ein Punkt, den
+    // Birk beim ersten Hoeren am Netz entscheiden sollte. Bis dahin gilt der
+    // abgenommene Klang.
+    SynthDef(\tail1_shimmer, { |freq = 440, amp = 0.22, out = 0, x0 = 0, y0 = 0,
+            attack = 0.02, decay = 0.0, sustain = 1.0, release = 4.5,
+            tailVolume = 1.0|
+        var sig, env, n = 6;
+        env = ~tailEnv.(attack, decay, sustain, release, -2);
+        sig = Mix.fill(n, { |i|
+            var detuneHz = LFNoise1.kr(0.1 + (i * 0.05)).range(-1.5, 1.5) * (i + 1);
+            SinOsc.ar(freq * (i + 2) / 2 + detuneHz, 0, 1 / (i + 2))
+        });
+        sig = sig * amp * tailVolume * env;
+        sig = FreeVerb.ar(sig, 0.5, 0.9, 0.3);
+        Out.ar(out, ~toQuad.(sig, x0, y0));
+    }).add;
+
+    SynthDef(\tail2_whoosh, { |freq = 440, amp = 0.28, out = 0, x0 = 0, y0 = 0,
+            attack = 0.02, decay = 0.0, sustain = 1.0, release = 3.2,
+            tailVolume = 1.0|
+        var sig, env, sweepFreq;
+        env = ~tailEnv.(attack, decay, sustain, release, -3);
+        sweepFreq = XLine.kr(freq * 6, freq * 0.8, release);
+        sig = BPF.ar(WhiteNoise.ar(1), sweepFreq, 0.15);
+        sig = sig + (BPF.ar(WhiteNoise.ar(1), sweepFreq * 2, 0.1) * 0.4);
+        sig = sig * amp * tailVolume * env;
+        Out.ar(out, ~toQuad.(sig, x0, y0));
+    }).add;
+
+    SynthDef(\tail3_fmglide, { |freq = 440, amp = 0.24, out = 0, x0 = 0, y0 = 0,
+            attack = 0.7, decay = 0.0, sustain = 1.0, release = 3.8,
+            tailVolume = 1.0|
+        var sig, env, car, modIdx, glideFreq;
+        env = ~tailEnv.(attack, decay, sustain, release, -4);
+        glideFreq = XLine.kr(freq * 1.5, freq * 0.5, release);
+        modIdx = XLine.kr(4, 0.2, release);
+        car = SinOsc.ar(glideFreq + (SinOsc.ar(glideFreq * 2.756) * glideFreq * modIdx * 0.1));
+        sig = car * amp * tailVolume * env;
+        sig = FreeVerb.ar(sig, 0.4, 0.85, 0.25);
+        Out.ar(out, ~toQuad.(sig, x0, y0));
+    }).add;
+
+    SynthDef(\tail4_granular, { |freq = 440, amp = 0.26, out = 0, x0 = 0, y0 = 0,
+            attack = 0.7, decay = 0.0, sustain = 1.0, release = 3.5,
+            tailVolume = 1.0|
+        var sig, env, trig, grainFreq, grainDur;
+        env = ~tailEnv.(attack, decay, sustain, release, -2);
+        trig = Dust.kr(XLine.kr(35, 5, release));
+        grainFreq = freq * (2 ** (LFNoise0.kr(8).range(-0.3, 1.2)));
+        grainDur = 0.03;
+        // numChannels 1, kein pan: siehe Block oben.
+        sig = GrainSin.ar(1, trig, grainDur, grainFreq, envbufnum: -1);
+        sig = sig * amp * tailVolume * env;
+        Out.ar(out, ~toQuad.(sig, x0, y0));
+    }).add;
+
+    SynthDef(\tail5_subglow, { |freq = 440, amp = 0.3, out = 0, x0 = 0, y0 = 0,
+            attack = 0.03, decay = 0.0, sustain = 1.0, release = 4.2,
+            tailVolume = 1.0|
+        var sig, env, sub, trem;
+        env = ~tailEnv.(attack, decay, sustain, release, -2);
+        trem = SinOsc.kr(4.5).range(0.6, 1.0);
+        sub = (SinOsc.ar(freq / 2) * 0.7) + (SinOsc.ar(freq / 4) * 0.3);
+        sig = sub * trem * amp * tailVolume * env;
+        sig = FreeVerb.ar(sig, 0.3, 0.7, 0.2);
+        Out.ar(out, ~toQuad.(sig, x0, y0));
     }).add;
 
     // ---- SynthDef: Drohne eines reisenden Impulses --------------------
