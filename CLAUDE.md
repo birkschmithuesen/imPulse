@@ -225,6 +225,63 @@ cd webui && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt &
 
 Für die processing-unabhängige Logik (Parser, Normalisierung, Gruppierung, Kopplung, OSC-Encoder) gibt es eine eigene Suite ohne Fremdabhängigkeiten: `python3 webui/test_webui.py`.
 
+#### Automatische Sicherung der Live-Daten (webui/autocommit.py)
+
+Ein Hintergrund-Thread des Web-UI-Servers macht alle **10 Minuten** einen
+**lokalen** Git-Commit der live editierten Daten-Dateien — aber nur, wenn sich
+tatsächlich etwas geändert hat. Anlass: Presets, Farbpaletten und
+Kalibrierdateien wurden bisher nur von Hand nachgezogen („X-Preset vom
+Live-Betrieb nachgezogen" in der Historie), und ein neu aufgesetzter Rechner
+nimmt die Live-Arbeit mit.
+
+Überwacht werden sieben Muster (`WATCHED_PATTERNS`): `data/presets/*.txt`,
+`supercollider/presets/*.txt`, `data/colorPalettes.txt`,
+`data/energyLevels.txt`, `data/stripeTrees.txt`, `data/nodeCrossings.txt`,
+`data/ledPositions.txt`. Ein Muster, das in diesem Checkout auf nichts passt,
+ist kein Fehler — Farbpaletten und Energie-Level kommen erst mit ihren
+Feature-Branches.
+
+Die **Sound-Presets stehen bewusst mit auf der Liste**: ein Preset ist *ein
+Name, zwei Dateien* (siehe „Klangseite"). Nur die Licht-Hälfte zu sichern
+hiesse, die Szene käme später optisch zurück und klanglich nicht — genau der
+Fehlerfall, den `PresetManager.forwardToSound()` schon einmal verhindert.
+
+Fünf Dinge, die man beim Ändern kennen muss:
+
+- **Kein Push, an keiner Stelle.** Mehrere Checkouts arbeiten parallel am
+  selben Remote (Live-Laptop, Test-Deploy, Worktrees); ein automatischer Push
+  wäre eine Fernwirkung ohne Entscheidung. Dieselbe Regel wie oben bei Merges
+  und Force-Pushes.
+- **Kein pauschales Staging.** Gestaget werden ausschliesslich die konkreten
+  Pfade aus der Porcelain-Ausgabe, und die **Pathspec steht auch am `commit`**
+  (`git commit -m … -- <pfade>`). In dieser Form committet Git nur den
+  Arbeitsbaum-Zustand dieser Pfade und lässt alles unberührt, was der Operator
+  sonst gerade gestaged hat. Ein Grep-Test über alle `webui/*.py` hält
+  `git add -A`, `git add .`, `git commit -a` und `git push` fern — mit
+  Gegenprobe, dass die Muster wirklich anschlagen.
+- **Die Trennlinie ist nicht „wer schreibt die Datei", sondern „wann ändert
+  sie sich".** `data/remoteSettings.txt` (gitignored, Boot-Snapshot) und
+  `data/songStructureState.txt` (bei jedem Levelwechsel neu) sind
+  Laufzeitstatus und stehen deshalb nicht auf der Liste; sonst entstünde alle
+  zehn Minuten ein Commit, also genau die feste Taktung unabhängig vom
+  Zustand, die vermieden werden soll.
+- **Übersprungen wird bei detached HEAD** und bei offenem
+  Merge/Rebase/Cherry-Pick/Revert/Bisect. Ein Commit ohne Branch wäre nach dem
+  nächsten Checkout nur noch im Reflog — ein Sicherungsnetz, das nicht hält,
+  ist schlimmer als keins, weil die Statuszeile trotzdem „gesichert" behauptet.
+- **Der Thread stirbt nie.** Jeder Git-Fehler wird zu einem `error`-Ergebnis,
+  geloggt und in der UI-Zeile sichtbar; die nächste Runde läuft trotzdem.
+  Gewartet wird über ein `Event`, nicht `sleep`, damit das Beenden nicht bis zu
+  zehn Minuten hängt.
+
+Abschaltbar mit `--no-autocommit` bzw. `IMPULSE_AUTOCOMMIT=0`, Takt über
+`--autocommit-interval` / `IMPULSE_AUTOCOMMIT_INTERVAL` (Untergrenze 10 s).
+Zustand im UI unter der Statusleiste und maschinenlesbar unter
+`GET /api/autocommit` — nur lesend, es gibt bewusst keinen Knopf, der aus dem
+Browser heraus Git-Zustand ändert. Eigene Testsuite:
+`python3 webui/test_autocommit.py` (inklusive Integrationstest gegen ein
+echtes temporäres Repository, übersprungen wenn `git` fehlt).
+
 ### Netz-Topologie (LedStripeNetworks.java, NodeCrossingStore.java)
 
 `data/nodeCrossings.txt`: eine Zeile pro Node, darin leerzeichengetrennte **globale LED-Indizes**, die sich physisch kreuzen. `NodeCrossingStore.load()` liest und validiert die Datei (Validierung, Undo, Datei-I/O — bewusst ohne Processing- und Netzabhängigkeit, siehe `test/NodeCrossingStoreTest.java`). `LedInNetInfo.applyCrossings(...)` baut daraus die `LedNetworkNode`-Objekte und setzt bei jeder beteiligten LED `LedInNetInfo.partOfNode` — **in-place** auf derselben Liste/denselben `LedInNetInfo`-Objekten, weil `LedNetworkTransportEffect` und `LedNetworkNodeEffects` dieselbe Instanz halten. Über `partOfNode` erkennt der Transport-Effekt einen Node-Treffer in O(1). `applyCrossings` wird sowohl beim Start (`setup()`) als auch zur Laufzeit aus der Kalibrierung (Taste `R`, siehe unten) aufgerufen. Ältere Aufnahmen anderer Geometrien liegen als `data/nodeCrossings_16x720.txt` und `data/nodeCrossings_35C3.txt` daneben (siehe „Node-Kalibrierung"), werden aber nicht geladen.
