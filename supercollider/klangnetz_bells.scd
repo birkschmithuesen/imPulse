@@ -349,7 +349,21 @@ s.options.numInputBusChannels = 2;
 // neue startet. Die Drohnen haben ihren eigenen Deckel (~droneLimit oben) --
 // zwei getrennte Grenzen, weil die zwei Stimmenarten aus verschiedenen
 // Quellen kommen und sich nicht gegenseitig verdraengen sollen.
-~maxPolyphony = 24;
+//
+// VON 24 AUF 16 GESENKT (2026-08-01, mit den Bell-Tails): ein Node-Treffer
+// erzeugt jetzt SECHS Synths statt einem -- die Glocke plus fuenf additive
+// Tails (siehe ~tailDefs). Bei 24 liefen an der Grenze 144 Stimmen statt 24,
+// also genau die Last, gegen die dieser Deckel nach dem Live-Ausfall
+// eingezogen wurde. 16 sind 96 Stimmen; die reale Rechenlast des
+// Tail-Klangs ist noch nicht am Geraet gemessen, der Wert ist also bewusst
+// konservativ und kein Messergebnis.
+//
+// ~activeBells haelt seither nicht mehr einzelne Synths, sondern je Treffer
+// ein ARRAY [glocke, tail1..tail5]. Beim Voice-Stealing wird der ganze
+// Eintrag freigegeben. Ohne das ueberlebte der Tail seine gestohlene Glocke:
+// er rotierte weiter, ohne dass ihn jemand kennt oder zaehlt -- der
+// unangenehme Fall, weil er still waechst.
+~maxPolyphony = 16;
 ~activeBells = List.new;
 
 // Amp einer Drohne = geclampte Energie mal diesem Faktor. Deutlich leiser als
@@ -700,8 +714,10 @@ s.options.numInputBusChannels = 2;
 // Default 0.5 und nicht 1.0: fuenf unkorrelierte Schichten addieren sich in
 // der LEISTUNG, nicht in der Amplitude (~sqrt(5) = 2.24-facher Einzelpegel).
 // Bei 1.0 waere der Schweif lauter als der Anschlag, den er begleiten soll.
-// 0 schaltet die ganze Schicht stumm -- die Synths laufen dann trotzdem, der
-// Aus-Schalter fuer die LAST sind die fuenf Amp-Regler (siehe dort).
+// 0 ist ein echter Aus-Schalter: ein Tail, dessen wirksamer Pegel 0 waere,
+// wird beim Treffer gar nicht erst erzeugt (siehe /net/hitNode-Handler) --
+// das spart Stimmen, nicht nur Pegel. Dasselbe gilt je Tail ueber dessen
+// Amp-Regler.
 ~registerParam.(\tailVolume, 0.5, 0.0, 1.5, nil);
 
 // Je Tail funf Regler: Attack, Decay, Sustain, Release, Amp. Kein
@@ -713,13 +729,21 @@ s.options.numInputBusChannels = 2;
 ~registerParam.(\tailShimmerDecay,    0.0,  0.0,   4.0,  nil);
 ~registerParam.(\tailShimmerSustain,  1.0,  0.0,   1.0,  nil);
 ~registerParam.(\tailShimmerRelease,  4.5,  0.2,  12.0,  nil);
-~registerParam.(\tailShimmerAmp,      1.0,  0.0,   2.0,  nil);
+~registerParam.(\tailShimmerAmp,      1.0,  0.0,   4.0,  nil);
 
 ~registerParam.(\tailWhooshAttack,    0.02, 0.001, 2.0,  nil);
 ~registerParam.(\tailWhooshDecay,     0.0,  0.0,   4.0,  nil);
 ~registerParam.(\tailWhooshSustain,   1.0,  0.0,   1.0,  nil);
 ~registerParam.(\tailWhooshRelease,   3.2,  0.2,  12.0,  nil);
-~registerParam.(\tailWhooshAmp,       1.0,  0.0,   2.0,  nil);
+// Whoosh mit Default 3.0 statt 1.0, und die Amp-Regler reichen deshalb bis 4:
+// die fuenf Tails wurden EINZELN abgenommen, nie gegeneinander. In der
+// Mischung liegt der Whoosh gemessen rund 10 dB unter den anderen (NRT,
+// 2026-08-01, gleiche Anregung, kein Hall: RMS 0.0006 gegen 0.0061 beim
+// Shimmer, Spitze 0.017 gegen 0.058) -- bandbegrenztes Rauschen mit rq 0.15
+// traegt schlicht wenig Energie. Bei 1.0 waere er zwar getriggert, aber nicht
+// Teil der Schichtung. Die Zahl ist eine Messung, keine Schaetzung, und mit
+// einem Regler zurueckzunehmen.
+~registerParam.(\tailWhooshAmp,       3.0,  0.0,   4.0,  nil);
 
 // FM-Glide und Granular: Attack bewusst bei 0.7 s (keine Rueckmeldung dazu,
 // siehe Block oben) -- der langsame Einschwinger ist bei diesen zweien Teil
@@ -728,19 +752,19 @@ s.options.numInputBusChannels = 2;
 ~registerParam.(\tailFmglideDecay,    0.0,  0.0,   4.0,  nil);
 ~registerParam.(\tailFmglideSustain,  1.0,  0.0,   1.0,  nil);
 ~registerParam.(\tailFmglideRelease,  3.8,  0.2,  12.0,  nil);
-~registerParam.(\tailFmglideAmp,      1.0,  0.0,   2.0,  nil);
+~registerParam.(\tailFmglideAmp,      1.0,  0.0,   4.0,  nil);
 
 ~registerParam.(\tailGranularAttack,  0.7,  0.001, 2.0,  nil);
 ~registerParam.(\tailGranularDecay,   0.0,  0.0,   4.0,  nil);
 ~registerParam.(\tailGranularSustain, 1.0,  0.0,   1.0,  nil);
 ~registerParam.(\tailGranularRelease, 3.5,  0.2,  12.0,  nil);
-~registerParam.(\tailGranularAmp,     1.0,  0.0,   2.0,  nil);
+~registerParam.(\tailGranularAmp,     1.0,  0.0,   4.0,  nil);
 
 ~registerParam.(\tailSubglowAttack,   0.03, 0.001, 2.0,  nil);
 ~registerParam.(\tailSubglowDecay,    0.0,  0.0,   4.0,  nil);
 ~registerParam.(\tailSubglowSustain,  1.0,  0.0,   1.0,  nil);
 ~registerParam.(\tailSubglowRelease,  4.2,  0.2,  12.0,  nil);
-~registerParam.(\tailSubglowAmp,      1.0,  0.0,   2.0,  nil);
+~registerParam.(\tailSubglowAmp,      1.0,  0.0,   4.0,  nil);
 
 // ---- Tail-Orbit: Kreisbewegung um den Ausloeseort ----------------------
 // Jeder Tail wandert nach dem Trigger im Kreis um die Position des Knotens,
@@ -1715,7 +1739,7 @@ s.waitForBoot({
     // Abräumblock, zusammen mit allem anderen aus einem früheren Durchlauf.)
     ~netHitNodeOscFunc = OSCFunc({ |msg, time, addr|
         var nodeId, energy, px, py, noteIndex, octave, degree, semitoneOffset,
-            midiNote, freq, amp, newBell, bias;
+            midiNote, freq, amp, newBell, bias, tailAmp, newTails, voiceGroup;
 
         nodeId = msg[1].asInteger;
         energy = msg[2].asFloat;
@@ -1753,8 +1777,11 @@ s.waitForBoot({
         // ist sofort wirksam (kein Fade-out), das ist ein bewusster
         // Trade-off: ein kurzer harter Cut an der Ueberlastgrenze ist
         // unauffaelliger als gar kein Sound mehr, weil der Server dicht ist.
+        // Ein Eintrag ist seit den Bell-Tails ein ARRAY [glocke, tail1..tail5]
+        // (siehe ~maxPolyphony oben), deshalb .do statt .free -- gestohlen
+        // wird die ganze Stimme, nicht nur ihr Anschlag.
         if (~activeBells.size >= ~maxPolyphony) {
-            ~activeBells.removeAt(0).free;
+            ~activeBells.removeAt(0).do({ |syn| syn.free });
         };
 
         // Die frühere Zufalls-Panoramisierung entfällt: sie war der
@@ -1768,13 +1795,79 @@ s.waitForBoot({
             \detune, (~detune * bias[\detune]).clip(0.0, 1.0),
             \bellVolume, ~bellVolume
         ], ~voices);
-        ~activeBells.add(newBell);
+        // ---- Fuenf additive Tails, ALLE bei JEDEM Treffer ---------------
+        // Nicht einer nach Auswahl: der Schweif ist eine Schichtung, keine
+        // Variantenliste (Birk, 2026-08-01: "am Ende machen wir die alle
+        // additiv"). Wer einen davon nicht will, zieht seinen Amp-Regler auf
+        // 0 -- dann entsteht der Synth gar nicht erst, siehe unten.
+        //
+        // Alle fuenf starten GLEICHZEITIG mit der Glocke, ohne Versatz. Die
+        // Hoerprobe hatte 150 ms Vorsprung fuer die Glocke, damit man Anschlag
+        // und Schweif getrennt beurteilen kann; Birks spaetere Rueckmeldung
+        // ("soll sofort mit voller Power losgehen") hat das ueberholt, und ein
+        // Versatz braeuchte hier eine Zeitplanung je Treffer, die es sonst
+        // nirgends in dieser Datei gibt.
+        tailAmp = amp * ~tailAmpScale;
+        newTails = ~tailDefs.collect({ |entry|
+            var defName = entry[0], prefix = entry[1], dir, thisAmp;
+            thisAmp = tailAmp * currentEnvironment[(prefix ++ "Amp").asSymbol];
+            // Ein stummer Tail wird gar nicht erst erzeugt: der Amp-Regler
+            // (und tailVolume) sparen damit nicht nur Pegel, sondern auch
+            // Last -- sonst liefen fuenf Synths, von denen vier Stille
+            // rechnen, und der Polyphonie-Deckel zaehlte sie mit.
+            if ((thisAmp * ~tailVolume) <= 0) {
+                nil
+            } {
+                // Richtung JE TAIL unabhaengig gewuerfelt, nicht je Treffer:
+                // bei einer gemeinsamen Ziehung rotierten alle fuenf
+                // Schichten synchron -- genau das, was die additive
+                // Schichtung raeumlich wieder zu einer Quelle machen wuerde.
+                // Bewusst hier in sclang und nicht per TIRand im Graphen:
+                // hier ist die Richtung sichtbar, loggbar und per
+                // tailOrbitDirLock feststellbar.
+                dir = if (~tailOrbitDirLock.abs > 0.5) {
+                    ~tailOrbitDirLock.sign
+                } {
+                    [-1, 1].choose
+                };
+                Synth(defName, [
+                    \freq, freq, \amp, thisAmp,
+                    \x0, px, \y0, py, \out, ~quadBus.index,
+                    \attack,  currentEnvironment[(prefix ++ "Attack").asSymbol],
+                    \decay,   currentEnvironment[(prefix ++ "Decay").asSymbol],
+                    \sustain, currentEnvironment[(prefix ++ "Sustain").asSymbol],
+                    \release, currentEnvironment[(prefix ++ "Release").asSymbol],
+                    \tailVolume, ~tailVolume,
+                    \orbitRadius, ~tailOrbitRadius,
+                    \orbitSpeed, ~tailOrbitSpeed,
+                    \orbitEnvExp, ~tailOrbitEnvExp,
+                    \orbitDir, dir,
+                    \orbitMinRadius, ~tailOrbitMinRadius
+                ], ~voices)
+            }
+        }).reject({ |syn| syn.isNil });
+
+        // Glocke und ihre Tails als EINE Stimme fuehren (siehe ~maxPolyphony):
+        // ein Eintrag, ein Deckel, ein Aufraeumer. Kein zweites Dictionary,
+        // kein zweiter Reaper, kein zweites Limit -- dieselbe Ueberlegung, aus
+        // der die Windschicht IN \impulseDrone sitzt statt als eigener Synth.
+        voiceGroup = [newBell] ++ newTails;
+        ~activeBells.add(voiceGroup);
         // Natuerliches Verklingen (doneAction 2 im SynthDef) muss
         // ~activeBells auch aufraeumen, sonst waechst die Liste dauerhaft
         // weiter und removeAt(0) wuergt laengst verklungene Synths ab
         // (harmlos, aber sinnlos -- das echte Voice-Stealing traefe dann die
-        // falschen).
-        newBell.onFree({ ~activeBells.remove(newBell); });
+        // falschen). Aufgehaengt ist das an der GLOCKE, nicht am laengsten
+        // Tail: sie ist der einzige Synth, den es sicher gibt. Folge, die man
+        // kennen muss -- die Tails klingen laenger als die Glocke (bis 4.5 s
+        // gegen 3.2 s), ein Eintrag verlaesst die Buchfuehrung also, waehrend
+        // seine Tails noch ausklingen. Das Fenster ist durch die
+        // Release-Zeiten begrenzt und laeuft von selbst leer; es waechst
+        // nicht. Die Alternative -- jeden der sechs Synths einzeln beobachten
+        // und den Eintrag erst beim letzten raeumen -- kostete sechs
+        // Node-Watcher je Treffer statt einem, fuer ein paar Sekunden
+        // genauere Buchfuehrung an der Ueberlastgrenze.
+        newBell.onFree({ ~activeBells.remove(voiceGroup); });
 
         ("node % -> % Hz (amp %) bei (%, %) m, Zone %".format(
             nodeId, freq.round(0.1), amp.round(0.01), px.round(0.01), py.round(0.01),
