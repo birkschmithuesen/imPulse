@@ -1486,6 +1486,17 @@ function buildSpeedClasses(data, host) {
   });
   body.appendChild(power);
 
+  // Manuelle Basis-Speed wenn quantisiert
+  if (speed.baseSpeed) {
+    const baseSpeedSlider = miniSlider('Basis-Speed (quantisiert)',
+      speed.baseSpeed, data.values[speed.baseSpeed.address]);
+    body.appendChild(baseSpeedSlider.element);
+    const baseSpeedNote = document.createElement('p');
+    baseSpeedNote.className = 'help';
+    baseSpeedNote.textContent = speed.baseSpeed.help || '';
+    body.appendChild(baseSpeedNote);
+  }
+
   // Rueckfalltext: genau das macht SpeedQuantizer.pick() bei lauter Nullen.
   const bank = weightBank(speed.weights, data.values,
     'alle Gewichte 0 – es gilt 1×');

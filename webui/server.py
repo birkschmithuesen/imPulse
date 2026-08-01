@@ -257,6 +257,9 @@ DESCRIPTIONS: Dict[str, str] = {
     "/net/impulse/speedQuantize/jitter":
         "Swing auf der gezogenen Speed-Klasse. 0 = exakt das Vielfache. "
         "Ueber 0,29 rutschen einzelne Impulse im Klang in die Nachbarklasse.",
+    "/net/impulse/speedQuantize/baseSpeed":
+        "Manuelle Basis-Speed wenn Speed Quantize an ist. Die Klassen (0,5x bis 8x) "
+        "werden auf diese Basis multipliziert, nicht auf den Randomizer impulseSpeed.",
     "/net/impulse/split/weight/all":
         "Gewicht dafuer, dass eine Kreuzung alle moeglichen Zweige nimmt - "
         "das bisherige Verhalten.",
@@ -339,9 +342,11 @@ def build_speed_classes(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str
     if not weights:
         return None
     jitter = by_address.get("/net/impulse/speedQuantize/jitter")
+    baseSpeed = by_address.get("/net/impulse/speedQuantize/baseSpeed")
     return {
         "enabled": enabled.as_dict(),
         "jitter": jitter.as_dict() if jitter is not None else None,
+        "baseSpeed": baseSpeed.as_dict() if baseSpeed is not None else None,
         "weights": weights,
     }
 
