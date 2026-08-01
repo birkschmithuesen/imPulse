@@ -107,6 +107,9 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   // impulseSpeed wie bisher, ohne Ziehung.
   RemoteControlledIntParameter speedQuantizeEnabled;
   RemoteControlledFloatParameter speedQuantizeJitter;
+  // Manuelle Basis-Speed wenn Quantize an ist, statt den Randomizer impulseSpeed
+  // zu verwenden. Bereich 0.1..2.0, Default 1.0.
+  RemoteControlledFloatParameter speedQuantizeBaseSpeed;
   // Ein Gewicht je Klasse aus SpeedQuantizer.MULTIPLIERS, gleiche Reihenfolge.
   RemoteControlledFloatParameter[] speedClassWeights =
       new RemoteControlledFloatParameter[SpeedQuantizer.MULTIPLIERS.length];
@@ -325,6 +328,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // ueberwiegende Normalfall, ein 8x-Ausreisser ist etwa jeder hundertste.
     speedQuantizeEnabled= new RemoteControlledIntParameter("/net/impulse/speedQuantize/enabled", 0, 0, 1);
     speedQuantizeJitter= new RemoteControlledFloatParameter("/net/impulse/speedQuantize/jitter", 0f, 0f, 1f);
+    speedQuantizeBaseSpeed= new RemoteControlledFloatParameter("/net/impulse/speedQuantize/baseSpeed", 1f, 0.1f, 2f);
     // Adressnamen ohne Punkt: "0x5" statt "0.5x". Ein Punkt in einer
     // OSC-Adresse ist zwar erlaubt, aber remoteSettings.txt und das Web-UI
     // lesen Adressen als Text und der Punkt liest sich dort wie ein
@@ -862,6 +866,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     if (speedQuantizeEnabled.getValue() != 1) {
       return base;
     }
+    // Wenn Quantize an ist, nutze die manuelle baseSpeed statt des Randomizers
+    base=speedQuantizeBaseSpeed.getValue();
     for (int i=0; i<speedClassWeights.length; i++) {
       weightScratch[i]=speedClassWeights[i].getValue();
     }
