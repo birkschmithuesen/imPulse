@@ -93,7 +93,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `OriginSequencerTest` — Feuertakt je Notenwert, `repeatCount` hält den Ursprung, `originStripeOverride`, kein Sofort-Feuern beim Wiedereinschalten, kein Nachholen nach einem Hänger, Rasterung der Notenwerte
 - `StripeTreeStoreTest` — die Baum-Zuordnung: Parsen samt Kommentaren, unbekannter Baumname, Index ausserhalb des Bereichs, doppelter Stripe (letzte Zeile gewinnt), leerer Baum liefert `null`, fehlende Datei, Gegenprobe an der echten `data/stripeTrees.txt`
 - `SplitFanoutTest` — die Zahl der Zweige einer Aufspaltung: der neutrale Auslieferungsfall (`weight/all=100` nimmt immer alle), die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, entartete Gewichte fallen auf „alle" zurück, Knoten mit einem/zwei/vier möglichen Zweigen (bei zwei fallen „einer weniger" und „genau einer" zusammen), nie 0 Zweige bei vorhandenen Kandidaten, und `chooseOrder` liefert verschiedene Indizes im Bereich, in wechselnder Reihenfolge, auch bei unbrauchbaren Zufallswerten
-- `SplitStaggerTest` — die Warteschlange der zeitversetzten Kinder: Slot 0 hat exakt keinen Versatz, Notenwert-Intervalle samt Rasterung, fällig genau auf der Grenze, Reihenfolge nach Fälligkeit, ein Rückwärtssprung der Beat-Position verliert nichts, `MAX_PENDING` weist den neuen Eintrag ab statt einen wartenden zu verwerfen, und die Kindwerte kommen unverändert wieder heraus
+- `SplitStaggerTest` — die Warteschlange der zeitversetzten Kinder: Slot 0 hat exakt keinen Versatz, Notenwert-Intervalle samt Rasterung, fällig genau auf der Grenze, Reihenfolge nach Fälligkeit, ein Rückwärtssprung der Beat-Position verliert nichts, `MAX_PENDING` weist den neuen Eintrag ab statt einen wartenden zu verwerfen, und die Kindwerte kommen unverändert wieder heraus. Dazu die gewichtete Ziehung des Notenwerts (`pickNoteValue`): die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, nicht-prozentuale Gewichte werden normalisiert, der entartete Fall (alle 0, negativ, NaN, zu kurzes Array) fällt auf Sechzehntel zurück, und jeder gezogene Wert übersteht die Rasterung unverändert
 - `SpeedQuantizerTest` — die gewichtete Auswahl der Speed-Klasse: die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, Normalisierung nicht-prozentualer Gewichte, entartete Gewichte (alle 0, negativ, NaN)
 - `PresetStoreTest` — Format, Datei, Snapshot und Anwenden eines Presets, inklusive der ausgeschlossenen und still übergangenen Adressen
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
@@ -283,12 +283,15 @@ werden, und die gewaehlten koennen im BPM-Raster nacheinander starten.
   **100/0/0**) — Gewichte der drei Kategorien, normalisiert in
   `SplitFanout.branchCount()` wie bei den Speed-Klassen
 - `/net/impulse/split/staggerEnabled` (int 0/1, Default **0**)
-- `/net/impulse/split/staggerNoteValue` (int 1..16, Default 16) — gerastet auf
-  1/2/4/8/16, dieselbe Rasterung wie beim Sequencer
+- `/net/impulse/split/stagger/weight/{whole,half,quarter,eighth,sixteenth}`
+  (float 0..100, Defaults **0/0/10/30/60**) — ein Gewicht je Notenwert-Klasse,
+  Reihenfolge wie `OriginSequencer.NOTE_VALUES`. Gezogen wird in
+  `SplitStagger.pickNoteValue()`, normalisiert wie überall.
 
-Zusammen ergeben die Auslieferungswerte **bitgleich** das vorherige Verhalten.
+Zusammen ergeben die Auslieferungswerte **bitgleich** das vorherige Verhalten
+(`staggerEnabled = 0` — die Gewichte werden dann gar nicht erst gelesen).
 
-Sechs Dinge, die man beim Ändern kennen muss:
+Sieben Dinge, die man beim Ändern kennen muss:
 
 - **Die Kategorien sind relativ, nicht absolut.** „Einer weniger" statt
   „2 Zweige": ein Knoten hat je nach Rand des Stripes und Richtung des
@@ -302,6 +305,18 @@ Sechs Dinge, die man beim Ändern kennen muss:
   die `nodeDeadTime` des Knotens wäre trotzdem verbraucht. Der entartete Fall
   (keine Gewichte, NaN) fällt auf „alle" zurück, also auf das Verhalten von
   vor dem Feature.
+- **Ein Notenwert je Aufspaltung, nicht je Zweig.** Der Versatz nahm bis
+  2026-08-01 einen einzigen fest eingestellten Notenwert — jeder Split im
+  ganzen Betrieb klang gleich. Gezogen wird jetzt je **Split-Ereignis**: alle
+  Kinder desselben Splits stehen auf demselben Raster, `delayBeats()` bleibt
+  `slot * beatsPerNote(noteValue)`. Je Kind gezogen wären schon die Abstände
+  *innerhalb* einer Aufspaltung ungleich — genau die Gleichmäßigkeit weg, an
+  der ein Rhythmus überhaupt zu erkennen ist. Variieren soll die Aufspaltung
+  als Ganzes: mal eine dichte Sechzehntel-Figur, mal ein weiter
+  Viertel-Abstand. Der entartete Fall (alle Gewichte 0, NaN) fällt auf
+  **Sechzehntel** zurück, den kürzesten Versatz und den früheren Default des
+  ersetzten Reglers — dieselbe Regel wie „alle Zweige" bei `SplitFanout` und
+  „1x" bei `SpeedQuantizer`. Bei `staggerEnabled = 0` wird nicht gezogen.
 - **Der Versatz zählt in Beats, nicht in Millisekunden.** Die Fälligkeit kommt
   aus `MusicalClock`, derselben Phase, auf der der Origin-Sequencer läuft — ein
   Tempowechsel ändert damit die Rate, nicht die Position. Die Uhr läuft
@@ -325,13 +340,20 @@ Sechs Dinge, die man beim Ändern kennen muss:
   Eintrag, nicht ein wartender.
 
 Die gewichtete Ziehung selbst steht in `WeightedChoice.java` und wird von
-`SpeedQuantizer` und `SplitFanout` geteilt. Zwei Kopien wären zwei Regeln für
-dieselbe Sache: eine Nachbesserung an der einen ginge an der anderen still
-vorbei.
+`SpeedQuantizer`, `SplitFanout` und `SplitStagger` geteilt. Zwei Kopien wären
+zwei Regeln für dieselbe Sache: eine Nachbesserung an der einen ginge an der
+anderen still vorbei. Aus demselben Grund liegt die Notenwert-Liste **einmal**
+in `OriginSequencer.NOTE_VALUES` (package-privat, dazu `noteValueAt()`) und
+wird von `SplitStagger` mitbenutzt — eine sechste Klasse dort ergänzt und hier
+vergessen, und „Sechzehntel" hieße im Sketch an zwei Stellen etwas anderes.
 
 Im Web-UI sitzt das Ganze als Sektion „Split-Verhalten" im Tab
 **Noten-Verhalten** — der Versatz hängt am BPM-Raster wie die Speed-Klassen
 daneben, und die zwei Hälften eines Features gehören auf denselben Tab. Die
+Sektion zeigt **zwei** Verteilungen untereinander (Zweigzahl, Notenwert des
+Versatzes), beide über dieselbe Hilfsfunktion `weightBank()` in `app.js` wie
+die Speed-Klassen; die zweite bekommt einen Farbversatz, sonst läse man sie als
+Fortsetzung der ersten statt als eigene Sache. Die
 Regel in `TAB_RULES` trägt einen abschliessenden Schrägstrich
 (`/net/impulse/split/`), sonst zöge sie die älteren `splitSpeedJitter`- und
 `splitLifetimeJitter`-Adressen aus der Physik mit.
