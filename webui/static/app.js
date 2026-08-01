@@ -462,6 +462,13 @@ function buildColorCard(control, values) {
     components.appendChild(buildParam(param, values[param.address]));
   });
   wrap.appendChild(components);
+  wrap.appendChild(paletteRowFor(control));
+
+  // Merkt sich die zuletzt angefasste Karte -- die Quelle fuer "Farbe
+  // uebernehmen". Ohne das muesste der Knopf raten, welche der sieben Karten
+  // gemeint ist.
+  wrap.addEventListener('pointerdown', () => { activeColorCard = control; });
+  wrap.addEventListener('focusin', () => { activeColorCard = control; });
 
   const card = { base: control.base, input: picker, components: control.components };
   colorCards.push(card);
@@ -487,12 +494,246 @@ function buildColorCard(control, values) {
 }
 
 // ---------------------------------------------------------------------------
+// Farbpalette
+//
+// Eine Sammlung wiederverwendbarer Farben, die unter JEDER Farbwaehler-Karte
+// als Reihe steht: ein Klick setzt Hue/Sat/Bright genau dieser Karte. Der
+// Versand laeuft ueber denselben queueSendMany-Weg wie der Farbwaehler
+// darueber -- kein Sonderpfad, damit Entprellung und Fehlerbehandlung
+// dieselben bleiben.
+//
+// Gehalten wird sie SERVER-seitig (data/colorPalettes.txt), nicht im
+// localStorage: sie soll einen Neustart ueberleben und auf jedem Geraet
+// dieselbe sein.
+// ---------------------------------------------------------------------------
+
+let paletteEntries = (bootstrap.palette && bootstrap.palette.entries) || [];
+const paletteRows = [];        // { element, control } -- eine je Farbkarte
+let paletteBarEl = null;       // die Leiste im Farben-Tab
+let activeColorCard = null;    // zuletzt angefasste Karte, Quelle fuer "+"
+
+function paletteSwatchColor(entry) {
+  return hsbToHex(entry.hue, entry.sat, entry.bright);
+}
+
+/* Setzt eine Karte auf einen Paletteneintrag. Gerundet wird auf das Raster
+ * der Regler, genau wie im Farbwaehler -- sonst laufen angezeigter und
+ * gesendeter Wert auseinander. */
+function applyPaletteEntry(control, entry) {
+  const updates = [
+    { address: control.components.hue.address,
+      value: roundToStep(entry.hue, control.components.hue) },
+    { address: control.components.sat.address,
+      value: roundToStep(entry.sat, control.components.sat) },
+    { address: control.components.bright.address,
+      value: roundToStep(entry.bright, control.components.bright) },
+  ];
+  updates.forEach((u) => controls.get(u.address).set(u.value, true));
+  // Das Farbfeld der Karte zieht nicht von selbst nach: es haengt am
+  // input-Ereignis seines eigenen Waehlers, und set(..., true) loest keins
+  // aus (dieselbe Regel wie beim Preset-Laden).
+  const card = colorCards.find((c) => c.base === control.base);
+  if (card) { syncColorCard(card); }
+  queueSendMany('color:' + control.base, updates);
+  setStatus('Palette „' + entry.name + '“ auf ' + control.base
+    + ' angewendet', 'ok');
+}
+
+/* Baut die Swatch-Reihe einer Karte neu. Wird bei jeder Palette-Aenderung
+ * fuer ALLE Karten gerufen -- eine neue Farbe soll ueberall sofort da sein,
+ * nicht erst nach einem Neuladen. */
+function fillPaletteRow(row) {
+  row.element.innerHTML = '';
+  if (!paletteEntries.length) {
+    const hint = document.createElement('span');
+    hint.className = 'palette-empty';
+    hint.textContent = 'Palette leer';
+    row.element.appendChild(hint);
+    return;
+  }
+  paletteEntries.forEach((entry) => {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'swatch';
+    swatch.style.background = paletteSwatchColor(entry);
+    swatch.title = entry.name + ' auf ' + row.control.base + ' anwenden';
+    swatch.setAttribute('aria-label', entry.name);
+    swatch.addEventListener('click', () => applyPaletteEntry(row.control, entry));
+    row.element.appendChild(swatch);
+  });
+}
+
+function renderPaletteRows() {
+  paletteRows.forEach(fillPaletteRow);
+  if (paletteBarEl) { fillPaletteBar(); }
+}
+
+/* Die komplette Palette an den Server schicken (Voll-Liste: er ersetzt die
+ * Datei durch genau das, was hier steht). */
+async function savePalette(next, what) {
+  const previous = paletteEntries;
+  paletteEntries = next;
+  renderPaletteRows();
+  try {
+    const response = await fetch('/api/palette', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: next }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || ('HTTP ' + response.status));
+    }
+    paletteEntries = payload.entries || [];
+    renderPaletteRows();
+    setStatus(what, 'ok');
+  } catch (err) {
+    // Zurueckrollen: sonst zeigt das UI eine Farbe, die in der Datei nicht
+    // steht, und der naechste Neustart schluckt sie kommentarlos.
+    paletteEntries = previous;
+    renderPaletteRows();
+    setStatus('Palette nicht gespeichert: ' + err.message, 'err');
+  }
+}
+
+function paletteRowFor(control) {
+  const element = document.createElement('div');
+  element.className = 'palette-row';
+  const row = { element: element, control: control };
+  paletteRows.push(row);
+  fillPaletteRow(row);
+  return element;
+}
+
+/* Die Leiste im Farben-Tab: alle Farben mit Namen, je ein Loesch-Kreuz,
+ * darunter Namensfeld und Uebernehmen-Knopf. */
+function fillPaletteBar() {
+  paletteBarEl.innerHTML = '';
+  if (!paletteEntries.length) {
+    const hint = document.createElement('p');
+    hint.className = 'palette-empty';
+    hint.textContent = 'Noch keine Farbe in der Palette. Eine Farbkarte '
+      + 'weiter unten anfassen, Namen eintragen, „Farbe uebernehmen“.';
+    paletteBarEl.appendChild(hint);
+    return;
+  }
+  paletteEntries.forEach((entry) => {
+    const chip = document.createElement('span');
+    chip.className = 'palette-chip';
+
+    const dot = document.createElement('span');
+    dot.className = 'palette-dot';
+    dot.style.background = paletteSwatchColor(entry);
+
+    const label = document.createElement('span');
+    label.textContent = entry.name;
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'palette-remove';
+    remove.textContent = '×';
+    remove.title = entry.name + ' aus der Palette entfernen';
+    remove.addEventListener('click', () => {
+      savePalette(paletteEntries.filter((e) => e.name !== entry.name),
+        'Farbe „' + entry.name + '“ entfernt');
+    });
+
+    chip.appendChild(dot);
+    chip.appendChild(label);
+    chip.appendChild(remove);
+    paletteBarEl.appendChild(chip);
+  });
+}
+
+function buildPaletteSection(host) {
+  const section = document.createElement('section');
+  section.className = 'palette';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Palette';
+  section.appendChild(title);
+
+  const note = document.createElement('p');
+  note.className = 'palette-note';
+  note.textContent = 'Wiederverwendbare Farben. Sie liegen in '
+    + 'data/colorPalettes.txt auf dem imPulse-Rechner, gelten also fuer '
+    + 'jeden Browser und ueberleben einen Neustart. Unter jeder Farbkarte '
+    + 'steht dieselbe Reihe – ein Klick setzt die Karte auf diese Farbe. '
+    + 'Welche Karte welche Farbe traegt, halten weiterhin die Presets fest.';
+  section.appendChild(note);
+
+  paletteBarEl = document.createElement('div');
+  paletteBarEl.className = 'palette-bar';
+  section.appendChild(paletteBarEl);
+  fillPaletteBar();
+
+  const row = document.createElement('div');
+  row.className = 'palette-add';
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.placeholder = 'Name der Farbe';
+  nameInput.maxLength = 32;
+  nameInput.autocomplete = 'off';
+  nameInput.setAttribute('aria-label', 'Name der neuen Palette-Farbe');
+
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.textContent = 'Farbe uebernehmen';
+  add.title = 'Nimmt die Farbe der zuletzt angefassten Farbkarte';
+
+  function addCurrent() {
+    if (!activeColorCard) {
+      setStatus('Erst eine Farbkarte anfassen – die Palette weiss sonst '
+        + 'nicht, welche Farbe gemeint ist', 'warn');
+      return;
+    }
+    const name = nameInput.value.trim();
+    if (!name) {
+      setStatus('Bitte einen Namen fuer die Farbe eingeben', 'warn');
+      nameInput.focus();
+      return;
+    }
+    const entry = {
+      name: name,
+      hue: controls.get(activeColorCard.components.hue.address).get(),
+      sat: controls.get(activeColorCard.components.sat.address).get(),
+      bright: controls.get(activeColorCard.components.bright.address).get(),
+    };
+    // Gleicher Name ersetzt -- dieselbe Regel wie in der Datei, wo die
+    // letzte Zeile gewinnt. Der Server lehnt einen doppelten Namen ab, ein
+    // blindes concat() liefe also in einen Fehler.
+    const next = paletteEntries.filter((e) => e.name !== name).concat([entry]);
+    const base = activeColorCard.base;
+    nameInput.value = '';
+    savePalette(next, 'Farbe „' + name + '“ aus ' + base + ' uebernommen');
+  }
+
+  add.addEventListener('click', addCurrent);
+  nameInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { addCurrent(); }
+  });
+
+  row.appendChild(nameInput);
+  row.appendChild(add);
+  section.appendChild(row);
+
+  host.appendChild(section);
+}
+
+// ---------------------------------------------------------------------------
 // Aufbau der Seite
 // ---------------------------------------------------------------------------
 
 function render(data) {
   controls.clear();
   colorCards.length = 0;
+  // Die Palette-Registrierungen zeigen nach einem Neuaufbau auf Elemente,
+  // die nicht mehr im Dokument stehen -- ohne das Zuruecksetzen wuechsen
+  // paletteRows bei jedem "Neu laden" an.
+  paletteRows.length = 0;
+  paletteBarEl = null;
+  activeColorCard = null;
 
   // Alle Tabs vollstaendig bauen (siehe buildTabs: die controls-Map muss
   // komplett sein, auch fuer inaktive Tabs).
@@ -1432,6 +1673,7 @@ function buildTabs(data) {
     (tab.sections || []).forEach((name) => {
       if (name === 'sequencer') { buildSequencer(data, panel); }
       if (name === 'speedClasses') { buildSpeedClasses(data, panel); }
+      if (name === 'palette') { buildPaletteSection(panel); }
     });
 
     // 2. Kuratierte Regler direkt sichtbar

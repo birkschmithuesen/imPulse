@@ -544,9 +544,15 @@ input[type=color] {
 /* Die grossen Sektionen (Sequencer, Speed-Klassen) und der
    Erweitert-Block laufen ueber die volle Breite. */
 .tab-panel > .seq,
+.tab-panel > .palette,
 .tab-panel > details { grid-column: 1 / -1; }
 .tab-panel > .seq { margin: 0; }
 .tab-panel > .sc { margin: 0; }
+
+/* Ein Tab mit expanded-Flag (Farben) haengt seinen tab-extra-Block direkt
+   ins Panel statt in ein <details>. Das Panel bringt seinen Rand schon mit,
+   das Raster steuert der Block selbst. */
+.tab-panel > .tab-extra { grid-column: 1 / -1; padding: 0; }
 
 /* Innerhalb von "Erweitert" wieder ein Raster, damit die Karten dort nicht
    als eine endlose Spalte stehen. */
@@ -565,3 +571,81 @@ input[type=color] {
   .tab-panel { grid-template-columns: 1fr; padding: 0.6rem; gap: 0.6rem; }
   .tab-extra { grid-template-columns: 1fr; padding: 0.6rem; }
 }
+
+/* --- Farbpalette ---------------------------------------------------------
+   Die Leiste steht oben im Farben-Tab, die kleine Swatch-Reihe unter jeder
+   Farbkarte. Beide zeigen dieselben Farben; unten zaehlt nur die Farbe,
+   der Name steht dort im Tooltip. */
+
+.palette { margin: 0; }
+/* Rahmen und Titel erbt die Sektion von den section-Regeln oben, den
+   Innenabstand des Koerpers braucht sie selbst. */
+.palette-note,
+.palette-bar,
+.palette-add { margin-left: 0.8rem; margin-right: 0.8rem; }
+.palette-note {
+  margin-top: 0.6rem;
+  margin-bottom: 0.6rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+.palette-empty { color: var(--muted); font-size: 0.75rem; }
+
+.palette-bar { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.palette-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.3rem 0.2rem 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: #12151a;
+  font-size: 0.75rem;
+}
+.palette-dot {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.45);
+}
+.palette-remove {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0 0.1rem;
+}
+.palette-remove:hover { color: var(--err); }
+
+.palette-add {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+.palette-add input[type=text] {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  background: #12151a;
+  color: inherit;
+  font: inherit;
+}
+.palette-add input[type=text]:focus { outline: 1px solid var(--accent); }
+.palette-add button { flex: 0 0 auto; }
+
+.palette-row { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.5rem; }
+.palette-row .swatch {
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+.palette-row .swatch:hover { border-color: var(--accent); }
