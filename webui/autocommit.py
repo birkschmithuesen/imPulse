@@ -176,3 +176,168 @@ def interrupted_operation(names: Iterable[str]) -> Optional[str]:
         if marker in present:
             return "%s (%s)" % (description, marker)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Git-Aufruf
+# ---------------------------------------------------------------------------
+
+# Ein Git-Aufruf, der laenger braucht, haengt vermutlich an einem Lock oder
+# einem Netzlaufwerk -- dann lieber diese Runde verlieren als den Thread.
+GIT_TIMEOUT_S = 10.0
+
+
+class GitError(Exception):
+    """Git liess sich gar nicht erst ausfuehren (fehlt, haengt, Timeout)."""
+
+
+@dataclass(frozen=True)
+class GitResult:
+    code: int
+    out: str
+    err: str
+
+
+def run_git(repo_root: str, args: Sequence[str],
+            timeout: float = GIT_TIMEOUT_S) -> GitResult:
+    """Ruft git im Repo auf. Wirft GitError nur, wenn git selbst versagt.
+
+    Ein Rueckgabewert ungleich 0 ist KEIN Grund zu werfen -- den werten die
+    Aufrufer selbst aus, weil "git status meldet einen Fehler" und "git ist
+    gar nicht da" zwei verschiedene Lagen sind.
+    """
+    try:
+        done = subprocess.run(
+            ["git"] + list(args),
+            cwd=repo_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        raise GitError("git nicht gefunden: %s" % exc) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GitError("git antwortet nicht (%.0f s): git %s"
+                       % (timeout, " ".join(args))) from exc
+    except OSError as exc:
+        raise GitError("git nicht ausfuehrbar: %s" % exc) from exc
+    return GitResult(done.returncode,
+                     done.stdout.decode("utf-8", "replace"),
+                     done.stderr.decode("utf-8", "replace"))
+
+
+# ---------------------------------------------------------------------------
+# Eine Runde
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AutoCommitResult:
+    status: str          # committed | clean | skipped | error
+    detail: str
+    paths: List[str]
+    at: float
+
+
+class AutoCommitter:
+    """Eine Runde: pruefen, und nur bei echter Aenderung lokal committen.
+
+    Der Git-Aufruf ist eingesetzt (``runner``), damit die Ablauflogik ohne
+    echten Prozess und ohne echtes Repository geprueft werden kann -- dasselbe
+    Muster wie ``RandomSource`` im OriginSequencer auf der Java-Seite.
+    """
+
+    def __init__(self, repo_root, patterns=WATCHED_PATTERNS, runner=run_git,
+                 clock=time.time, now=datetime.datetime.now,
+                 git_dir_lister=None):
+        self.repo_root = repo_root
+        self.patterns = tuple(patterns)
+        self._run = runner
+        self._clock = clock
+        self._now = now
+        self._list_git_dir = git_dir_lister or self._default_git_dir_lister
+
+    def _default_git_dir_lister(self):
+        try:
+            result = self._run(self.repo_root, ["rev-parse", "--git-dir"])
+        except GitError:
+            return []
+        if result.code != 0:
+            return []
+        git_dir = result.out.strip()
+        if not os.path.isabs(git_dir):
+            git_dir = os.path.join(self.repo_root, git_dir)
+        try:
+            return os.listdir(git_dir)
+        except OSError:
+            return []
+
+    def check_and_commit(self) -> AutoCommitResult:
+        """Nie eine Ausnahme nach aussen -- der Webserver haengt daran."""
+        try:
+            return self._round()
+        except GitError as exc:
+            return self._result("error", str(exc), [])
+        except Exception as exc:  # noqa: BLE001 -- absichtlich alles
+            return self._result("error", "unerwartet: %r" % (exc,), [])
+
+    # -- innere Schritte ----------------------------------------------------
+
+    def _result(self, status, detail, paths):
+        return AutoCommitResult(status=status, detail=detail,
+                                paths=list(paths), at=self._clock())
+
+    def _round(self) -> AutoCommitResult:
+        branch = self._run(self.repo_root, ["symbolic-ref", "-q", "HEAD"])
+        if branch.code != 0:
+            # Detached HEAD: ein Commit haenge an keinem Branch und waere nach
+            # dem naechsten Checkout nur noch im Reflog -- ein Sicherungsnetz,
+            # das nicht haelt, ist schlimmer als keins, weil die Anzeige
+            # trotzdem "gesichert" behauptet.
+            return self._result("skipped", "HEAD haengt an keinem Branch "
+                                           "(detached) -- kein Auto-Commit", [])
+
+        busy = interrupted_operation(self._list_git_dir())
+        if busy is not None:
+            return self._result("skipped", "uebersprungen: %s" % busy, [])
+
+        status = self._run(self.repo_root,
+                           ["status", "--porcelain", "-z", "--"]
+                           + list(self.patterns))
+        if status.code != 0:
+            return self._result("error", status.err.strip() or
+                                "git status fehlgeschlagen", [])
+
+        entries = parse_porcelain(status.out)
+        clash = conflicted(entries)
+        if clash:
+            return self._result("skipped",
+                                "Merge-Konflikt offen: %s" % ", ".join(clash),
+                                [])
+
+        # Zweiter Filter, obwohl die Pathspec schon eingeschraenkt hat: die
+        # Muster gehen an git, die Pfade kommen von git zurueck -- geprueft
+        # wird hier, was tatsaechlich gestaged wird.
+        paths = sorted({e.path for e in entries
+                        if matches_watchlist(e.path, self.patterns)})
+        if not paths:
+            return self._result("clean", "nichts geaendert", [])
+
+        added = self._run(self.repo_root, ["add", "--"] + paths)
+        if added.code != 0:
+            return self._result("error", added.err.strip() or
+                                "git add fehlgeschlagen", paths)
+
+        message = build_commit_message(paths, self._now())
+        # Die Pathspec steht auch am commit: in dieser Form committet Git nur
+        # den Arbeitsbaum-Zustand DIESER Pfade und laesst alles unberuehrt,
+        # was der Operator sonst gerade gestaged hat. Ohne sie zoege eine
+        # halbfertige Handarbeit im Index in den Auto-Commit.
+        committed = self._run(self.repo_root,
+                              ["commit", "-m", message, "--"] + paths)
+        if committed.code != 0:
+            return self._result("error", committed.err.strip() or
+                                committed.out.strip() or
+                                "git commit fehlgeschlagen", paths)
+        return self._result("committed",
+                            "%d Datei(en) gesichert" % len(paths), paths)

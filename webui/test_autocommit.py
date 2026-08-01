@@ -154,5 +154,154 @@ class InterruptedOperationTest(unittest.TestCase):
         self.assertIn("MERGE_HEAD", interrupted_operation(["MERGE_HEAD"]))
 
 
+class FakeGit:
+    """Ersatz fuer run_git: liefert vorgegebene Antworten, merkt sich Aufrufe."""
+
+    def __init__(self, replies):
+        self.replies = dict(replies)
+        self.calls = []
+
+    def __call__(self, repo_root, args, timeout=None):
+        self.calls.append(list(args))
+        for prefix, reply in self.replies.items():
+            if list(args)[:len(prefix)] == list(prefix):
+                if isinstance(reply, Exception):
+                    raise reply
+                return reply
+        return autocommit.GitResult(0, "", "")
+
+
+ON_BRANCH = ("symbolic-ref", "-q", "HEAD")
+STATUS = ("status", "--porcelain", "-z")
+
+
+def committer(replies, tmp="/tmp/repo"):
+    fake = FakeGit(replies)
+    return autocommit.AutoCommitter(tmp, runner=fake,
+                                    git_dir_lister=lambda: ["HEAD"]), fake
+
+
+class AutoCommitterTest(unittest.TestCase):
+    def test_clean_tree_does_not_commit(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(0, "refs/heads/master\n", ""),
+            STATUS: autocommit.GitResult(0, "", ""),
+        })
+        result = auto.check_and_commit()
+        self.assertEqual(result.status, "clean")
+        self.assertFalse(any(call[0] == "commit" for call in fake.calls))
+
+    def test_change_leads_to_add_and_commit(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(0, "refs/heads/master\n", ""),
+            STATUS: autocommit.GitResult(0, z(" M data/presets/a.txt"), ""),
+        })
+        result = auto.check_and_commit()
+        self.assertEqual(result.status, "committed")
+        self.assertEqual(result.paths, ["data/presets/a.txt"])
+        add = next(c for c in fake.calls if c[0] == "add")
+        commit = next(c for c in fake.calls if c[0] == "commit")
+        self.assertEqual(add, ["add", "--", "data/presets/a.txt"])
+        self.assertEqual(commit[-2:], ["--", "data/presets/a.txt"])
+
+    def test_commit_carries_a_pathspec_separator(self):
+        """Ohne -- am commit zieht ein fremd gestagter Pfad mit in den Commit."""
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(0, "refs/heads/master\n", ""),
+            STATUS: autocommit.GitResult(0, z(" M data/presets/a.txt"), ""),
+        })
+        auto.check_and_commit()
+        commit = next(c for c in fake.calls if c[0] == "commit")
+        self.assertIn("--", commit)
+
+    def test_unwatched_paths_are_never_staged(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(0, "refs/heads/master\n", ""),
+            STATUS: autocommit.GitResult(
+                0, z(" M data/presets/a.txt", " M imPulse.pde"), ""),
+        })
+        result = auto.check_and_commit()
+        self.assertEqual(result.paths, ["data/presets/a.txt"])
+        for call in fake.calls:
+            self.assertNotIn("imPulse.pde", call)
+
+    def test_conflict_is_skipped(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(0, "refs/heads/master\n", ""),
+            STATUS: autocommit.GitResult(0, z("UU data/presets/a.txt"), ""),
+        })
+        result = auto.check_and_commit()
+        self.assertEqual(result.status, "skipped")
+        self.assertFalse(any(call[0] == "commit" for call in fake.calls))
+
+    def test_detached_head_is_skipped(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(1, "", ""),
+        })
+        result = auto.check_and_commit()
+        self.assertEqual(result.status, "skipped")
+        self.assertIn("HEAD", result.detail)
+        self.assertFalse(any(call[0] == "commit" for call in fake.calls))
+
+    def test_open_merge_is_skipped(self):
+        fake = FakeGit({ON_BRANCH: autocommit.GitResult(0, "refs/heads/x", "")})
+        auto = autocommit.AutoCommitter(
+            "/tmp/repo", runner=fake,
+            git_dir_lister=lambda: ["HEAD", "MERGE_HEAD"])
+        result = auto.check_and_commit()
+        self.assertEqual(result.status, "skipped")
+        self.assertIn("Merge", result.detail)
+        self.assertFalse(any(call[0] == "commit" for call in fake.calls))
+
+    def test_failing_commit_reports_error_without_raising(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(0, "refs/heads/master\n", ""),
+            STATUS: autocommit.GitResult(0, z(" M data/presets/a.txt"), ""),
+            ("commit",): autocommit.GitResult(1, "", "kein Autor gesetzt"),
+        })
+        result = auto.check_and_commit()
+        self.assertEqual(result.status, "error")
+        self.assertIn("kein Autor gesetzt", result.detail)
+
+    def test_failing_add_reports_error_and_does_not_commit(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(0, "refs/heads/master\n", ""),
+            STATUS: autocommit.GitResult(0, z(" M data/presets/a.txt"), ""),
+            ("add",): autocommit.GitResult(128, "", "Pfad ist ignoriert"),
+        })
+        result = auto.check_and_commit()
+        self.assertEqual(result.status, "error")
+        self.assertFalse(any(call[0] == "commit" for call in fake.calls))
+
+    def test_git_exception_reports_error_without_raising(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitError("git nicht gefunden"),
+        })
+        result = auto.check_and_commit()
+        self.assertEqual(result.status, "error")
+        self.assertIn("git nicht gefunden", result.detail)
+
+    def test_status_is_limited_to_the_watched_patterns(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(0, "refs/heads/master\n", ""),
+            STATUS: autocommit.GitResult(0, "", ""),
+        })
+        auto.check_and_commit()
+        status = next(c for c in fake.calls if c[0] == "status")
+        self.assertIn("--", status)
+        for pattern in autocommit.WATCHED_PATTERNS:
+            self.assertIn(pattern, status)
+
+    def test_paths_are_deduplicated_and_sorted(self):
+        auto, fake = committer({
+            ON_BRANCH: autocommit.GitResult(0, "refs/heads/master\n", ""),
+            STATUS: autocommit.GitResult(
+                0, z(" M data/stripeTrees.txt", "?? data/presets/a.txt"), ""),
+        })
+        result = auto.check_and_commit()
+        self.assertEqual(result.paths,
+                         ["data/presets/a.txt", "data/stripeTrees.txt"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
