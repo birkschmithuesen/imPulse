@@ -37,7 +37,7 @@ class SplitFanout {
     if (candidates <= 0) {
       return 0;
     }
-    int category = WeightedChoice.pick(weights, CATEGORY_COUNT, NEUTRAL_INDEX, random01);
+    int category = WeightedChoice.pick(weights, CATEGORY_COUNT, random01, NEUTRAL_INDEX);
     int take;
     if (category == 2) {
       take = 1;

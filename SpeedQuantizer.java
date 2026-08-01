@@ -35,12 +35,16 @@ class SpeedQuantizer {
   // muss nicht 100 sein und wird normalisiert - ein Operator dreht einzelne
   // Regler, ohne den Rest nachzurechnen.
   //
-  // Die Ziehung selbst steht in WeightedChoice, weil SplitFanout dieselbe
-  // braucht (siehe /net/impulse/split/weight/*). Alle Regeln dort:
-  // Gewicht 0 zieht nie, NaN und negative Werte gelten als 0, der entartete
-  // Fall faellt auf NEUTRAL_INDEX - ein Impuls mit der Referenzgeschwindigkeit
-  // ist immer ein gueltiger Impuls.
+  // Ein Gewicht von 0 wird NIE gewaehlt (auch nicht bei random01 genau auf
+  // seiner Grenze): ein ausgeschalteter Ausreisser darf nicht doch
+  // gelegentlich zu hoeren sein. Negative Gewichte und NaN gelten als 0 statt
+  // die Summe zu verfaelschen.
+  //
+  // Die Schleife selbst steht in WeightedChoice: SplitFanout zieht die Zahl
+  // der Zweige und die Song-Struktur-Ebene ihre Uebergaenge nach genau
+  // derselben Regel, und drei Kopien davon waeren drei Orte, an denen
+  // "Gewicht 0 wird nie gewaehlt" auseinanderlaufen kann.
   static int pick(float[] weights, double random01) {
-    return WeightedChoice.pick(weights, MULTIPLIERS.length, NEUTRAL_INDEX, random01);
+    return WeightedChoice.pick(weights, MULTIPLIERS.length, random01, NEUTRAL_INDEX);
   }
 }

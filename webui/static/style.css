@@ -464,6 +464,119 @@ input[type=color] {
   font-size: 0.7rem;
 }
 
+/* Song-Struktur: die Uebergangsmatrix als Gitter statt als sechzehn Regler
+   untereinander. "Zeile = wo ich bin, Spalte = wo ich hinkoennte" ist nur im
+   Gitter auf einen Blick zu sehen. */
+.song-matrix {
+  display: grid;
+  gap: 0.25rem;
+  align-items: stretch;
+}
+.song-corner {
+  font-size: 0.62rem;
+  color: var(--muted);
+  align-self: end;
+  padding-bottom: 0.2rem;
+  white-space: nowrap;
+}
+.song-head, .song-rowhead {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--tc, var(--muted));
+  letter-spacing: 0.03em;
+}
+.song-head { text-align: center; padding-bottom: 0.2rem; }
+.song-rowhead {
+  display: grid;
+  place-items: center start;
+  padding-right: 0.4rem;
+  white-space: nowrap;
+}
+.song-cell {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.25rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #12151a;
+}
+/* In der Zelle ist die Beschriftung leer -- die steht in der Spalten- und
+   Zeilenkopfzeile. Ohne dieses Ausblenden bliebe je Zelle ein 5,2rem breiter
+   leerer Block und das Gitter waere doppelt so breit wie noetig. */
+.song-cell .mini-row > span:first-child { display: none; }
+.song-cell .mini-row output { flex-basis: 2.2rem; }
+.song-share {
+  font: 0.64rem ui-monospace, "Consolas", monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--tc, var(--muted));
+}
+.song-share.zero { color: var(--muted); opacity: 0.5; }
+
+.song-dwell { display: grid; gap: 0.3rem; }
+.song-dwell-row {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.25rem 0.3rem;
+  border-left: 3px solid var(--tc, var(--line));
+  background: #12151a;
+  border-radius: 0 4px 4px 0;
+}
+.song-dwell-name {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--tc, var(--muted));
+}
+.song-dwell-row .mini-row > span { flex-basis: 1.8rem; }
+
+.song-sub {
+  margin: 0.3rem 0 0;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Die Statuszeile kommt aus data/songStructureState.txt, nicht per OSC --
+   es gibt keinen Rueckkanal ins UI. */
+.song-state {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #12151a;
+}
+.song-state-level {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--tc, var(--line));
+  color: #10131a;
+  font-weight: 700;
+  font-size: 0.72rem;
+}
+.song-state-text, .song-state-idle {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.song-jump { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.song-jump > span { font-size: 0.7rem; color: var(--muted); }
+.song-goto {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--tc, var(--line));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--tc, var(--fg));
+  font: 700 0.7rem inherit;
+  cursor: pointer;
+}
+.song-goto:hover { background: var(--tc, var(--line)); color: #10131a; }
+
 .sc { margin: 0 1rem 1rem; }
 .sc-note {
   padding: 0.45rem 0.8rem;
@@ -481,6 +594,10 @@ input[type=color] {
   .seq, .sc { margin-left: 0.6rem; margin-right: 0.6rem; }
   .seq-tracks { grid-template-columns: 1fr; padding: 0.6rem; }
   .mini-row > span { flex-basis: 4.4rem; }
+  /* Auf dem Telefon bleibt vom 4x4-Gitter nur ein Streifen je Zelle uebrig;
+     die Zahl ist dort wichtiger als der Schieber. */
+  .song-cell .mini-row output { flex-basis: 1.8rem; }
+  .song-dwell-row { grid-template-columns: 4.5rem 1fr 1fr; }
 }
 
 /* ---------------------------------------------------------------------------
