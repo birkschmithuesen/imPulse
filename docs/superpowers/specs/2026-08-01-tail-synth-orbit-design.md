@@ -53,45 +53,46 @@ Zwei Punkte, die den Entwurf bestimmen:
 
 ---
 
-## 2. Die Annahme, die alles trägt — Startpunkt (OFFENE FRAGE)
+## 2. Startpunkt (ENTSCHIEDEN 2026-08-01): Radius wächst von 0
 
-> **Nicht von Birk bestätigt.** Dieses Dokument rechnet durchgehend mit
-> Interpretation (a); die Entscheidung ist aber billig und spät zu treffen,
-> weil Formel, Clamping und Parameter davon unberührt bleiben.
+> **Entschieden:** Variante (d). Birks Wortlaut auf die Rückfrage: "Zweitens
+> ja, sollst du so übernehmen." (Frage 1 aus Abschnitt 11 der Vorfassung.)
 
-Birks Wortlaut: *„Von dem Ort starten, wo er ausgelöst wurde, und dann im
-Kreis wandern."*
+Birks Wortlaut zum Feature selbst: *„Von dem Ort starten, wo er ausgelöst
+wurde, und dann im Kreis wandern."*
 
-**(a) Auslöseort = KREISMITTELPUNKT** (die getroffene Annahme). Der Tail
-rotiert um seinen Entstehungsort. Musikalische Begründung: der Klang gehört
-hörbar zu *diesem* Knoten und dehnt sich von dort aus, statt an einer
-entfernten Position aufzutauchen, die mit dem Anschlag nichts zu tun hat.
+**Auslöseort = Kreismittelpunkt** bleibt die räumliche Grundannahme (Abschnitt
+3). Aber der **Radius selbst wächst von 0 auf `orbitRadius` an**, statt sofort
+auf vollem Radius zu stehen — der Tail startet dadurch exakt am Auslöseort und
+schraubt sich sichtbar/hörbar nach außen:
 
-**Der ehrliche Einwand dagegen:** bei festem Radius sitzt der Tail zum
-Zeitpunkt t=0 **nicht** am Auslöseort, sondern bereits einen Radius daneben
-(bei Startwinkel 0 also `~maxY · R` Meter davor). Das ist ein Sprung im
-Einsatz und widerspricht dem Wortlaut „von dem Ort starten, wo er ausgelöst
-wurde" streng genommen.
+```
+rEff(t) = orbitRadius · radiusRamp(t)
+```
 
-Zwei Varianten, die das auflösen, beide ohne Änderung an der übrigen Rechnung:
+`radiusRamp` ist eine zweite, unabhängige 0→1-Kurve (z. B. `Line.kr(0, 1,
+rampTime)` oder — günstiger, kein zusätzlicher Parameter — die Attack-Flanke
+derselben Hüllkurve, die schon Lautstärke und Winkelgeschwindigkeit steuert;
+Abschnitt 4.1 nennt das dieselbe Kopplungsüberlegung). Kostet **eine Zeile**
+in der Positionsformel (Abschnitt 4.3), ändert nichts an Clamping (Abschnitt
+5) oder Parametrisierung (Abschnitt 7) — beide arbeiten weiter auf dem
+effektiven Radius `rEff`, nicht auf `orbitRadius` direkt.
 
-**(c) Auslöseort liegt AUF dem Kreis**, Mittelpunkt um einen Radius versetzt
-(Richtung z. B. Raummitte oder zufällig). Der Tail startet exakt am
-Auslöseort. Kosten: zwei Zeilen für den versetzten Mittelpunkt.
+Verworfen: **(a) fester Radius ab t=0** (der ursprünglich angenommene Fall —
+hätte den Tail einen vollen Radius neben dem Auslöseort einsetzen lassen,
+siehe die Herleitung unten). **(c) Auslöseort auf dem Kreisrand, Mittelpunkt
+versetzt** (löst denselben Einsatz-Sprung, aber mit einem zusätzlichen,
+unmotivierten Mittelpunkt-Parameter). **(e) Mittelpunkt = Raummitte** (der
+Radius wäre dann keine freie Größe mehr, sondern der Abstand des Knotens zur
+Mitte — Birk hat den Radius aber ausdrücklich als eigenen Parameter verlangt).
 
-**(d) Radius wächst von 0 auf `orbitRadius`** — Mittelpunkt bleibt der
-Auslöseort, der Tail startet exakt dort und schraubt sich heraus. Kosten:
-**eine Zeile** (`rEff = orbitRadius * radiusRamp`, z. B.
-`Line.kr(0, 1, rampTime)` oder die Attack-Flanke der Hüllkurve selbst). Das
-ist die Variante, die Birks Formulierung *und* das Bild „der Klang explodiert
-von seinem Ursprung nach außen" beide wörtlich erfüllt — und die Empfehlung
-dieses Dokuments, falls der Einsatzsprung bei (a) beim Hören stört.
+**Warum der Fall (a) überhaupt ein Problem war, zur Einordnung:** bei festem
+Radius sitzt der Tail zum Zeitpunkt t=0 nicht am Auslöseort, sondern bereits
+einen Radius daneben (bei Startwinkel 0 also `~maxY · orbitRadius` Meter
+davor) — ein Sprung im Einsatz, der dem Wortlaut „von dem Ort starten"
+widersprochen hätte. Die Beispielrechnung in Abschnitt 9 zeigt diesen
+Sprung noch für den unentschiedenen Fall; er entfällt mit `rEff`.
 
-Nicht empfohlen: **(e) Mittelpunkt = Raummitte**, Auslöseort auf dem Kreis
-(eine Lesart von „im Kreis wandern von den Lautsprechern her"). Dann wäre der
-Radius keine freie Größe mehr, sondern der Abstand des Knotens zur Mitte — ein
-Radius-Parameter, wie Birk ihn ausdrücklich verlangt hat, hätte darin keinen
-Platz.
 
 ---
 
@@ -187,9 +188,12 @@ Konvention wie `~testSweep` (`x = sin`, `y = cos`): `θ = 0` zeigt nach **vorn**
 Uhrzeigersinn von oben. `dir = +1` ist damit „rechts herum".
 
 ```
-xn(t) = px0/~maxX + R · sin(θ(t))
-yn(t) = py0/~maxY + R · cos(θ(t))
+xn(t) = px0/~maxX + rEff(t) · sin(θ(t))
+yn(t) = py0/~maxY + rEff(t) · cos(θ(t))
 ```
+
+mit `rEff(t) = orbitRadius · radiusRamp(t)` (Abschnitt 2, ENTSCHIEDEN: Radius
+wächst von 0 an, statt sofort auf vollem Wert zu stehen).
 
 Danach das Clamping (Abschnitt 5), dann zurück in Meter und durch den
 vorhandenen Encoder:
@@ -200,40 +204,46 @@ vorhandenen Encoder:
 
 ---
 
-## 5. Clamping
+## 5. Clamping (ENTSCHIEDEN 2026-08-01: Raute statt Kreis)
 
-### 5.1 Die Regel (Birks Entscheidung)
+> **Entschieden:** exaktes Rauten-Clamping (`|xn| + |yn| ≤ 1`), nicht das
+> einfachere Kreis-Clamping (`r ≤ 1`). Birks Begründung auf Rückfrage:
+> "Sicherer gehen." — nachdem geklärt war, dass Kreis-Clamping vier
+> reproduzierbare Klangartefakte pro Umdrehung riskiert (an den vier
+> Diagonalen zwischen den Lautsprechern, siehe Herleitung unten).
 
-Der Betrag wird gekappt, **der Winkel läuft weiter**:
+### 5.1 Die Regel
+
+Der Betrag wird auf die **Raute** (die konvexe Hülle der vier Boxen, siehe
+5.2-Herleitung) gekappt, **der Winkel läuft weiter**:
 
 ```
-r     = hypot(xn, yn)
-scale = 1 / max(r, 1)
+k     = xn.abs + yn.abs
+scale = 1 / max(k, 1)
 xn'   = xn · scale
 yn'   = yn · scale
 ```
 
-Branchfrei, division­sicher (`max(r, 1) ≥ 1`, also nie durch 0), und
-`r ≤ 1` ⇒ `scale = 1` ⇒ bitgleich unverändert. Die Rotation stoppt nicht: der
-Punkt gleitet über den Teil des Umlaufs, der hinausliefe, am Rand entlang und
-kehrt danach von selbst auf die Kreisbahn zurück.
+Branchfrei, divisionssicher (`max(k, 1) ≥ 1`, also nie durch 0), und
+`k ≤ 1` ⇒ `scale = 1` ⇒ bitgleich unverändert. Die Rotation stoppt nicht: der
+Punkt gleitet über den Teil des Umlaufs, der hinausliefe, am Rand des
+Lautsprecherquadrats entlang und kehrt danach von selbst auf die Kreisbahn
+zurück. Auf den vier Lautsprecher-Achsen (0°/90°/180°/270°) ist diese Regel
+identisch zum einfacheren `r ≤ 1` — der Unterschied liegt ausschließlich auf
+den Diagonalen dazwischen.
 
 **Der Auslöseort selbst wird davon miterfasst** — auch das ist wichtig: eine
-Kante der Grundfläche liegt normiert bei `hypot(7/7, 4/4) = 1,41`, also
+Kante der Grundfläche liegt normiert bei `|7/7| + |4/4| = 2,0`, also weit
 außerhalb. Ein Knoten dort erzeugt einen Orbit, der komplett außerhalb läge;
 die Formel projiziert ihn geschlossen auf den Rand, statt einen Sonderfall zu
 brauchen. Kein Kollaps, keine Stille, kein `if`.
 
 Ausdrücklich **nicht** gewählt: den Radius vorab begrenzen
-(`rEff = min(R, 1 − hypot(xn0, yn0))`). Das klingt sauberer, hat aber genau
+(`rEff = min(R, 1 − (|xn0| + |yn0|))`). Das klingt sauberer, hat aber genau
 dort keine Bewegung mehr, wo sie am deutlichsten wäre — am Rand des Netzes —
-und wird bei einem Auslöseort außerhalb des Einheitskreises negativ.
+und wird bei einem Auslöseort außerhalb der Raute negativ.
 
-### 5.2 Befund: `r ≤ 1` genügt Pan4 auf den Diagonalen nicht
-
-> Das ist eine **Beobachtung am Code**, nicht am Gerät gemessen — nach der
-> Hausregel dieses Projekts („maßgeblich ist die Messung, nicht die
-> Herleitung") gehört sie vor einer Entscheidung per NRT gegengeprüft.
+### 5.2 Herleitung: warum Kreis-Clamping nicht ausreicht
 
 `~toQuad` übergibt Pan4 nicht `xn`/`yn`, sondern die 45-Grad-Rotation
 `(xw − yw, xw + yw)`. Beide Argumente bleiben genau dann in ±1, wenn
@@ -250,32 +260,26 @@ Der Einheits**kreis** ist größer als diese Raute: auf der Diagonale
 (`xn = yn = 0,707`, `r = 1`) ergibt sich `|xn| + |yn| = 1,41`, ein Pan4-Argument
 also 41 % über dem Wertebereich. **`r ≤ 1` allein verhindert das nicht.**
 
-Zwei Beobachtungen, die das einordnen:
+Zwei Beobachtungen, die die Entscheidung eingeordnet haben:
 
 1. **Der laufende Betrieb tut das schon heute.** Ein Knoten bei (5, 3) m ergibt
    `|xn| + |yn| = 1,46` — die Installation läuft damit seit Monaten ohne
    berichteten Ausfall. Das spricht stark dafür, dass Pan4 intern klemmt
-   (verifizierbar per NRT), also **kein Phasen- oder Pegelunfall** droht.
-2. **Für dieses Feature ist die Folge trotzdem spürbar.** Klemmt Pan4 intern,
-   dann *steht* die Quelle in der Ecke des Lautsprecherquadrats still, während
-   der Winkel weiterläuft — die Rotation wird für diesen Teil des Umlaufs
-   **unhörbar**. Bei einer Glocke, die einmalig an einer festen Position
-   klingt, fällt das nicht auf; bei einem Feature, dessen ganzer Zweck die
-   Bewegung ist, schon.
+   (nicht per NRT verifiziert, nur eine Beobachtung), also **kein Phasen- oder
+   Pegelunfall** droht.
+2. **Für dieses Feature ist die Folge trotzdem spürbar gewesen genug, um die
+   sicherere Regel zu wählen.** Klemmt Pan4 intern, dann *steht* die Quelle in
+   der Ecke des Lautsprecherquadrats still, während der Winkel weiterläuft —
+   die Rotation wird für diesen Teil des Umlaufs unhörbar, **viermal pro
+   vollständiger Umdrehung**, jeweils an den vier Diagonalen zwischen den
+   Lautsprechern. Bei einer Glocke, die einmalig an einer festen Position
+   klingt, fiele das nicht auf; bei einem Feature, dessen ganzer Zweck die
+   Bewegung ist, war das der ausschlaggebende Punkt für die Raute.
 
-**Vorschlag (offene Frage 5):** dieselbe Formel, ein Zeichen anders —
-
-```
-k     = xn.abs + yn.abs          statt   hypot(xn, yn)
-scale = 1 / max(k, 1)
-```
-
-Das ist strikt schärfer als Birks Regel (auf den Achsen identisch, auf den
-Diagonalen enger), garantiert Pan4-Argumente in ±1 und lässt den Klang am
-**Rand des Lautsprecherquadrats entlanggleiten**, statt in einer Ecke
-festzuhängen. Da Birk `r ≤ 1` explizit entschieden hat, steht es hier als
-Befund und Empfehlung, nicht als stille Änderung — beide Fassungen sind eine
-Zeile, die Entscheidung ist nach einer Hörprobe zu treffen.
+Die Rautenformel ist strikt schärfer als die Kreisformel (auf den Achsen
+identisch, auf den Diagonalen enger) und garantiert Pan4-Argumente in ±1 ohne
+Ausnahme — der Klang gleitet am **Rand des Lautsprecherquadrats entlang**,
+statt in einer Ecke festzuhängen.
 
 ---
 
@@ -324,18 +328,27 @@ SynthDef(\bellTail, { |freq = 440, amp = 0.2, out = 0,
         orbitSpeed = 0.5,            // Umdrehungen/s bei env = 1
         orbitEnvExp = 1.0,
         orbitDir = 1|                // +1 = im Uhrzeigersinn
-    var sig, env, angle, xn, yn, k, scale;
+    var sig, env, angle, radiusRamp, rEff, xn, yn, k, scale;
 
     // ---- Birks Klangerzeugung: hier bewusst NICHT vorweggenommen ----
     env = EnvGen.kr(Env.perc(0.01, 4.0, curve: -4), doneAction: 2);
     sig = /* ... Tail-Klang ... */ * amp * env;
 
-    // ---- Raeumliche Rotation: diese sechs Zeilen sind das Feature ----
+    // ---- Raeumliche Rotation: diese Zeilen sind das Feature ----
     angle = Sweep.kr(0, orbitDir * orbitSpeed * env.pow(orbitEnvExp)) * 2pi;
-    xn = (x0 / ~maxX) + (orbitRadius * angle.sin);
-    yn = (y0 / ~maxY) + (orbitRadius * angle.cos);
-    k = xn.hypot(yn);                 // bzw. xn.abs + yn.abs, siehe 5.2
-    scale = 1 / max(k, 1);            // Betrag gekappt, Winkel laeuft weiter
+    // radiusRamp: Radius waechst von 0 an, Tail startet exakt am
+    // Ausloeseort (ENTSCHIEDEN, Abschnitt 2) -- hier die Attack-Flanke
+    // derselben Huellkurve wiederverwendet statt eines eigenen Parameters.
+    radiusRamp = EnvGen.kr(Env.new([0, 1], [0.01], \sin));
+    rEff = orbitRadius * radiusRamp;
+    xn = (x0 / ~maxX) + (rEff * angle.sin);
+    yn = (y0 / ~maxY) + (rEff * angle.cos);
+    // Rauten-Clamping (ENTSCHIEDEN, Abschnitt 5): |xn|+|yn| <= 1, nicht
+    // hypot(xn,yn) <= 1 -- sonst bekaeme Pan4 auf den Diagonalen
+    // zwischen den Lautsprechern ein Argument ausserhalb seines
+    // spezifizierten Bereichs.
+    k = xn.abs + yn.abs;
+    scale = 1 / max(k, 1);             // Betrag gekappt, Winkel laeuft weiter
     Out.ar(out, ~toQuad.(sig, xn * scale * ~maxX, yn * scale * ~maxY));
 }).add;
 ```
@@ -456,6 +469,17 @@ sie braucht dann eine Freigabelogik, die es für Node-Treffer heute nicht gibt.
 
 ## 9. Beispielrechnung
 
+> **Hinweis zum entschiedenen Stand:** die folgende Rechnung stammt aus der
+> Vorfassung und illustriert bewusst den *unentschiedenen* Fall (fester
+> Radius ab t=0, Kreis-Clamping) — genau um den Einsatzsprung und den
+> Diagonalen-Effekt sichtbar zu machen, die zur Entscheidung in Abschnitt 2
+> und 5 geführt haben. Mit dem entschiedenen Stand (`rEff` wächst von 0,
+> Rauten-Clamping) verschieben sich die Zahlen: der Einsatzpunkt liegt exakt
+> am Auslöseort (2,00 | −1,00) statt einen Radius davor, und das
+> Rauten-Clamping griffe in der zweiten Tabelle bereits bei kleineren Radien
+> als das Kreis-Clamping. Eine neue Durchrechnung mit den entschiedenen
+> Formeln ist vor der Implementierung sinnvoll, hier bewusst nicht dupliziert.
+
 Trigger bei **px0 = 2 m, py0 = −1 m** (rechts der Mitte, leicht hinten).
 Normiert: `xn0 = 2/7 = 0,2857`, `yn0 = −1/4 = −0,25`.
 Parameter: `orbitRadius = 0,5`, `orbitSpeed = 0,5`, `orbitEnvExp = 1`,
@@ -531,12 +555,12 @@ nicht gemessen ist.
 
 ## 11. Offene Fragen für Birk
 
-1. **Startpunkt — die Annahme dieses Dokuments (Abschnitt 2).** Gerechnet ist
-   durchgehend mit *Auslöseort = Kreismittelpunkt*. Das ist **nicht bestätigt**
-   und hat einen sichtbaren Haken: der Tail setzt dann einen Radius **neben**
-   dem Auslöseort ein, nicht an ihm. Variante (d) — Radius wächst von 0 heraus
-   — erfüllt „von dem Ort starten, wo er ausgelöst wurde" wörtlich, kostet eine
-   Zeile und ändert an Formel, Clamping und Parametern nichts. Welche?
+> **Entschieden (2026-08-01):** Punkt 1 (Startpunkt) und Punkt 5
+> (Clamp-Geometrie) sind geklärt, siehe Abschnitt 2 bzw. 5. Verbleibend:
+> Punkte 2–4.
+
+1. ~~Startpunkt~~ **ENTSCHIEDEN, siehe Abschnitt 2:** Radius wächst von 0 auf
+   `orbitRadius` an, Auslöseort bleibt Kreismittelpunkt.
 2. **Mindestradius?** Empfehlung: **nein**, `radius = 0` soll der Aus-Schalter
    bleiben und bitgleich wie ein statischer Tail klingen — dieselbe Idiomatik
    wie `travelMix = 0`. Ein erzwungenes Minimum nähme genau die Einstellung
@@ -554,13 +578,8 @@ nicht gemessen ist.
    Paar-Buchführung in `~activeBells` plus `~maxPolyphony` vorerst auf 16 statt
    24 — kein eigenes `~tailLimit`. Einverstanden, oder sollen Glocken und
    Tails wie Glocken und Drohnen zwei getrennte Deckel bekommen?
-5. **Clamp-Geometrie: Kreis oder Raute** (Abschnitt 5.2). Entschieden ist
-   `r ≤ 1`. Der Befund ist, dass Pan4 auf den Diagonalen erst bei
-   `|xn| + |yn| ≤ 1` im spezifizierten Bereich liegt und die Bewegung sonst in
-   den Ecken des Lautsprecherquadrats hängenbleiben kann. Beides ist dieselbe
-   Zeile. Vor der Entscheidung wäre eine NRT-Messung fällig — der laufende
-   Betrieb verletzt die Raute heute schon und klingt unauffällig, was für ein
-   internes Klemmen in Pan4 spricht, aber gemessen ist es nicht.
+5. ~~Clamp-Geometrie~~ **ENTSCHIEDEN, siehe Abschnitt 5:** Raute
+   (`|xn| + |yn| ≤ 1`), nicht Kreis (`r ≤ 1`).
 
 ---
 
