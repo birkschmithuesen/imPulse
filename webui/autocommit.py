@@ -341,3 +341,111 @@ class AutoCommitter:
                                 "git commit fehlgeschlagen", paths)
         return self._result("committed",
                             "%d Datei(en) gesichert" % len(paths), paths)
+
+
+# ---------------------------------------------------------------------------
+# Der Takt
+# ---------------------------------------------------------------------------
+
+DEFAULT_INTERVAL_S = 600.0
+# Untergrenze gegen einen Tippfehler in der Konfiguration: ein Intervall von
+# 0 wuerde git in einer Dauerschleife aufrufen.
+MIN_INTERVAL_S = 10.0
+
+
+class AutoCommitScheduler:
+    """Ruft den Committer in festem Takt in einem Hintergrund-Thread.
+
+    Der Thread ist ein Daemon und faengt JEDE Ausnahme: der Webserver darf an
+    dieser Sicherung nie sterben. Ein Fehler wird geloggt und in der
+    Statusanzeige sichtbar, die naechste Runde laeuft trotzdem.
+
+    Gewartet wird ueber ein Event statt time.sleep, damit stop() sofort greift
+    und das Beenden nicht bis zu zehn Minuten haengt.
+    """
+
+    def __init__(self, committer, interval_s=DEFAULT_INTERVAL_S, log=print,
+                 clock=time.time):
+        self.committer = committer
+        self.interval_s = max(float(interval_s), MIN_INTERVAL_S)
+        self._log = log
+        self._clock = clock
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._last: Optional[AutoCommitResult] = None
+        self._last_run_at: Optional[float] = None
+        self._last_commit_at: Optional[float] = None
+
+    # -- Steuerung ----------------------------------------------------------
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._loop,
+                                        name="autocommit", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: Optional[float] = None) -> None:
+        self._stop.set()
+        thread, self._thread = self._thread, None
+        if thread is not None:
+            thread.join(timeout)
+
+    def is_alive(self) -> bool:
+        thread = self._thread
+        return bool(thread and thread.is_alive())
+
+    # -- Ablauf -------------------------------------------------------------
+
+    def _loop(self) -> None:
+        # Erst warten, dann arbeiten: beim Hochfahren des Servers ist der
+        # Arbeitsbaum gerade der, den der Operator selbst hinterlassen hat --
+        # ein Commit in der ersten Sekunde ueberrascht.
+        while not self._stop.wait(self.interval_s):
+            self.run_once()
+
+    def run_once(self) -> AutoCommitResult:
+        try:
+            result = self.committer.check_and_commit()
+        except Exception as exc:  # noqa: BLE001 -- der Committer faengt selbst,
+            # dies ist das zweite Netz fuer einen Committer, der es nicht tut.
+            result = AutoCommitResult("error", "unerwartet: %r" % (exc,), [],
+                                      self._clock())
+        with self._lock:
+            self._last = result
+            self._last_run_at = result.at
+            if result.status == "committed":
+                self._last_commit_at = result.at
+        if result.status == "committed":
+            self._log("[autocommit] %s: %s"
+                      % (result.detail, ", ".join(result.paths)))
+        elif result.status in ("skipped", "error"):
+            self._log("[autocommit] %s -- %s" % (result.status, result.detail))
+        return result
+
+    def status(self) -> dict:
+        with self._lock:
+            last = self._last
+            return {
+                "enabled": True,
+                "intervalSeconds": self.interval_s,
+                "lastRunAt": self._last_run_at,
+                "lastCommitAt": self._last_commit_at,
+                "lastStatus": last.status if last else None,
+                "lastDetail": last.detail if last else "",
+                "lastPaths": list(last.paths) if last else [],
+            }
+
+
+# Derselbe Satz Schluessel wie AutoCommitScheduler.status(), damit das UI nur
+# einen Fall kennt: ausgeschaltet ist ein Zustand, kein fehlendes Feld.
+DISABLED_STATUS = {
+    "enabled": False,
+    "intervalSeconds": None,
+    "lastRunAt": None,
+    "lastCommitAt": None,
+    "lastStatus": None,
+    "lastDetail": "",
+    "lastPaths": [],
+}

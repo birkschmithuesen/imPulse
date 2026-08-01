@@ -303,5 +303,104 @@ class AutoCommitterTest(unittest.TestCase):
                          ["data/presets/a.txt", "data/stripeTrees.txt"])
 
 
+class SchedulerTest(unittest.TestCase):
+    class Boom:
+        def check_and_commit(self):
+            raise RuntimeError("kaputt")
+
+    class Counting:
+        def __init__(self):
+            self.runs = 0
+
+        def check_and_commit(self):
+            self.runs += 1
+            return autocommit.AutoCommitResult("clean", "nichts", [], 1.0)
+
+    def test_exception_does_not_escape(self):
+        lines = []
+        sched = autocommit.AutoCommitScheduler(self.Boom(), interval_s=10,
+                                               log=lines.append)
+        sched.run_once()  # darf nicht werfen
+        self.assertEqual(sched.status()["lastStatus"], "error")
+        self.assertTrue(any("kaputt" in line for line in lines))
+
+    def test_status_before_the_first_round(self):
+        sched = autocommit.AutoCommitScheduler(self.Counting(), interval_s=10,
+                                               log=lambda _: None)
+        state = sched.status()
+        self.assertTrue(state["enabled"])
+        self.assertEqual(state["intervalSeconds"], 10)
+        self.assertIsNone(state["lastRunAt"])
+        self.assertIsNone(state["lastCommitAt"])
+
+    def test_status_after_a_commit(self):
+        class Committing:
+            def check_and_commit(self):
+                return autocommit.AutoCommitResult(
+                    "committed", "1 Datei(en) gesichert",
+                    ["data/presets/a.txt"], 1234.0)
+
+        sched = autocommit.AutoCommitScheduler(Committing(), interval_s=10,
+                                               log=lambda _: None)
+        sched.run_once()
+        state = sched.status()
+        self.assertEqual(state["lastStatus"], "committed")
+        self.assertEqual(state["lastCommitAt"], 1234.0)
+        self.assertEqual(state["lastPaths"], ["data/presets/a.txt"])
+
+    def test_clean_round_does_not_move_the_commit_time(self):
+        sched = autocommit.AutoCommitScheduler(self.Counting(), interval_s=10,
+                                               log=lambda _: None)
+        sched.run_once()
+        self.assertIsNone(sched.status()["lastCommitAt"])
+        self.assertIsNotNone(sched.status()["lastRunAt"])
+
+    def test_interval_has_a_floor(self):
+        sched = autocommit.AutoCommitScheduler(self.Counting(), interval_s=0.1,
+                                               log=lambda _: None)
+        self.assertEqual(sched.status()["intervalSeconds"],
+                         autocommit.MIN_INTERVAL_S)
+
+    def test_disabled_status_has_the_same_keys(self):
+        sched = autocommit.AutoCommitScheduler(self.Counting(), interval_s=10,
+                                               log=lambda _: None)
+        self.assertEqual(set(autocommit.DISABLED_STATUS),
+                         set(sched.status()))
+        self.assertFalse(autocommit.DISABLED_STATUS["enabled"])
+
+    def test_first_round_does_not_run_immediately(self):
+        """Beim Hochfahren ist der Arbeitsbaum der, den der Operator gerade
+        hinterlassen hat -- ein Commit in der ersten Sekunde ueberrascht."""
+        counting = self.Counting()
+        sched = autocommit.AutoCommitScheduler(counting, interval_s=600,
+                                               log=lambda _: None)
+        sched.start()
+        self.addCleanup(sched.stop, 2.0)
+        time.sleep(0.2)
+        self.assertEqual(counting.runs, 0)
+        self.assertTrue(sched.is_alive())
+
+    def test_stop_returns_long_before_the_interval(self):
+        """Gewartet wird ueber ein Event, nicht ueber sleep -- sonst haenge
+        das Beenden des Servers bis zu zehn Minuten."""
+        sched = autocommit.AutoCommitScheduler(self.Counting(),
+                                               interval_s=600,
+                                               log=lambda _: None)
+        sched.start()
+        started = time.time()
+        sched.stop(timeout=5.0)
+        self.assertLess(time.time() - started, 2.0)
+        self.assertFalse(sched.is_alive())
+
+    def test_start_is_idempotent(self):
+        sched = autocommit.AutoCommitScheduler(self.Counting(), interval_s=600,
+                                               log=lambda _: None)
+        sched.start()
+        self.addCleanup(sched.stop, 2.0)
+        first = sched._thread
+        sched.start()
+        self.assertIs(sched._thread, first)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
