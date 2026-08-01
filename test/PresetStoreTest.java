@@ -123,19 +123,48 @@ public class PresetStoreTest {
     FakeParameter speed = new FakeParameter("int", "/net/impulse/speed", 160f, 1f, 1500f);
     FakeParameter schedulerOn =
         new FakeParameter("int", "/preset/scheduler/enabled", 1f, 0f, 1f);
+    // Die Song-Struktur-Ebene ist ebenfalls Transport und nicht Inhalt: ein
+    // Preset, das die Uebergangsmatrix mitbraechte, koennte die Dramaturgie
+    // beim naechsten Wechsel umschreiben - und das Preset, das sie geaendert
+    // hat, waere danach nicht mehr wiederzufinden.
+    FakeParameter songMatrix =
+        new FakeParameter("float", "/songStructure/matrix/ruhig/mittel", 40f, 0f, 100f);
     targets.add(level);
     targets.add(speed);
     targets.add(schedulerOn);
+    targets.add(songMatrix);
 
     List<String[]> snapshot = PresetStore.snapshot(targets);
-    Check.eq("Scheduler-Parameter nicht im Snapshot", 2, snapshot.size());
+    Check.eq("weder Scheduler- noch Song-Struktur-Parameter im Snapshot",
+        2, snapshot.size());
     boolean schedulerFound = false;
+    boolean songFound = false;
     for (int i = 0; i < snapshot.size(); i++) {
       if (snapshot.get(i)[PresetStore.COL_ADDRESS].startsWith("/preset/scheduler/")) {
         schedulerFound = true;
       }
+      if (snapshot.get(i)[PresetStore.COL_ADDRESS].startsWith("/songStructure/")) {
+        songFound = true;
+      }
     }
     Check.that("keine Scheduler-Adresse im Snapshot", !schedulerFound);
+    Check.that("keine Song-Struktur-Adresse im Snapshot", !songFound);
+
+    // Der Ausschluss geht ueber einen PRAEFIX, weil die Song-Struktur-Ebene
+    // 25 Adressen hat - sie einzeln aufzulisten hiesse, dass ein spaeter
+    // ergaenzter Regler still doch in die Presets wandert.
+    Check.that("Scheduler-Adresse ausgeschlossen",
+        PresetStore.isExcluded("/preset/scheduler/interval"));
+    Check.that("Song-Struktur-Adresse ausgeschlossen",
+        PresetStore.isExcluded("/songStructure/dwell/ruhig/min"));
+    Check.that("auch eine spaeter ergaenzte Song-Struktur-Adresse",
+        PresetStore.isExcluded("/songStructure/gibtsnochnicht"));
+    // Der Praefix endet auf '/': eine Adresse, die nur so anfaengt, aber ein
+    // eigener Parameterbaum waere, bleibt drin.
+    Check.that("ein aehnlicher Adressbaum bleibt drin",
+        !PresetStore.isExcluded("/songStructureFoo/bar"));
+    Check.that("ein normaler Parameter bleibt drin",
+        !PresetStore.isExcluded("/net/impulse/speed"));
 
     // ---- Anwenden ----
     List<String[]> toApply = new ArrayList<String[]>();
@@ -192,6 +221,24 @@ public class PresetStoreTest {
         incompleteReport.missing.get(0));
     Check.that("Scheduler-Adresse gilt nicht als fehlend",
         incompleteReport.missing.indexOf("/preset/scheduler/enabled") < 0);
+    Check.that("Song-Struktur-Adresse gilt nicht als fehlend",
+        incompleteReport.missing.indexOf("/songStructure/matrix/ruhig/mittel") < 0);
+
+    // Ein von Hand aus remoteSettings.txt kopiertes Preset bringt die
+    // Song-Struktur-Adressen mit. Die duerfen weder wirken noch als
+    // unbekannt gemeldet werden - sonst stuenden bei jedem Laden 25
+    // Warnungen auf der Konsole.
+    List<String[]> withSong = new ArrayList<String[]>();
+    withSong.add(new String[] { "float", "/songStructure/matrix/ruhig/mittel",
+        "d", "99", "0", "100" });
+    withSong.add(new String[] { "int", "/songStructure/enabled", "d", "1", "0", "1" });
+    withSong.add(new String[] { "float", "/master/level", "d", "0.31", "0", "1" });
+    float songBefore = songMatrix.value;
+    PresetApplyReport songReport = PresetStore.apply(withSong, targets);
+    Check.eq("nur der echte Parameter gezaehlt", 1, songReport.applied);
+    Check.eq("Song-Struktur nicht als unbekannt gemeldet",
+        0, songReport.unknown.size());
+    Check.near("und der Wert bleibt unangetastet", songBefore, songMatrix.value, 1e-6);
 
     // Unlesbarer Wert.
     List<String[]> broken = new ArrayList<String[]>();
