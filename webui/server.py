@@ -1461,7 +1461,7 @@ def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Para
 
 
 def create_app(settings_path: str, osc_host: str, osc_port: int,
-               presets_path: str):
+               presets_path: str, palette_path: Optional[str] = None):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
@@ -1478,6 +1478,18 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
     app.config["IMPULSE_STORE"] = store
     app.config["IMPULSE_SENDER"] = sender
     app.config["IMPULSE_SC_SENDER"] = sc_sender
+
+    # Vorgabe erst hier aufloesen, nicht in der Signatur: sie haengt am
+    # settings_path, ein Default-Argument wuerde einmal beim Import
+    # ausgewertet.
+    if palette_path is None:
+        palette_path = default_palette_path(settings_path)
+    app.config["IMPULSE_PALETTE_PATH"] = palette_path
+
+    def palette_payload() -> Dict[str, Any]:
+        entries, warnings = load_palette(palette_path)
+        return {"ok": True, "entries": entries, "path": palette_path,
+                "warnings": warnings}
 
     def apply_value(param: Parameter, value: float) -> Applied:
         coerced = param.coerce(value)
@@ -1512,6 +1524,7 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                     ],
                 },
                 "presets": preset_list_payload(),
+                "palette": palette_payload(),
             }),
         )
 
@@ -1646,6 +1659,35 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         payload.update({"name": name, "overwritten": existed})
         return jsonify(payload)
 
+    @app.route("/api/palette")
+    def api_palette():
+        return jsonify(palette_payload())
+
+    @app.route("/api/palette", methods=["POST"])
+    def api_palette_save():
+        """Die komplette Palette ersetzen.
+
+        Voll-Liste statt Hinzufuegen/Entfernen einzelner Eintraege: die
+        Reihenfolge haelt ohnehin der Browser, und zwei Endpoints auf
+        derselben Datei waeren zwei Wege, die auseinanderlaufen koennen.
+        Preis: zwei gleichzeitig offene Browser ueberschreiben sich
+        gegenseitig. Bei einer Installation mit einem Operator ist das der
+        richtige Tausch -- im README steht es trotzdem.
+
+        Anders als /api/preset/save geht hier kein OSC raus: die Palette ist
+        reine UI-Sache, imPulse kennt sie nicht.
+        """
+        body = request.get_json(silent=True) or {}
+        entries, problem = validate_palette(body.get("entries"))
+        if problem is not None:
+            return jsonify({"ok": False, "error": problem}), 400
+        try:
+            save_palette(palette_path, entries)
+        except OSError as exc:
+            return jsonify({"ok": False,
+                            "error": "Palette nicht schreibbar: %s" % exc}), 500
+        return jsonify(palette_payload())
+
     return app
 
 
@@ -1659,6 +1701,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=os.environ.get("IMPULSE_PRESETS"),
                         help="Ordner mit den Preset-Dateien "
                              "(Vorgabe: presets/ neben --settings)")
+    parser.add_argument("--palette",
+                        default=os.environ.get("IMPULSE_PALETTE"),
+                        help="Datei mit der Farbpalette "
+                             "(Vorgabe: colorPalettes.txt neben --settings)")
     parser.add_argument("--osc-host",
                         default=os.environ.get("IMPULSE_OSC_HOST", DEFAULT_OSC_HOST),
                         help="Ziel-Host fuer OSC (Vorgabe: %(default)s)")
@@ -1678,10 +1724,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     settings_path = os.path.abspath(args.settings)
     presets_path = (os.path.abspath(args.presets) if args.presets
                     else default_presets_path(settings_path))
-    app = create_app(settings_path, args.osc_host, args.osc_port, presets_path)
+    palette_path = (os.path.abspath(args.palette) if args.palette
+                    else default_palette_path(settings_path))
+    app = create_app(settings_path, args.osc_host, args.osc_port, presets_path,
+                     palette_path)
 
     print("[webui] remoteSettings: %s" % settings_path)
     print("[webui] Presets:        %s" % presets_path)
+    print("[webui] Palette:        %s" % palette_path)
     print("[webui] OSC-Ziel:       %s:%d" % (args.osc_host, args.osc_port))
     print("[webui] HTTP:           http://%s:%d" % (args.host, args.port))
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

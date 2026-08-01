@@ -1222,5 +1222,101 @@ class PaletteFileTest(unittest.TestCase):
                 self.assertLessEqual(entry[key], 1.0)
 
 
+class PaletteEndpointTest(unittest.TestCase):
+    """GET/POST /api/palette.
+
+    Braucht Flask und wird sonst uebersprungen -- dasselbe Muster wie beim
+    python-osc-Gegentest weiter oben. Die Suite selbst bleibt ohne
+    Fremdabhaengigkeiten lauffaehig.
+    """
+
+    def setUp(self):
+        if server.Flask is None:
+            self.skipTest("Flask nicht installiert")
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.settings = os.path.join(self.directory, "remoteSettings.txt")
+        with open(self.settings, "w", encoding="utf-8") as handle:
+            handle.write("float\t/net/impulse/color/r\tx\t1\t0\t1\n")
+        self.palette = os.path.join(self.directory, server.PALETTE_FILENAME)
+        app = server.create_app(self.settings, "127.0.0.1", 9999,
+                                os.path.join(self.directory, "presets"),
+                                self.palette)
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_get_on_a_missing_file_is_an_empty_palette(self):
+        payload = self.client.get("/api/palette").get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["entries"], [])
+        self.assertEqual(payload["warnings"], [])
+
+    def test_post_writes_the_file_and_get_reads_it_back(self):
+        body = {"entries": [{"name": "warm", "hue": 0.08, "sat": 0.9,
+                             "bright": 1.0}]}
+        response = self.client.post("/api/palette", json=body)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(os.path.exists(self.palette))
+        entries = self.client.get("/api/palette").get_json()["entries"]
+        self.assertEqual(entries, body["entries"])
+
+    def test_post_answers_with_the_stored_palette(self):
+        # Der Browser uebernimmt die Antwort als neuen Zustand -- sie muss
+        # also das enthalten, was wirklich in der Datei steht.
+        payload = self.client.post("/api/palette", json={"entries": [
+            {"name": " warm ", "hue": 5, "sat": 0.9, "bright": 1.0}]}).get_json()
+        self.assertEqual(payload["entries"],
+                         [{"name": "warm", "hue": 1.0, "sat": 0.9,
+                           "bright": 1.0}])
+
+    def test_post_replaces_instead_of_appending(self):
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "a", "hue": 0.1, "sat": 1, "bright": 1},
+            {"name": "b", "hue": 0.2, "sat": 1, "bright": 1}]})
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "b", "hue": 0.2, "sat": 1, "bright": 1}]})
+        entries = self.client.get("/api/palette").get_json()["entries"]
+        self.assertEqual([e["name"] for e in entries], ["b"])
+
+    def test_post_with_an_empty_list_clears_the_palette(self):
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "a", "hue": 0.1, "sat": 1, "bright": 1}]})
+        response = self.client.post("/api/palette", json={"entries": []})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.get("/api/palette").get_json()["entries"],
+                         [])
+
+    def test_post_with_an_invalid_entry_is_rejected_and_changes_nothing(self):
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "a", "hue": 0.1, "sat": 1, "bright": 1}]})
+        response = self.client.post("/api/palette", json={"entries": [
+            {"name": "", "hue": 0.1, "sat": 1, "bright": 1}]})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.get_json()["ok"])
+        entries = self.client.get("/api/palette").get_json()["entries"]
+        self.assertEqual([e["name"] for e in entries], ["a"])
+
+    def test_post_without_a_list_is_rejected(self):
+        response = self.client.post("/api/palette", json={"entries": "warm"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_without_a_body_is_rejected(self):
+        response = self.client.post("/api/palette")
+        self.assertEqual(response.status_code, 400)
+
+    def test_index_carries_the_palette_in_the_bootstrap(self):
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0}]})
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("palette", html)
+        self.assertIn("warm", html)
+
+    def test_default_palette_path_when_none_is_given(self):
+        app = server.create_app(self.settings, "127.0.0.1", 9999,
+                                os.path.join(self.directory, "presets"))
+        self.assertEqual(app.config["IMPULSE_PALETTE_PATH"],
+                         server.default_palette_path(self.settings))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
