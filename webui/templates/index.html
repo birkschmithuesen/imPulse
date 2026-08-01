@@ -38,6 +38,32 @@
     </div>
   </section>
 
+  <!-- Melodie-Zuordnung. Steht wie die Presets UEBER der Tab-Leiste: sie
+       gilt fuer alles, und ein Knopf, der nur auf einem Tab sichtbar waere,
+       waere eine Falle. Bleibt versteckt, solange der Server keine
+       melody-Daten liefert (aelterer imPulse-Stand ohne /net/melody/*). -->
+  <section class="melody" id="melody" hidden>
+    <h2>Melodie-Zuordnung</h2>
+    <p class="melody-note">
+      Diese Werte wirken erst beim Neuberechnen &ndash; ein Verstellen allein
+      aendert nichts. Das Neuberechnen gibt <strong>allen Knoten neue
+      Toene</strong>, ueberschreibt <code>data/nodeMelody_&lt;modus&gt;.txt</code>
+      (auch von Hand korrigierte Zeilen) und laesst sich nicht zuruecknehmen.
+      Ein weiches Ueberblenden gibt es nicht.
+    </p>
+    <div class="melody-fields" id="melodyFields"></div>
+    <div class="melody-actions">
+      <label class="melody-confirm">
+        <input type="checkbox" id="melodyConfirm">
+        Ja, alle Knoten neu vertonen
+      </label>
+      <button type="button" id="melodyRecompute" disabled
+              title="Zuordnung neu berechnen und schreiben (/net/melody/recompute)">
+        Zuordnung neu berechnen
+      </button>
+    </div>
+  </section>
+
   <!-- Fuenf Themen-Tabs. Die Zuordnung kommt vom Server (TABS in
        server.py); app.js baut ALLE Panels und schaltet nur die
        Sichtbarkeit um, damit Preset-Laden und der applied/echoed-Ruecklauf

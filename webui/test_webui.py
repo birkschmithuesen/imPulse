@@ -779,6 +779,10 @@ class TabLayoutTest(unittest.TestCase):
             "int\t/net/sequencer/enabled\tx\t0\t0\t1",
             "int\t/net/impulse/speedQuantize/enabled\tx\t0\t0\t1",
             "float\t/net/impulse/speedQuantize/jitter\tx\t0\t0\t1",
+            "int\t/net/melody/mode\tx\t4\t0\t7",
+            "int\t/net/melody/startNode\tx\t0\t0\t91",
+            "int\t/net/melody/rootMidiNote\tx\t45\t24\t84",
+            "int\t/net/melody/numOctaves\tx\t3\t1\t6",
         ]
         for i in range(server.SEQUENCER_TRACK_COUNT):
             base = "/net/sequencer/track%d/" % i
@@ -852,17 +856,31 @@ class TabLayoutTest(unittest.TestCase):
                                      "%s steht zweimal im Tab %s"
                                      % (control.get("address"), tab["id"]))
 
-    def test_sc_params_are_split_between_mixer_and_sound(self):
+    def test_every_sc_param_lands_in_exactly_one_tab(self):
+        """Dieselbe Regel wie fuer die imPulse-Regler: genau ein Tab, kein
+        Parameter doppelt und keiner unsichtbar."""
         tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        seen = []
+        for tab in tabs.values():
+            seen.extend(p["name"] for p in tab["scParams"])
+        self.assertEqual(len(seen), len(set(seen)), "SC-Parameter doppelt vergeben")
+        self.assertEqual(set(seen), {p["name"] for p in server.SC_PARAMS})
+        # Die inhaltliche Verteilung, damit eine versehentliche Umsortierung
+        # auffaellt.
         mixer = {p["name"] for p in tabs["mixer"]["scParams"]}
         sound = {p["name"] for p in tabs["sound"]["scParams"]}
+        noten = {p["name"] for p in tabs["noten"]["scParams"]}
         self.assertIn("masterVolume", mixer)
         self.assertIn("bellVolume", mixer)
         self.assertIn("droneVolume", mixer)
         self.assertIn("travelMix", sound)
         self.assertIn("brightness", sound)
-        self.assertEqual(mixer & sound, set(), "SC-Parameter doppelt vergeben")
-        self.assertEqual(mixer | sound, {p["name"] for p in server.SC_PARAMS})
+        self.assertIn("treeBiasAmount", sound)
+        # Die Melodie-Parameter gehoeren zum Notenverhalten, nicht zum
+        # Klangdesign - sie bestimmen, WELCHE Note ein Knoten bekommt.
+        self.assertIn("melodyMode", noten)
+        self.assertIn("melodyRootMidiNote", noten)
+        self.assertIn("melodyNumOctaves", noten)
 
     def test_curated_sc_params_come_first_and_are_flagged(self):
         tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
@@ -904,8 +922,11 @@ class ScParamTest(unittest.TestCase):
 
     def test_groups_keep_insertion_order(self):
         groups = server.sc_param_groups()
+        # Die Reihenfolge ist die Reihenfolge des ersten Auftretens in
+        # SC_PARAMS, nicht alphabetisch - deshalb steht "Melodie" zwischen
+        # "Glocke" und "Travel-Sound".
         self.assertEqual([g["title"] for g in groups],
-                         ["Master", "Glocke", "Travel-Sound"])
+                         ["Master", "Glocke", "Melodie", "Travel-Sound"])
         for group in groups:
             for param in group["params"]:
                 self.assertTrue(param["address"].startswith("/klangnetz/param/"))
@@ -936,6 +957,185 @@ class ScParamTest(unittest.TestCase):
         in_table = {p["name"] for p in server.SC_PARAMS}
         self.assertEqual(in_scd - in_table, set(),
                          "in der .scd registriert, fehlt aber in SC_PARAMS")
+
+
+class MarkupWiringTest(unittest.TestCase):
+    """Jedes getElementById() in app.js braucht ein id= in index.html.
+
+    Fuer die UI-Schicht gibt es bewusst kein Testgeruest -- webui/ soll ohne
+    Node/npm auskommen, und ein jsdom-Test wuerde genau das einfuehren. Diese
+    eine Pruefung geht trotzdem ohne Fremdabhaengigkeit und faengt den
+    haeufigsten Verdrahtungsfehler: ein Handle, das null ist, weil das Markup
+    nicht mitgezogen wurde. Das faellt sonst erst im Browser auf, und dann als
+    stumme Seite -- app.js haengt seine Listener beim Laden an.
+    """
+
+    def _read(self, name):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_every_element_id_used_by_the_script_exists_in_the_markup(self):
+        js = self._read(os.path.join("static", "app.js"))
+        html = self._read(os.path.join("templates", "index.html"))
+        wanted = set(re.findall(r"getElementById\('([^']+)'\)", js))
+        present = set(re.findall(r'id="([^"]+)"', html))
+        self.assertTrue(wanted, "keine getElementById-Aufrufe gefunden")
+        self.assertEqual(wanted - present, set(),
+                         "app.js greift auf IDs zu, die es im Markup nicht gibt")
+
+    def test_the_melody_section_is_wired(self):
+        js = self._read(os.path.join("static", "app.js"))
+        html = self._read(os.path.join("templates", "index.html"))
+        for element_id in ("melody", "melodyFields", "melodyConfirm",
+                           "melodyRecompute"):
+            self.assertIn('id="%s"' % element_id, html)
+            self.assertIn("getElementById('%s')" % element_id, js)
+        # Die Sektion startet versteckt und wird erst sichtbar, wenn der
+        # Server melody-Daten liefert.
+        self.assertIn('id="melody" hidden', html)
+        # Der Knopf ist ohne Bestaetigung gesperrt -- das reine Verstellen
+        # eines Feldes darf die Neuberechnung nicht ausloesen.
+        self.assertIn('id="melodyRecompute" disabled', html)
+        self.assertIn("/api/melody/recompute", js)
+
+
+class MelodyTest(unittest.TestCase):
+    """Die Melodie-Sektion: vier Werte plus ein Knopf, und genau EIN Ort im UI."""
+
+    LINES = [
+        "int\t/net/melody/mode\tx\t4\t0\t7",
+        "int\t/net/melody/startNode\tx\t7\t0\t91",
+        "int\t/net/melody/rootMidiNote\tx\t45\t24\t84",
+        "int\t/net/melody/numOctaves\tx\t3\t1\t6",
+        "int\t/net/impulse/speed\tx\t16\t1\t1500",
+    ]
+
+    def _store(self, lines):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, "remoteSettings.txt")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        store = ParameterStore(path=path)
+        store.refresh(force=True)
+        return store
+
+    def test_all_four_fields_show_up_in_the_briefed_order(self):
+        melody = server.build_melody(self._store(self.LINES).by_address)
+        self.assertIsNotNone(melody)
+        self.assertEqual([f["key"] for f in melody["fields"]],
+                         ["mode", "startNode", "rootMidiNote", "numOctaves"])
+        self.assertEqual([f["address"] for f in melody["fields"]],
+                         ["/net/melody/mode", "/net/melody/startNode",
+                          "/net/melody/rootMidiNote", "/net/melody/numOctaves"])
+
+    def test_every_field_carries_label_hint_and_range(self):
+        melody = server.build_melody(self._store(self.LINES).by_address)
+        for field in melody["fields"]:
+            self.assertTrue(field["label"])
+            self.assertTrue(field["hint"])
+            self.assertIn("min", field)
+            self.assertIn("max", field)
+
+    def test_start_node_range_comes_from_the_dump(self):
+        """Die Obergrenze haengt an der Kreuzungszahl und aendert sich nach
+        jeder Kalibriersitzung -- sie darf nirgends fest verdrahtet sein."""
+        lines = [line.replace("\t0\t91", "\t0\t41") for line in self.LINES]
+        melody = server.build_melody(self._store(lines).by_address)
+        start = next(f for f in melody["fields"] if f["key"] == "startNode")
+        self.assertEqual(start["max"], 41)
+
+    def test_missing_addresses_hide_the_section(self):
+        """Ein aelterer imPulse-Stand ohne /net/melody/* -- die Sektion bleibt
+        weg statt leer dazustehen."""
+        store = self._store(["int\t/net/impulse/speed\tx\t16\t1\t1500"])
+        self.assertIsNone(server.build_melody(store.by_address))
+        self.assertEqual(server.melody_addresses(None), set())
+
+    def test_partial_dump_keeps_what_it_has(self):
+        store = self._store(["int\t/net/melody/mode\tx\t4\t0\t7",
+                             "int\t/net/impulse/speed\tx\t16\t1\t1500"])
+        melody = server.build_melody(store.by_address)
+        self.assertEqual([f["key"] for f in melody["fields"]], ["mode"])
+
+    def test_mode_names_match_the_java_table(self):
+        """Drei Kopien der Modusliste: MelodyModes.ALL, ~melodyModes in der
+        .scd und diese Beschriftung. Die Laenge muss stimmen, sonst zeigt das
+        Dropdown weniger Modi, als es gibt."""
+        self.assertEqual(len(server.MELODY_MODE_NAMES), 8)
+        self.assertEqual(len(set(server.MELODY_MODE_NAMES)), 8)
+        # Index 4 ist Phrygisch -- der Default auf allen drei Seiten.
+        self.assertEqual(server.MELODY_MODE_NAMES[4], "Phrygisch")
+
+    def test_mode_names_cover_the_dumps_range(self):
+        melody = server.build_melody(self._store(self.LINES).by_address)
+        mode = next(f for f in melody["fields"] if f["key"] == "mode")
+        self.assertEqual(len(melody["modeNames"]), mode["max"] - mode["min"] + 1)
+
+    def test_java_mode_labels_line_up_with_the_names(self):
+        """Gegenprobe an MelodyModes.java: gleiche Anzahl, gleiche
+        Reihenfolge. Driftet eine der beiden, zeigt das Dropdown den falschen
+        Namen zu einer Modus-Nummer -- und der Operator berechnet einen
+        anderen Modus, als er ausgewaehlt hat."""
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "MelodyModes.java")
+        if not os.path.exists(path):
+            self.skipTest("MelodyModes.java nicht gefunden")
+        with open(path, "r", encoding="utf-8") as handle:
+            java = handle.read()
+        found = re.findall(r'new MelodyMode\("([a-z0-9_-]+)",\s*"([^"]+)"', java)
+        self.assertEqual(len(found), len(server.MELODY_MODE_NAMES))
+        for (_key, name), label in zip(found, server.MELODY_MODE_NAMES):
+            self.assertEqual(name, label)
+
+    def test_addresses_are_taken_out_of_the_generic_rendering(self):
+        """Sonst stuende jeder Melodie-Regler zweimal auf der Seite: einmal in
+        der Sektion mit Bestaetigung und einmal als generischer Schieber, der
+        so aussieht, als taete er etwas."""
+        store = self._store(self.LINES)
+        snapshot = store.snapshot()
+        self.assertIsNotNone(snapshot["melody"])
+        taken = server.melody_addresses(snapshot["melody"])
+        self.assertEqual(len(taken), 4)
+        for group in snapshot["groups"]:
+            for control in group["controls"]:
+                self.assertNotIn(control.get("address"), taken)
+
+    def test_no_melody_address_survives_into_any_tab(self):
+        store = self._store(self.LINES)
+        snapshot = store.snapshot()
+        for tab in snapshot["tabs"]:
+            for control in tab["primary"]:
+                self.assertFalse(str(control.get("address", ""))
+                                 .startswith("/net/melody/"))
+            for group in tab["groups"]:
+                for control in group["controls"]:
+                    self.assertFalse(str(control.get("address", ""))
+                                     .startswith("/net/melody/"))
+
+    def test_recompute_address_is_not_a_parameter(self):
+        """/net/melody/recompute ist ein KOMMANDO. Stuende es zwischen den
+        Feldern, waere es ein Regler, dessen Bewegung die ganze Zuordnung neu
+        wuerfelt."""
+        melody = server.build_melody(self._store(self.LINES).by_address)
+        self.assertEqual(melody["recomputeAddress"], "/net/melody/recompute")
+        addresses = {f["address"] for f in melody["fields"]}
+        self.assertNotIn("/net/melody/recompute", addresses)
+
+    def test_melody_parameters_are_excluded_from_presets_in_java(self):
+        """Transport, nicht Inhalt -- die Java-Seite muss sie ausschliessen,
+        sonst setzte ein Preset-Wechsel sie mit und die naechste
+        Neuberechnung liefe mit fremden Werten."""
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "PresetStore.java")
+        if not os.path.exists(path):
+            self.skipTest("PresetStore.java nicht gefunden")
+        with open(path, "r", encoding="utf-8") as handle:
+            java = handle.read()
+        excluded = java.split("EXCLUDED = {")[1].split("};")[0]
+        for key, _label, _hint in server.MELODY_FIELDS:
+            self.assertIn('"/net/melody/%s"' % key, excluded)
 
 
 if __name__ == "__main__":

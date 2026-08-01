@@ -82,7 +82,21 @@ trap 'rm -rf "$WORK"' EXIT
 #
 # Der Ordnername der Kopie MUSS wie die Haupt-.pde heissen, das ist
 # Processing-Konvention.
-SKETCH_NAME="$(basename "$SKETCH")"
+#
+# Der Name kommt aus der GROESSTEN .pde des Ordners, nicht aus dessen
+# Namen: ein git worktree heisst typischerweise anders als der Sketch
+# (imPulse-melody-impl statt imPulse, siehe CLAUDE.md zur Worktree-Nutzung),
+# und mit dem Ordnernamen scheiterte die Pruefung dort mit "Not a valid
+# sketch folder" - ausgerechnet dort, wo entwickelt wird. Groesste statt
+# erste, weil imPulse.pde die einzige echte Haupt-Datei ist und jede
+# denkbare Neben-.pde kleiner waere; gibt es nur eine, ist die Regel ohnehin
+# eindeutig.
+MAIN_PDE="$(ls -S "$SKETCH"/*.pde 2>/dev/null | head -n 1)"
+if [ -z "$MAIN_PDE" ]; then
+  echo "Keine .pde-Datei in $SKETCH gefunden" >&2
+  exit 1
+fi
+SKETCH_NAME="$(basename "$MAIN_PDE" .pde)"
 COPY="$WORK/$SKETCH_NAME"
 mkdir -p "$COPY/code"
 cp "$SKETCH"/*.pde "$COPY/" 2>/dev/null || {

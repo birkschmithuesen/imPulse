@@ -25,6 +25,16 @@ const presetSelectEl = document.getElementById('presetSelect');
 const presetLoadEl = document.getElementById('presetLoad');
 const presetNameEl = document.getElementById('presetName');
 const presetSaveEl = document.getElementById('presetSave');
+const melodyEl = document.getElementById('melody');
+const melodyFieldsEl = document.getElementById('melodyFields');
+const melodyConfirmEl = document.getElementById('melodyConfirm');
+const melodyRecomputeEl = document.getElementById('melodyRecompute');
+
+// key -> <input>/<select> der Melodie-Sektion. Bewusst NICHT in der
+// controls-Map: die Melodie-Regler senden beim Verstellen nichts, ein
+// Preset-Ruecklauf hat an ihnen also nichts zu setzen, und sie stehen
+// ohnehin in PresetStore.EXCLUDED.
+const melodyInputs = new Map();
 
 let bootstrap = {};
 try {
@@ -497,6 +507,7 @@ function render(data) {
   // Alle Tabs vollstaendig bauen (siehe buildTabs: die controls-Map muss
   // komplett sein, auch fuer inaktive Tabs).
   buildTabs(data);
+  buildMelody(data);
 
   const settings = data.settings || {};
   const osc = data.osc || {};
@@ -522,6 +533,131 @@ async function reload() {
     setStatus('Neu laden fehlgeschlagen: ' + err, 'err');
   }
 }
+
+// ---------------------------------------------------------------------------
+// Melodie-Zuordnung
+//
+// Vier Werte plus ein Knopf. Der Unterschied zu allem anderen im UI: das
+// Verstellen sendet NICHTS. Erst der Knopf setzt die vier Werte und loest
+// danach /net/melody/recompute aus -- ein Vorgang, kein Regler.
+//
+// Deshalb die Bestaetigung davor: die Aktion verwirft einen aufgebauten
+// Zustand vollstaendig, ueberschreibt auch von Hand korrigierte Zeilen in
+// der Zuordnungsdatei und laesst sich nicht zuruecknehmen. Dieselbe
+// Ueberlegung wie bei der Taste L in den zwei Kalibriermodi, die aus genau
+// diesem Grund zweimal gedrueckt werden will.
+// ---------------------------------------------------------------------------
+
+function melodyFieldRow(field, modeNames, value) {
+  const row = document.createElement('div');
+  row.className = 'melody-field';
+
+  const label = document.createElement('label');
+  label.textContent = field.label;
+  row.appendChild(label);
+
+  let input;
+  if (field.key === 'mode' && modeNames && modeNames.length) {
+    // Der Modus ist eine Aufzaehlung, kein Zahlenbereich -- als Zahlenfeld
+    // muesste der Operator die Reihenfolge auswendig koennen.
+    input = document.createElement('select');
+    modeNames.forEach((name, index) => {
+      if (index < field.min || index > field.max) { return; }
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = `${index} \u2013 ${name}`;
+      input.appendChild(option);
+    });
+  } else {
+    input = document.createElement('input');
+    input.type = 'number';
+    input.min = String(field.min);
+    input.max = String(field.max);
+    input.step = '1';
+  }
+  input.id = `melody_${field.key}`;
+  label.setAttribute('for', input.id);
+  input.value = String(Math.round(Number(value)));
+  row.appendChild(input);
+
+  const hint = document.createElement('span');
+  hint.className = 'melody-hint';
+  // Die Range dazu: startNode haengt an der Kreuzungszahl und aendert sich
+  // nach jeder Kalibriersitzung, sie gehoert also sichtbar ans Feld.
+  hint.textContent = `${field.hint} (${field.min}\u2013${field.max})`;
+  row.appendChild(hint);
+
+  return { row, input };
+}
+
+function buildMelody(data) {
+  melodyInputs.clear();
+  melodyFieldsEl.innerHTML = '';
+  const melody = data.melody;
+  if (!melody || !melody.fields || !melody.fields.length) {
+    // Aelterer imPulse-Stand ohne /net/melody/*: die Sektion bleibt weg,
+    // statt leer und unbedienbar dazustehen.
+    melodyEl.hidden = true;
+    return;
+  }
+  melody.fields.forEach((field) => {
+    const value = data.values[field.address];
+    const { row, input } = melodyFieldRow(field, melody.modeNames,
+      value === undefined ? field.value : value);
+    melodyFieldsEl.appendChild(row);
+    melodyInputs.set(field.key, input);
+  });
+  melodyEl.hidden = false;
+  // Die Bestaetigung gilt fuer EINEN Druck: nach dem Bauen ist sie aus, und
+  // recomputeMelody() setzt sie danach wieder zurueck.
+  melodyConfirmEl.checked = false;
+  melodyRecomputeEl.disabled = true;
+}
+
+async function recomputeMelody() {
+  if (!melodyConfirmEl.checked) { return; }
+  const values = {};
+  let problem = null;
+  melodyInputs.forEach((input, key) => {
+    const number = Number(input.value);
+    if (!Number.isFinite(number)) { problem = problem || key; return; }
+    values[key] = Math.round(number);
+  });
+  if (problem) {
+    setStatus(`Melodie: ${problem} ist keine Zahl`, 'err');
+    return;
+  }
+  melodyRecomputeEl.disabled = true;
+  setStatus('Melodie wird neu berechnet ...', 'warn');
+  try {
+    const response = await fetch('/api/melody/recompute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      setStatus('Neuberechnen fehlgeschlagen: ' + (data.error || response.status), 'err');
+    } else {
+      // Es gibt keinen Rueckkanal von imPulse -- die Meldung sagt deshalb,
+      // was GESENDET wurde, und wo das Ergebnis nachzusehen ist. Ein "fertig"
+      // waere hier eine Behauptung.
+      setStatus(`${data.command} gesendet (${data.applied.length} Werte). `
+        + 'Ergebnis steht in der Konsole von imPulse und in '
+        + 'data/nodeMelody_<modus>.txt.', 'ok');
+    }
+  } catch (err) {
+    setStatus('Neuberechnen fehlgeschlagen: ' + err, 'err');
+  }
+  // Bestaetigung immer zuruecksetzen, auch nach einem Fehler: ein zweiter
+  // Druck soll eine zweite bewusste Entscheidung sein.
+  melodyConfirmEl.checked = false;
+}
+
+melodyConfirmEl.addEventListener('change', () => {
+  melodyRecomputeEl.disabled = !melodyConfirmEl.checked;
+});
+melodyRecomputeEl.addEventListener('click', recomputeMelody);
 
 // ---------------------------------------------------------------------------
 // Presets

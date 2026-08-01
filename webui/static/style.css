@@ -143,6 +143,56 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
 .preset-row select:focus, .preset-row input[type=text]:focus { outline: 1px solid var(--accent); }
 .preset-row select:disabled { color: var(--muted); }
 
+/* Melodie-Zuordnung. Steht wie die Presets ueber den Tabs. Der Warnton ist
+   Absicht: die Aktion dahinter ueberschreibt eine Datei und laesst sich nicht
+   zuruecknehmen. */
+.melody { margin: 1rem 1rem 0; }
+.melody-note {
+  margin: 0;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--muted);
+  border-left: 3px solid var(--warn);
+}
+.melody-note code { font-size: 0.78rem; }
+.melody-fields { padding: 0.2rem 0.8rem 0.55rem; display: grid; gap: 0.45rem; }
+.melody-field {
+  display: grid;
+  grid-template-columns: 9rem 6.5rem 1fr;
+  align-items: center;
+  gap: 0.6rem;
+}
+.melody-field label { font-size: 0.85rem; }
+.melody-field input[type=number], .melody-field select {
+  padding: 0.35rem 0.4rem;
+  background: #12151a;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: 0.85rem ui-monospace, "Consolas", monospace;
+  min-width: 0;
+}
+.melody-field select { grid-column: 2 / 4; }
+.melody-field input[type=number]:focus, .melody-field select:focus {
+  outline: 1px solid var(--accent);
+}
+.melody-hint { font-size: 0.75rem; color: var(--muted); }
+.melody-actions {
+  padding: 0 0.8rem 0.7rem;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+.melody-confirm { display: flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; }
+.melody-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+@media (max-width: 640px) {
+  .melody-field { grid-template-columns: 1fr; gap: 0.2rem; }
+  .melody-field select { grid-column: auto; }
+}
+
 .param.trigger .param-body button { flex: 0 0 auto; }
 
 .param {

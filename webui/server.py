@@ -287,6 +287,88 @@ def build_speed_classes(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str
     }
 
 
+# ---------------------------------------------------------------------------
+# Melodie-Zuordnung
+#
+# Vier Werte plus ein Knopf, und der Knopf ist der Punkt: die Regler
+# verstellen fuer sich GAR NICHTS. Erst /net/melody/recompute rechnet die
+# Zuordnung neu, schreibt data/nodeMelody_<modus>.txt und sagt SuperCollider
+# Bescheid -- alle vier Werte auf einmal, als EIN Vorgang. Getrennte Trigger
+# je Regler rechneten beim Verstellen von dreien dreimal, davon zweimal mit
+# einem halb gesetzten Zustand.
+#
+# Deshalb eine eigene Sektion und kein Platz zwischen den anderen Schiebern:
+# ein Regler, dessen Bewegung nichts tut, sieht dort aus wie ein kaputter
+# Regler. Und die Aktion selbst verwirft einen aufgebauten Zustand
+# vollstaendig und laesst sich nicht zuruecknehmen -- dieselbe Lage wie bei
+# der Taste L in den zwei Kalibriermodi, die deshalb eine Doppelbestaetigung
+# verlangt.
+# ---------------------------------------------------------------------------
+
+MELODY_PREFIX = "/net/melody/"
+MELODY_RECOMPUTE = "/net/melody/recompute"
+
+# Reihenfolge und Namen spiegeln MelodyModes.ALL auf der Java-Seite und
+# ~melodyModes in der .scd. Drei Kopien -- die zwei anderen sind Code, diese
+# ist Beschriftung; ein Test haelt die Laenge zusammen.
+MELODY_MODE_NAMES: List[str] = [
+    "Dorisch", "Moll-Pentatonik", "Maqam Hijaz", "Harmonisch Moll",
+    "Phrygisch", "Maqam Ajam", "Maqam Nikriz", "Maqam Saba",
+]
+
+# Reihenfolge im UI. mode zuerst, weil ein Moduswechsel der groesste Eingriff
+# ist; startNode danach, weil er die Tonika setzt.
+MELODY_FIELDS: List[Tuple[str, str, str]] = [
+    ("mode", "Modus", "Tonvorrat und Kantenregel. Ein Wechsel ist ein "
+                      "kompletter Zuordnungswechsel."),
+    ("startNode", "Startknoten", "Die Tonika. Von hier aus waechst der "
+                                 "BFS-Baum - ein anderer Startknoten ist "
+                                 "eine andere Komposition."),
+    ("rootMidiNote", "Grundton (MIDI)", "45 = A2. Verschiebt jede Note "
+                                        "gleich weit."),
+    ("numOctaves", "Oktaven", "Spanne, ueber die sich die Zuordnung "
+                              "verteilt. Aendert die Faltungsbreite."),
+]
+
+
+def build_melody(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
+    """Die vier Melodie-Parameter als eigene Sektion.
+
+    None, wenn keiner davon im Dump steht -- dann laeuft ein aelterer
+    imPulse-Stand ohne das Feature, und die Sektion bleibt weg statt leer
+    dazustehen.
+    """
+    fields = []
+    for key, label, hint in MELODY_FIELDS:
+        param = by_address.get(MELODY_PREFIX + key)
+        if param is None:
+            continue
+        entry = param.as_dict()
+        entry["key"] = key
+        entry["label"] = label
+        entry["hint"] = hint
+        fields.append(entry)
+    if not fields:
+        return None
+    return {
+        "fields": fields,
+        "modeNames": list(MELODY_MODE_NAMES),
+        "recomputeAddress": MELODY_RECOMPUTE,
+    }
+
+
+def melody_addresses(melody: Optional[Dict[str, Any]]) -> Set[str]:
+    """Adressen, die die Melodie-Sektion selbst rendert.
+
+    Ohne das stuende jeder Melodie-Regler zweimal auf der Seite: einmal in der
+    Sektion mit Bestaetigungsknopf und einmal als generischer Schieber im
+    Noten-Tab, der so aussieht, als taete er etwas.
+    """
+    if not melody:
+        return set()
+    return {entry["address"] for entry in melody["fields"]}
+
+
 def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
                         speed: Optional[Dict[str, Any]]) -> Set[str]:
     """Adressen, die eine Spezial-Sektion selbst rendert."""
@@ -341,6 +423,7 @@ TAB_RULES: List[Tuple[str, str]] = [
     ("Master/", TAB_MIXER),
     # speedQuantize VOR /net/impulse/, sonst faengt die Physik-Regel es ab.
     ("/net/impulse/speedQuantize/", TAB_NOTES),
+    ("/net/melody/", TAB_NOTES),
     ("/net/sequencer/", TAB_SPAWN),
     ("/net/randomSpawn/", TAB_SPAWN),
     ("/net/activate", TAB_SPAWN),
@@ -352,8 +435,9 @@ TAB_RULES: List[Tuple[str, str]] = [
 # Tabs landet im Erweitert-Bereich.
 SC_PRIMARY: Dict[str, List[str]] = {
     TAB_MIXER: ["masterVolume", "bellVolume", "droneVolume", "reverbMix"],
-    TAB_SOUND: ["travelMix", "brightness", "detune", "regionBiasAmount",
+    TAB_SOUND: ["travelMix", "brightness", "detune", "treeBiasAmount",
                 "travelRq", "travelGrainRatio"],
+    TAB_NOTES: ["melodyMode", "melodyRootMidiNote", "melodyNumOctaves"],
 }
 
 # Kuratierte Regler je Tab, in dieser Reihenfolge. Adressen, die es in
@@ -425,9 +509,27 @@ SC_PARAMS: List[Dict[str, Any]] = [
      "group": "Glocke", "description": "Amp der oberen vier Teiltoene."},
     {"name": "detune", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
      "group": "Glocke", "description": "1 = metallisch, 0 = rein harmonisch."},
-    {"name": "regionBiasAmount", "tab": TAB_SOUND, "default": 0.6, "min": 0.0, "max": 1.0,
+    {"name": "treeBiasAmount", "tab": TAB_SOUND, "default": 0.6, "min": 0.0, "max": 1.0,
      "group": "Glocke", "description":
-     "Klangbias nach Netzregion (vier Quadranten). 0 = aus."},
+     "Klangbias nach Ursprungs-Baum des Impulses (vorn/hinten/rechts/links). "
+     "0 = aus. Ersetzt seit 2026-08-01 den frueheren regionBiasAmount."},
+    # Die drei Melodie-Parameter der SC-Seite. melodyStartNode steht bewusst
+    # NICHT hier: SuperCollider rechnet nichts neu, der Regler waere dort
+    # wirkungslos. Er liegt in imPulse (/net/melody/startNode) und wird von
+    # der eigenen Melodie-Sektion bedient, nicht von dieser Tabelle.
+    {"name": "melodyMode", "tab": TAB_NOTES, "default": 4.0, "min": 0.0, "max": 7.0,
+     "group": "Melodie", "description":
+     "Welche Zuordnungsdatei geladen ist: 0 Dorisch, 1 Pentatonik, 2 Hijaz, "
+     "3 Harmonisch Moll, 4 Phrygisch, 5 Ajam, 6 Nikriz, 7 Saba."},
+    {"name": "melodyRootMidiNote", "tab": TAB_NOTES, "default": 45.0, "min": 24.0, "max": 84.0,
+     "group": "Melodie", "description":
+     "Grundton der Zuordnung. Beim Laden gewinnt der Kopf der Melodie-Datei; "
+     "danach ist das eine saubere Live-Transposition."},
+    {"name": "melodyNumOctaves", "tab": TAB_NOTES, "default": 3.0, "min": 1.0, "max": 6.0,
+     "group": "Melodie", "description":
+     "Oktavspanne. Aendert den Modulo-Teiler der Faltung - eine schon "
+     "geladene Zuordnung laesst sich damit NICHT nachfalten, dafuer in "
+     "imPulse neu berechnen."},
     {"name": "droneLpfMult", "tab": TAB_SOUND, "default": 6.0, "min": 1.0, "max": 12.0,
      "group": "Travel-Sound", "description": "Filter der Tonschicht der Drohne."},
     {"name": "travelMix", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 1.0,
@@ -1112,7 +1214,9 @@ class ParameterStore:
             # einmal als generischer Schieber.
             sequencer = build_sequencer(self.by_address)
             speed = build_speed_classes(self.by_address)
+            melody = build_melody(self.by_address)
             taken = sequencer_addresses(sequencer, speed)
+            taken |= melody_addresses(melody)
             generic = [p for p in self.parameters if p.address not in taken]
             groups = build_groups(generic)
             return {
@@ -1120,6 +1224,7 @@ class ParameterStore:
                 "values": dict(self.values),
                 "sequencer": sequencer,
                 "speedClasses": speed,
+                "melody": melody,
                 "tabs": build_tabs(groups, sequencer, speed),
                 "scParams": {
                     "port": SC_OSC_PORT,
@@ -1375,6 +1480,69 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         result = apply_preset_entries(store, entries)
         result.update({"ok": True, "name": name})
         return jsonify(result)
+
+    @app.route("/api/melody/recompute", methods=["POST"])
+    def api_melody_recompute():
+        """Die Melodie-Zuordnung neu berechnen lassen.
+
+        Reihenfolge ist der ganze Punkt: erst werden alle vier Werte gesetzt,
+        DANN geht /net/melody/recompute raus. imPulse liest die vier Werte im
+        Moment des Kommandos und behandelt sie als EINEN Vorgang -- ein
+        Kommando vor den Werten rechnete mit dem alten Stand, und drei
+        Kommandos zwischendurch rechneten dreimal, davon zweimal mit einem
+        halb gesetzten Zustand.
+
+        Die Werte gehen ueber denselben apply_value()-Weg wie jeder andere
+        Regler, damit der Server-Store nicht auseinanderlaeuft.
+
+        Fire-and-forget wie /preset/load: es gibt keinen Rueckkanal von
+        imPulse. Laeuft der Sketch nicht, merkt das UI es hier nicht -- anders
+        als beim Preset-Speichern, wo eine Datei auf der Platte erscheint, auf
+        die sich warten laesst. Der Erfolg zeigt sich in der Konsole von
+        imPulse und daran, dass data/nodeMelody_<modus>.txt frischer wird.
+        """
+        body = request.get_json(silent=True) or {}
+        values = body.get("values")
+        if not isinstance(values, dict):
+            return jsonify({"ok": False,
+                            "error": "keine Werte im Request"}), 400
+
+        applied: List[Applied] = []
+        for key, _label, _hint in MELODY_FIELDS:
+            if key not in values:
+                continue
+            param = store.get(MELODY_PREFIX + key)
+            if param is None:
+                # Ein aelterer imPulse-Stand kennt den Parameter nicht. Das
+                # ist kein Fehler des Aufrufers -- die Sektion baut sich
+                # ohnehin nur aus dem, was im Dump steht.
+                continue
+            try:
+                number = float(values[key])
+            except (TypeError, ValueError):
+                return jsonify({"ok": False,
+                                "error": "%s ist keine Zahl" % key}), 400
+            if number != number:  # NaN
+                return jsonify({"ok": False,
+                                "error": "%s ist keine Zahl" % key}), 400
+            applied.append(apply_value(param, number))
+
+        if not applied:
+            return jsonify({"ok": False,
+                            "error": "kein bekannter Melodie-Parameter dabei "
+                                     "-- laeuft ein aelterer imPulse-Stand?"}), 400
+
+        # Ein Kommando ohne Argument gibt es im OSC-Encoder nicht, und
+        # RemoteControlled*-Parameter sind das hier ohnehin nicht: der
+        # Empfaenger prueft nur die Adresse (MelodyManager.digestMessage),
+        # der Wert ist bedeutungslos. 1 statt 0, damit eine Fernsteuerung, die
+        # auf "Wert ungleich 0" filtert, nicht ins Leere laeuft.
+        sender.send(MELODY_RECOMPUTE, 1)
+        return jsonify({
+            "ok": True,
+            "applied": [{"address": a.address, "value": a.value} for a in applied],
+            "command": MELODY_RECOMPUTE,
+        })
 
     @app.route("/api/preset/save", methods=["POST"])
     def api_preset_save():
