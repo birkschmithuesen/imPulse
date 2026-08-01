@@ -40,9 +40,46 @@ Datei nach einem imPulse-Neustart sofort neu ein.
 Vollstaendige Range-/Sections-Analyse aller OSC-Parameter:
 `docs/webui-parameter-review-2026-07-30.md`.
 
-### Drei Spezial-Sektionen
+### Sechs Themen-Tabs
 
-Drei Gruppen bekommen ein handgebautes Bedienfeld statt generischer Regler —
+Statt einer langen Liste liegen die Regler auf sechs Tabs: **Mixer**, **Sound
+Design**, **Spawn-Verhalten**, **Noten-Verhalten**, **Impuls-Verhalten**,
+**Farben**. Welche Adresse in welchen Tab gehoert, entscheiden `TAB_RULES`
+und `TAB_PRIMARY` in `server.py` — dort ist es pruefbar, und `test_webui.py`
+stellt sicher, dass **jeder** Regler in genau einem Tab landet und keiner
+doppelt. Oben je Tab die kuratierten Regler, darunter ein eingeklapptes
+`Erweitert` mit dem Rest.
+
+Drei Dinge, die man beim Aendern kennen muss:
+
+- **Die Reihenfolge der Regeln zaehlt, die erste passende gewinnt.**
+  `/net/impulse/speedQuantize/` muss **vor** `/net/impulse/` stehen, sonst
+  zoege die Physik-Regel die Speed-Klassen an sich; genauso muessen
+  `/net/impulse/color/`, `/net/impulse/fadeOut/` und `/nodes/colors/` vor
+  `/net/impulse/` bzw. `/nodes/` stehen, sonst landen die Farben wieder im
+  Impuls-Tab.
+- **`buildTabs()` baut ALLE Panels und schaltet nur die Sichtbarkeit um.**
+  Die Regler tragen sich beim Bauen in die flache `controls`-Map ein, und
+  ueber genau die laufen das Preset-Laden und der `applied`/`echoed`-
+  Ruecklauf. Ein Regler auf einem nie geoeffneten Tab stuende sonst nicht in
+  der Map und wuerde von einem Preset still nicht angezeigt.
+- **Eine Gruppe geht als GANZES in einen Tab**, bestimmt von der Adresse
+  ihres ersten Reglers. Eine Farbkarte traegt aber keine eigene Adresse,
+  sondern drei darunter (`<basis>/Hue|Sat|Bright`) — `build_tabs()` nimmt
+  fuer sie deshalb ausdruecklich die Hue-Adresse. Ohne diesen Zweig hat eine
+  Gruppe aus lauter Farbkarten gar keine Adresse und faellt aus **jedem**
+  Tab heraus; genau das war mit `/nodes/colors` passiert (18 Werte, sechs
+  Karten, im UI unerreichbar, ohne Fehlermeldung). Ein Test haelt fuer jede
+  Gruppe fest, dass sie in einem Tab ankommt.
+
+Der Farben-Tab traegt als einziger das `expanded`-Flag (`TAB_EXPANDED`): er
+hat keine kuratierte Auswahl, weil `TAB_PRIMARY` auf Adressen arbeitet und
+bei Farbkarten nicht greift — ohne das Flag bestuende der ganze Tab aus einem
+zugeklappten `Erweitert`.
+
+### Vier Spezial-Sektionen
+
+Vier Bereiche bekommen ein handgebautes Bedienfeld statt generischer Regler —
 38 Sequencer-Parameter als flache Liste waeren unbedienbar. Der Server
 liefert dafuer Struktur (`build_sequencer`, `build_speed_classes`,
 `sc_param_groups`), das Aussehen macht `static/app.js`.
@@ -52,6 +89,18 @@ liefert dafuer Struktur (`build_sequencer`, `build_speed_classes`,
   Symbol **und** Kuerzel (`1/4`) — nicht jede Windows-Schrift hat
   U+1D15D..U+1D161, ein Symbol allein waere dort ein leeres Kaestchen.
   `originStripeOverride` zeigt `-1` als „zufall" statt als Zahl.
+  `originTreeFilter` ist ein **Auswahlbalken** mit fuenf Klartext-Zustaenden
+  (`alle`/`vorn`/`hinten`/`rechts`/`links`), kein 0..4-Schieber: „0 =
+  zufaellig" ist an einem Zahlenregler nicht zu erraten. Bewusst auch kein
+  Schalter-plus-Dropdown — das waeren zwei Bedienelemente fuer einen
+  Parameter mit fuenf gleichrangigen Zustaenden, dazu ein verborgener
+  „zuletzt gewaehlter Baum", der nach einem Preset-Laden gegenueber dem
+  Sketch falsch stehen kann. Der OSC-Wertebereich bleibt unveraendert
+  `int 0..4`. Unter der Spurenreihe steht die Erklaerung dazu (`TREE_HELP`
+  in `server.py`, weil sie eine Aussage ueber `OriginSequencer` trifft und
+  dort pruefbar ist), und je Track erscheint eine Warnzeile **nur dann**,
+  wenn ein gesetzter `originStripeOverride` den Filter gerade aushebelt.
+- **Palette**: siehe unten, eigener Abschnitt.
 - **Speed-Klassen**: die fuenf Gewichte aus
   `/net/impulse/speedQuantize/weight/*` plus ein Verteilungsbalken, der sie
   normiert als Prozente zeigt. Die Gewichte selbst muessen sich nicht auf 100
@@ -142,6 +191,51 @@ schreiben wuerde, der imPulse gehoert.
 Der Knopf **Neu laden** oben rechts hat damit nichts zu tun — der liest
 `remoteSettings.txt` neu ein, also die Parameter-*Definitionen*.
 
+## Farbpalette
+
+Im Tab **Farben** sitzt oben die Sektion **Palette**: eine kleine Sammlung
+wiederverwendbarer Lieblingsfarben. Dieselbe Reihe steht als Swatches unter
+**jeder** Farbwaehler-Karte — ein Klick setzt Hue/Sat/Bright genau dieser
+Karte, statt sie jedes Mal von Hand einzustellen.
+
+Ein Preset ist das ausdruecklich **nicht**: die Palette haelt nur Farbwerte,
+nicht welche Karte welche Farbe traegt. Was wo steht, halten weiterhin die
+Presets fest.
+
+- **Datei**: `data/colorPalettes.txt`, Format wie `data/stripeTrees.txt` —
+  Tab-getrennte Spalten `name<TAB>hue<TAB>sat<TAB>bright`, die drei Werte in
+  `0..1`, `#` leitet einen Kommentar ein. Von Hand editierbar. Bei doppeltem
+  Namen gewinnt die **letzte** Zeile, aus demselben Grund wie bei
+  `stripeTrees.txt`: die natuerliche Handkorrektur ist eine angehaengte
+  Zeile am Ende, „erste gewinnt" wuerde sie still verschlucken.
+- **Server-seitig, nicht im localStorage.** Sie soll einen Neustart
+  ueberleben und auf jedem Geraet dieselbe sein — genau das meint „eine
+  Palette, die von allen gewaehlt werden kann". Eine fehlende Datei ist kein
+  Fehler, sondern eine leere Palette; sie entsteht beim ersten Speichern.
+- **Endpoints**: `GET /api/palette` und `POST /api/palette`. Der POST traegt
+  die **komplette** Liste, der Server ersetzt die Datei durch genau das.
+  Kein Hinzufuegen/Entfernen einzelner Eintraege: das waeren zwei Wege auf
+  dieselbe Datei, die auseinanderlaufen koennen, und die Reihenfolge muesste
+  trotzdem vom Browser kommen. **Preis: zwei gleichzeitig offene Browser
+  ueberschreiben sich gegenseitig.** Bei einer Installation mit einem
+  Operator ist das der richtige Tausch.
+- **Anders als bei den Presets geht kein OSC raus.** Die Palette ist reine
+  UI-Sache, imPulse kennt sie nicht. Was ein Swatch-Klick sendet, sind die
+  ganz normalen `<basis>/Hue|Sat|Bright`-Nachrichten.
+- **Hoechstens 24 Farben** (`PALETTE_MAX_ENTRIES`) — die Swatch-Reihe steht
+  unter jeder Farbkarte, ab ein paar Dutzend waere sie hoeher als die Karte.
+  Namen hoechstens 32 Zeichen, ohne Tabulator, Zeilenumbruch und fuehrendes
+  `#`: die wuerden die Datei beim naechsten Lesen zerlegen.
+- **Pfad** ueber `--palette` bzw. `IMPULSE_PALETTE` verschiebbar, Vorgabe
+  `colorPalettes.txt` neben `--settings`.
+- **Fehler beim Speichern rollen den lokalen Zustand zurueck.** Sonst zeigte
+  das UI eine Farbe, die in der Datei nicht steht, und der naechste Neustart
+  schluckte sie kommentarlos.
+
+„Farbe uebernehmen" nimmt die **zuletzt angefasste** Farbkarte. Ohne diese
+Regel muesste der Knopf raten, welche der sieben Karten gemeint ist; deshalb
+meldet er auch, wenn noch keine angefasst wurde, statt still nichts zu tun.
+
 ## Normalisierung (der Fallstrick)
 
 `RemoteControlledFloatParameter.digestMessage` mappt eingehende Floats selbst:
@@ -230,6 +324,7 @@ Parameterdatei mitgeben.
 |-------------------------------------------|-----------------------------|
 | `--settings` / `IMPULSE_SETTINGS`         | `<repo>/data/remoteSettings.txt` |
 | `--presets` / `IMPULSE_PRESETS`           | `presets/` neben `--settings`    |
+| `--palette` / `IMPULSE_PALETTE`           | `colorPalettes.txt` neben `--settings` |
 | `--osc-host` / `IMPULSE_OSC_HOST`         | `127.0.0.1`                 |
 | `--osc-port` / `IMPULSE_OSC_PORT`         | `8001`                      |
 | `--host` / `IMPULSE_WEBUI_HOST`           | `0.0.0.0`                   |
@@ -296,11 +391,23 @@ Regleranzeige (Klemmung auf die `remoteSettings.txt`-Range, unbekannte
 Adressen, Werte ausserhalb der UI-Range) und das Warten auf die von imPulse
 geschriebene Datei.
 
-Dazu die drei Spezial-Sektionen: dass der Sequencer alle sechs Tracks mit
-allen Feldern liefert, dass ein aelterer imPulse-Stand `None` statt einer
-leeren Sektion ergibt, dass kein Parameter doppelt gerendert wird (an einem
-echten Snapshot geprueft) und dass `SC_PARAMS` in beide Richtungen zur `.scd`
-passt.
+Dazu die Spezial-Sektionen: dass der Sequencer alle sechs Tracks mit allen
+Feldern liefert, dass ein aelterer imPulse-Stand `None` statt einer leeren
+Sektion ergibt, dass kein Parameter doppelt gerendert wird (an einem echten
+Snapshot geprueft) und dass `SC_PARAMS` in beide Richtungen zur `.scd` passt.
+
+Dazu die Tab-Zuordnung: sechs Tabs in der festgelegten Reihenfolge, jede
+Adresse in genau einem Tab, die Farb-Adressen in „Farben" und die
+Physik-Adressen weiterhin in „Impuls-Verhalten" (die Farb-Regeln stehen vor
+den allgemeinen, greifen sie zu breit, leert sich der Physik-Tab lautlos),
+und dass **keine** Gruppe aus allen Tabs herausfaellt.
+
+Dazu die Palette: Parser (Kommentare, kaputte Zeilen, Klemmung auf `0..1`,
+doppelter Name gewinnt zuletzt), das Dateiformat (Tabulatoren, Dezimalpunkt),
+atomares Schreiben ohne Temp-Rest, die Validierung dessen, was aus dem
+Browser kommt (kein Tabulator im Namen, keine NaN, Obergrenze, leere Liste
+erlaubt) und die beiden Endpoints. Die Endpoint-Tests brauchen als einzige
+Flask und werden sonst uebersprungen — wie schon der python-osc-Gegentest.
 
 ```bash
 python3 webui/test_webui.py
