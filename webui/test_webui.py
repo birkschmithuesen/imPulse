@@ -1259,6 +1259,48 @@ class AddressLabelTest(unittest.TestCase):
         missing = [a for a in addresses if server.label_for(a)[0] is None]
         self.assertEqual(missing, [], "ohne Titel in ADDRESS_LABELS: %s" % missing)
 
+    def test_no_control_in_the_snapshot_is_unlabelled(self):
+        """Die Gegenprobe auf einem VOLLEN Parametersatz, nicht auf SAMPLE.
+
+        data/remoteSettings.txt liegt nicht im Repo (imPulse schreibt es erst
+        beim Start), ein Preset hat aber dasselbe Format und dieselbe
+        Adressmenge. Geprueft wird der fertige Snapshot: was das UI zeigt,
+        nicht was in der Tabelle steht.
+        """
+        path = os.path.join(server.REPO_ROOT, "data", "presets", "random1.txt")
+        if not os.path.exists(path):
+            self.skipTest("data/presets/random1.txt fehlt")
+        store = ParameterStore(path=path)
+        store.refresh(force=True)
+        snapshot = store.snapshot()
+        unlabelled = []
+        for tab in snapshot["tabs"]:
+            controls = list(tab["primary"])
+            for group in tab["groups"]:
+                controls.extend(group["controls"])
+            for control in controls:
+                if not control.get("label"):
+                    unlabelled.append(control.get("address") or control.get("base"))
+        self.assertEqual(unlabelled, [],
+                         "ohne sprechenden Titel im UI: %s" % unlabelled)
+
+    def test_sequencer_legend_explains_the_compact_track_sliders(self):
+        """Die Track-Karten sind kompakt beschriftet ("Wdh.") -- die Erklaerung
+        steht einmal darunter, nicht 36-mal in den Karten."""
+        path = os.path.join(server.REPO_ROOT, "data", "presets", "random1.txt")
+        if not os.path.exists(path):
+            self.skipTest("data/presets/random1.txt fehlt")
+        store = ParameterStore(path=path)
+        store.refresh(force=True)
+        legend = store.snapshot()["sequencer"]["legend"]
+        self.assertTrue(legend)
+        for entry in legend:
+            self.assertTrue(entry["label"])
+            self.assertTrue(entry["text"])
+        # originTreeFilter fehlt bewusst: TREE_HELP steht direkt daneben und
+        # sagt mehr (den Vorrang des festen Ursprungs).
+        self.assertNotIn("Baum-Filter", [e["label"] for e in legend])
+
     def test_as_dict_carries_label_and_help(self):
         param = by_address(parse_settings(SAMPLE))["/net/impulse/nodeDeadTime"]
         entry = param.as_dict()

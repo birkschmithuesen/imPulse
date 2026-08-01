@@ -159,14 +159,31 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
   margin-bottom: 0.35rem;
 }
 
+/* Der Titel ist jetzt Klartext ("Totzeit pro Knoten"), keine OSC-Adresse
+   mehr -- also auch keine Monospace-Schrift und etwas groesser. Die Adresse
+   steht als .param-addr unter dem Regler und behaelt dort das Monospace. */
 .param-name {
-  font-family: ui-monospace, "Consolas", monospace;
-  font-size: 0.82rem;
+  font-size: 0.95rem;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
-.param-name .prefix { color: var(--muted); }
 
 .param-range { color: var(--muted); font-size: 0.7rem; white-space: nowrap; }
+
+/* Die rohe OSC-Adresse: sichtbar, aber die kleinste und leiseste Zeile der
+   Karte. Sie wird zum Debuggen mit OSC von Hand gebraucht und darf deshalb
+   nicht nur im Tooltip stehen -- im Dunkeln neben der Installation findet
+   niemand einen Hover-Text. */
+.param-addr {
+  display: block;
+  margin-top: 0.25rem;
+  font-family: ui-monospace, "Consolas", monospace;
+  font-size: 0.63rem;
+  line-height: 1.3;
+  color: var(--muted);
+  opacity: 0.62;
+  overflow-wrap: anywhere;
+}
 
 .param-body { display: flex; align-items: center; gap: 0.6rem; }
 
@@ -407,6 +424,20 @@ input[type=color] {
   line-height: 1.35;
   color: var(--warn);
 }
+
+/* Legende der Track-Regler, einmal unter der Spurenreihe. Die Karten selbst
+   bleiben kompakt beschriftet ("Wdh.", "Swing") -- sechs Erklaerungen mal
+   sechs Karten waeren 36 Absaetze. */
+.seq-legend {
+  margin: 0.7rem 0 0;
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) 1fr;
+  gap: 0.15rem 0.7rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+.seq-legend dt { color: var(--text); font-weight: 600; }
+.seq-legend dd { margin: 0; color: var(--muted); }
 
 /* Erklaerzeile unter der Spurenreihe, einmal je Sequencer-Sektion. */
 .seq-help {

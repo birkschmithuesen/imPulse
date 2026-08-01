@@ -267,7 +267,32 @@ def build_sequencer(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, An
                        for v, s, n in NOTE_VALUES],
         "treeLabels": list(TREE_LABELS),
         "treeHelp": TREE_HELP,
+        "legend": track_field_legend(),
     }
+
+
+def track_field_legend() -> List[Dict[str, str]]:
+    """Was die Regler einer Track-Karte bedeuten -- EINMAL unter der Reihe.
+
+    Die Karten sind bewusst kompakt beschriftet ("Wdh.", "Swing"): sechs
+    Erklaerungssaetze in jeder der sechs Karten waeren 36 Absaetze und
+    machten das Panel unbedienbar, das ja gerade deshalb existiert. Einmal
+    darunter als Legende ist die Erklaerung trotzdem da, ohne die Karten zu
+    sprengen.
+
+    Text und Titel kommen aus ADDRESS_LABELS, nicht aus einer zweiten Liste --
+    sonst stuende dieselbe Aussage an zwei Orten und nur einer wuerde
+    nachgezogen. originTreeFilter fehlt hier bewusst: TREE_HELP steht direkt
+    daneben und sagt mehr (den Vorrang des festen Ursprungs).
+    """
+    legend: List[Dict[str, str]] = []
+    for name in SEQUENCER_TRACK_FIELDS:
+        if name == "originTreeFilter":
+            continue
+        label, text = label_for("%strack0/%s" % (SEQUENCER_PREFIX, name))
+        if label and text:
+            legend.append({"label": label, "text": text})
+    return legend
 
 
 def build_speed_classes(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:

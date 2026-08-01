@@ -219,20 +219,58 @@ function queueSend(address, value) {
 // Steuerelemente
 // ---------------------------------------------------------------------------
 
-function makeHead(param) {
+/* Der sichtbare Titel eines Reglers.
+ *
+ * Frueher war das schlicht das letzte Segment der OSC-Adresse
+ * ("nodeDeadTime"). Der sprechende Titel kommt jetzt vom Server
+ * (ADDRESS_LABELS in server.py), weil er eine inhaltliche Aussage ueber den
+ * Sketch ist und dort pruefbar bleibt. Faellt er aus -- neuer Parameter, fuer
+ * den dort niemand eine Zeile ergaenzt hat --, bleibt es beim Adresssegment:
+ * unbeschriftet waere schlimmer als technisch beschriftet. */
+function titleFor(param, address) {
+  if (param && param.label) { return param.label; }
+  return splitAddress(address || (param && param.address) || '').leaf;
+}
+
+/* Erklaerung und Adresszeile unter einen Regler haengen.
+ *
+ * Reihenfolge und Groessenstaffelung sind der Punkt der ganzen Uebung: Titel
+ * gross, Erklaerung klein darunter, Adresse am kleinsten und gedimmt. Die
+ * Adresse bleibt sichtbar (nicht nur im Tooltip), weil sie beim Debuggen mit
+ * OSC von Hand gebraucht wird -- sie ist nur nicht mehr der Haupttext.
+ *
+ * Eine Funktion fuer alle vier Bauformen (Schieber, Schalter, Trigger,
+ * Farbkarte), sonst haette jede ihre eigene Reihenfolge. */
+function appendMeta(wrap, param, address) {
+  if (param && param.help) {
+    const help = document.createElement('p');
+    help.className = 'help';
+    help.textContent = param.help;
+    wrap.appendChild(help);
+  }
+  const shown = address || (param && param.address);
+  if (shown) {
+    const addr = document.createElement('code');
+    addr.className = 'param-addr';
+    addr.textContent = shown;
+    wrap.appendChild(addr);
+  }
+  return wrap;
+}
+
+function makeHead(param, addressOverride) {
+  const address = addressOverride || param.address;
   const head = document.createElement('div');
   head.className = 'param-head';
 
   const name = document.createElement('span');
   name.className = 'param-name';
-  name.title = param.address + (param.description &&
+  // Der Tooltip traegt weiter die Adresse: an einem Regler, der jetzt
+  // "Totzeit pro Knoten" heisst, ist der Bezug zur OSC-Adresse sonst nur noch
+  // ueber die Zeile darunter zu haben.
+  name.title = address + (param.description &&
     param.description !== 'space for descripiton' ? ' – ' + param.description : '');
-  const parts = splitAddress(param.address);
-  const prefix = document.createElement('span');
-  prefix.className = 'prefix';
-  prefix.textContent = parts.prefix;
-  name.appendChild(prefix);
-  name.appendChild(document.createTextNode(parts.leaf));
+  name.textContent = titleFor(param, address);
 
   const range = document.createElement('span');
   range.className = 'param-range';
@@ -350,15 +388,9 @@ function buildParam(param, value) {
   const handle = param.widget === 'toggle'
     ? buildToggle(param, value, (v) => queueSend(param.address, v))
     : buildSlider(param, value, (v) => queueSend(param.address, v));
-  // Kurzerklaerung, wo die Adresse allein nicht verraet, was der Regler tut
-  // (DESCRIPTIONS in server.py). Sichtbar statt nur als Tooltip: im Dunkeln
+  // Erklaerung und Adresszeile. Sichtbar statt nur als Tooltip: im Dunkeln
   // neben der Installation findet niemand einen Hover-Text.
-  if (param.help) {
-    const help = document.createElement('p');
-    help.className = 'help';
-    help.textContent = param.help;
-    handle.element.appendChild(help);
-  }
+  appendMeta(handle.element, param);
   controls.set(param.address, handle);
   return handle.element;
 }
@@ -377,12 +409,7 @@ function buildTrigger(param) {
   name.className = 'param-name';
   name.title = param.address + (param.description &&
     param.description !== 'space for descripiton' ? ' – ' + param.description : '');
-  const parts = splitAddress(param.address);
-  const prefix = document.createElement('span');
-  prefix.className = 'prefix';
-  prefix.textContent = parts.prefix;
-  name.appendChild(prefix);
-  name.appendChild(document.createTextNode(parts.leaf));
+  name.textContent = titleFor(param);
   const range = document.createElement('span');
   range.className = 'param-range';
   range.textContent = `Trigger, int ${param.min} … ${param.max}`;
@@ -411,6 +438,7 @@ function buildTrigger(param) {
   body.appendChild(number);
   body.appendChild(button);
   wrap.appendChild(body);
+  appendMeta(wrap, param);
 
   return wrap;
 }
@@ -431,18 +459,22 @@ function buildColorCard(control, values) {
   const name = document.createElement('span');
   name.className = 'param-name';
   name.title = control.base + '/{Hue,Sat,Bright}';
-  const parts = splitAddress(control.base);
-  const prefix = document.createElement('span');
-  prefix.className = 'prefix';
-  prefix.textContent = parts.prefix;
-  name.appendChild(prefix);
-  name.appendChild(document.createTextNode(parts.leaf));
+  // Der Titel kommt vom Server (label_for auf der BASIS, nicht auf einer
+  // Adresse -- eine Farbkarte hat keine eigene). Ohne ihn stuende hier nur
+  // "fired", was nicht verraet, wessen Zustand gemeint ist.
+  name.textContent = control.label || splitAddress(control.base).leaf;
   const kind = document.createElement('span');
   kind.className = 'param-range';
   kind.textContent = 'Farbe (HSB)';
   head.appendChild(name);
   head.appendChild(kind);
   wrap.appendChild(head);
+  if (control.help) {
+    const help = document.createElement('p');
+    help.className = 'help';
+    help.textContent = control.help;
+    wrap.appendChild(help);
+  }
 
   const row = document.createElement('div');
   row.className = 'swatch-row';
@@ -1348,6 +1380,23 @@ function buildSequencer(data, host) {
 
   section.appendChild(grid);
 
+  // Legende: was die kompakt beschrifteten Regler einer Karte bedeuten.
+  // Einmal unter der Reihe statt sechsmal in den Karten -- 36 Absaetze
+  // machten genau das Panel unbedienbar, das die flache Reglerliste ersetzt.
+  if (seq.legend && seq.legend.length) {
+    const legend = document.createElement('dl');
+    legend.className = 'seq-legend';
+    seq.legend.forEach((entry) => {
+      const term = document.createElement('dt');
+      term.textContent = entry.label;
+      const desc = document.createElement('dd');
+      desc.textContent = entry.text;
+      legend.appendChild(term);
+      legend.appendChild(desc);
+    });
+    section.appendChild(legend);
+  }
+
   // Erklaerung zum Baum-Filter: einmal unter der Spurenreihe statt sechsmal
   // in den Karten. Der Text kommt vom Server (TREE_HELP in server.py), weil
   // er eine Aussage ueber die Java-Seite trifft und dort pruefbar ist.
@@ -2013,11 +2062,11 @@ function buildScParams(params, host, port, withNote) {
       head.className = 'param-head';
       const name = document.createElement('span');
       name.className = 'param-name';
-      const prefix = document.createElement('span');
-      prefix.className = 'prefix';
-      prefix.textContent = '/klangnetz/param/';
-      name.appendChild(prefix);
-      name.appendChild(document.createTextNode(param.name));
+      // label kommt aus SC_PARAMS; der Registry-Name ("travelOctavesPerStep")
+      // ist die OSC-Kennung und steht als Adresszeile unter dem Regler.
+      name.textContent = param.label || param.name;
+      name.title = '/klangnetz/param/' + param.name
+        + (param.description ? ' – ' + param.description : '');
       const range = document.createElement('span');
       range.className = 'param-range';
       range.textContent = param.min + ' … ' + param.max;
@@ -2044,12 +2093,8 @@ function buildScParams(params, host, port, withNote) {
       body.appendChild(out);
       wrap.appendChild(body);
 
-      if (param.description) {
-        const help = document.createElement('p');
-        help.className = 'help';
-        help.textContent = param.description;
-        wrap.appendChild(help);
-      }
+      appendMeta(wrap, { help: param.description },
+                 '/klangnetz/param/' + param.name);
 
       let timer = null;
       function send(value) {
