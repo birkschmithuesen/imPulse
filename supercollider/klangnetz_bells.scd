@@ -69,6 +69,9 @@
 //   /sc/preset/load <name:string>   Sound-Preset laden (siehe ~presetLoad)
 //   /sc/preset/save <name:string>   Sound-Preset schreiben (siehe ~presetSave)
 //   /net/melody/reload <modus:string>  Melodie-Zuordnung neu laden (siehe ~melodyLoad)
+//   /klangnetz/record/start|stop|toggle|query   Vierkanal-Mitschnitt, ohne
+//     Argument (siehe ~recordStart weiter unten). Antwort geht als
+//     /klangnetz/record/status <0|1:int> <pfad:string> an ~recordStatusAddr.
 //
 // <tree> ist der URSPRUNGS-BAUM des Impulses: 0..3 nach
 // StripeTreeStore.TREE_NAMES (vorn, hinten, rechts, links), -1 = unbekannt.
@@ -363,6 +366,14 @@
 (
 // ---- Konfiguration ---------------------------------------------------
 ~oscListenPort = 8002;
+
+// Ziel der Status-Rueckmeldung des Mitschnitts (siehe ~recordStatusSend).
+// Eigener Port, NICHT 8001 (imPulse) und NICHT 8002 (dieser Empfaenger
+// selbst): dort hoert das Web-UI, damit sein Aufnahme-Knopf auch dann den
+// richtigen Zustand zeigt, wenn Start/Stop woanders ausgeloest wurde (per
+// Skript, aus der IDE, von einem zweiten Browser). Fire-and-forget wie alles
+// andere hier -- laeuft das Web-UI nicht, geht das Datagramm ins Leere.
+~recordStatusPort = 8003;
 
 // ---- Vierkanal-Ausgang -----------------------------------------------
 // numOutputBusChannels wirkt erst beim BOOTEN des Servers. Läuft schon
@@ -1360,6 +1371,142 @@ s.options.numInputBusChannels = 2;
     applied
 };
 
+// ---- Vierkanal-Mitschnitt auf Platte -----------------------------------
+// Schneidet das FERTIGE Summensignal mit: die vier Hardware-Ausgangskanaele,
+// also alles NACH Panning (~toQuad/Pan4), Hall, masterVolume, Limiter und
+// Kanal-Permutation. Aufgenommen wird deshalb Bus 0 (Hardware-Out) und nicht
+// ~quadBus -- auf ~quadBus stehen die Stimmen VOR \masterReverb, ein
+// Mitschnitt davon klaenge anders als das, was im Raum zu hoeren ist.
+//
+// Der Recorder-Synth muss dafuer HINTER \masterReverb im Node-Baum haengen
+// (sonst liest er den Ausgangsbus, bevor der Master ihn beschrieben hat, und
+// die Datei bliebe still). s.record haengt ihn an den Schwanz der uebergebenen
+// Gruppe -- ~voices und ~masterReverbSyn liegen beide in s.defaultGroup, ein
+// Synth am Ende dieser Gruppe laeuft also nach beiden.
+//
+// Fuer den Videodreh (2026-08-01) gebaut: ein Knopf im Web-UI, ein OSC-Befehl,
+// eine Datei mit Zeitstempel.
+~recordDir = thisProcess.nowExecutingPath.notNil.if(
+    // .dirname.dirname: die Datei liegt in supercollider/, der Ordner soll im
+    // Repo-Root neben data/ und webui/ liegen -- anders als ~presetDir, der
+    // bewusst neben der .scd bleibt (Sound-Presets gehoeren zum Patch,
+    // Mitschnitte nicht).
+    { thisProcess.nowExecutingPath.dirname.dirname +/+ "recordings" },
+    // Rueckfall aus einem Scratch-Buffer heraus, gleiche Ueberlegung wie bei
+    // ~presetDir: dann liegt der Ordner im Arbeitsverzeichnis, und die
+    // Startmeldung nennt den Pfad.
+    { "recordings" }
+);
+~recordStatusAddr = NetAddr("127.0.0.1", ~recordStatusPort);
+
+// Zustand NUR anlegen, wenn er noch nicht existiert. Beim Re-Evaluieren der
+// Datei (Live-Coding) laeuft dieser Block VOR dem Abraeumblock in
+// waitForBoot -- ein bedingungsloses `= false` wuerde eine laufende Aufnahme
+// hier vergessen, und der Abraeumblock koennte die Datei nicht mehr sauber
+// schliessen.
+//
+// ~recordActive ist die EINZIGE Quelle der Wahrheit fuer "laeuft gerade eine
+// Aufnahme". s.isRecording waere die zweite und koennte von ihr abweichen
+// (etwa nach einem s.reboot) -- zwei Zustaende, bei denen Start und Stop sich
+// gegenseitig blockieren, waere schlimmer als einer, der einmal falsch steht.
+// Ausser diesen Funktionen ruft in dieser Datei nichts s.record/s.stopRecording.
+~recordActive ?? { ~recordActive = false };
+// ~recordFile haelt den Pfad der laufenden ODER der zuletzt geschriebenen
+// Datei und bleibt nach dem Stop stehen, damit die Status-Meldung beim Stop
+// den FERTIGEN Dateinamen nennen kann -- sonst muesste die Gegenstelle ihn
+// sich gemerkt haben. Bis zur ersten Aufnahme ist er nil, das ist der
+// Auslieferungszustand und braucht keine Zuweisung.
+
+// klangnetz_YYYY-MM-DD_HH-MM-SS -- lokale Zeit, die reicht fuer einen
+// Videodreh. Von Hand zusammengesetzt statt Date.stamp: dessen Format
+// (YYMMDD_HHMMSS) ist ohne Trennzeichen und im Dateimanager schlechter zu
+// lesen.
+~recordTwoDigits = { |n| if (n < 10) { "0" ++ n.asString } { n.asString } };
+~recordStamp = {
+    var d = Date.localtime;
+    "%-%-%_%-%-%".format(
+        d.year.asString,
+        ~recordTwoDigits.(d.month),
+        ~recordTwoDigits.(d.day),
+        ~recordTwoDigits.(d.hour),
+        ~recordTwoDigits.(d.minute),
+        ~recordTwoDigits.(d.second)
+    )
+};
+
+// Zustand melden. Wird bei JEDEM Start, Stop und auf /klangnetz/record/query
+// geschickt -- auch bei einem ignorierten Doppel-Start: eine Gegenstelle, die
+// den Zustand verloren hat, bekommt so trotzdem die Wahrheit.
+~recordStatusSend = {
+    ~recordStatusAddr.sendMsg('/klangnetz/record/status',
+        if (~recordActive) { 1 } { 0 },
+        ~recordFile ? ""
+    );
+};
+
+~recordStart = {
+    var path, chans;
+    if (~recordActive) {
+        // KEIN zweiter Recorder: s.record wuerde ihn ohnehin mit "Recording
+        // already started" abweisen, aber dann stuende der abgewiesene Fall
+        // nur im scsynth-Log und nicht hier.
+        ("Aufnahme laeuft bereits, Start ignoriert: " ++ (~recordFile ? "?")).postln;
+    } {
+        chans = s.options.numOutputBusChannels;
+        File.exists(~recordDir).not.if({ File.mkdir(~recordDir) });
+        path = ~recordDir +/+ ("klangnetz_" ++ ~recordStamp.() ++ ".wav");
+        // WAV/int24 statt der SC-Vorgabe (AIFF/float32): unkomprimiert wie
+        // gefordert, aber in dem Format, das jeder Videoschnitt ohne
+        // Nachfragen oeffnet. Die Samplerate steht NICHT hier -- sie kommt
+        // vom laufenden Server (ASIO-Interface), der Puffer wird mit dessen
+        // Rate angelegt.
+        s.recHeaderFormat = "wav";
+        s.recSampleFormat = "int24";
+        // Argumente BEWUSST der Reihe nach statt als Keywords: schreibt man
+        // einen Keyword-Namen falsch, verschluckt sclang ihn mit einer blossen
+        // Warnung und nimmt den Default -- die Aufnahme haette dann still zwei
+        // Kanaele statt vier, und das faellt erst beim Abhoeren der fertigen
+        // Datei auf. Reihenfolge: (path, bus, numChannels, node).
+        //   bus 0        = der Hardware-Ausgang, auf den \masterReverb
+        //                  schreibt (NICHT ~quadBus, siehe oben)
+        //   numChannels  = alle Ausgangskanaele des Servers, keine 4 als
+        //                  Literal -- die Kanalzahl steht einmal in
+        //                  s.options.numOutputBusChannels
+        //   node         = s.defaultGroup, der Recorder haengt sich an deren
+        //                  Ende und laeuft damit nach \masterReverb
+        s.record(path, 0, chans, s.defaultGroup);
+        ~recordActive = true;
+        ~recordFile = path;
+        ("Aufnahme laeuft: % (% Kanaele, % Hz)".format(
+            path, chans, s.sampleRate ? "?")).postln;
+    };
+    ~recordStatusSend.();
+    ~recordActive
+};
+
+~recordStop = {
+    if (~recordActive.not) {
+        "Keine Aufnahme aktiv, Stop ignoriert".postln;
+    } {
+        // Schliesst die Datei (Header mit der endgueltigen Laenge) und gibt
+        // den Puffer frei. OHNE diesen Aufruf -- also wenn sclang hart
+        // abgeschossen wird -- bleibt die WAV-Datei unfertig.
+        s.stopRecording;
+        ~recordActive = false;
+        ("Aufnahme beendet: " ++ (~recordFile ? "?")).postln;
+    };
+    ~recordStatusSend.();
+    ~recordActive
+};
+
+// Der Toggle ist bewusst nur eine Ableitung der zwei expliziten Befehle: eine
+// Gegenstelle, die ihren Zustand kennt, soll start/stop schicken (dann kann
+// ein verlorenes Datagramm den Zustand nicht umdrehen), der Toggle ist fuer
+// den Fall, dass sie ihn NICHT kennt.
+~recordToggle = {
+    if (~recordActive) { ~recordStop.() } { ~recordStart.() }
+};
+
 s.waitForBoot({
     // ---- Alten Aufbau abräumen ---------------------------------------
     // Nur beim Re-Evaluieren im Live-Coding relevant, beim ersten Lauf sind
@@ -1378,6 +1525,16 @@ s.waitForBoot({
     OSCdef(\scPresetLoad) !? { |d| d.free };
     OSCdef(\scPresetSave) !? { |d| d.free };
     OSCdef(\netMelodyReload) !? { |d| d.free };
+    OSCdef(\klangnetzRecordStart) !? { |d| d.free };
+    OSCdef(\klangnetzRecordStop) !? { |d| d.free };
+    OSCdef(\klangnetzRecordToggle) !? { |d| d.free };
+    OSCdef(\klangnetzRecordQuery) !? { |d| d.free };
+    // Eine laufende Aufnahme SCHLIESSEN, nicht einfach den Zustand vergessen:
+    // ~voices.free weiter unten nimmt alle Stimmen mit, und ein Recorder, der
+    // danach weiterliefe, schriebe Stille in eine Datei, deren Header nie
+    // fertig geschrieben wird. Steht vor dem Abraeumen, damit der letzte
+    // Klang noch mit in der Datei landet.
+    if (~recordActive == true) { ~recordStop.() };
     ~droneReaper !? { |r| r.stop };
     ~paramOscDefs !? { |defs| defs.do({ |d| d.free }) };
     ~masterReverbSyn !? { |syn| syn.free };
@@ -2359,6 +2516,26 @@ s.waitForBoot({
     ~melodyLoad.(~melodyModes[
         ~melodyMode.round.asInteger.clip(0, ~melodyModes.size - 1)][\key]);
 
+    // ---- OSC-Empfang: Vierkanal-Mitschnitt ----------------------------
+    // /klangnetz/record/start | stop | toggle | query -- alle vier ohne
+    // Argument. Die Logik steht in ~recordStart/~recordStop/~recordToggle
+    // oben, hier haengen nur die Adressen daran; dasselbe Muster wie bei den
+    // Preset-Adressen.
+    //
+    // start/stop sind der normale Weg (ein verlorenes Datagramm kann den
+    // Zustand dann nicht umdrehen), toggle der Rueckfall fuer eine
+    // Gegenstelle ohne Zustand, query aendert nichts und schickt nur den
+    // Zustand -- damit ein spaeter gestartetes Web-UI ihn erfaehrt, ohne die
+    // Aufnahme anzufassen.
+    OSCdef(\klangnetzRecordStart, { ~recordStart.() },
+        '/klangnetz/record/start', recvPort: ~oscListenPort);
+    OSCdef(\klangnetzRecordStop, { ~recordStop.() },
+        '/klangnetz/record/stop', recvPort: ~oscListenPort);
+    OSCdef(\klangnetzRecordToggle, { ~recordToggle.() },
+        '/klangnetz/record/toggle', recvPort: ~oscListenPort);
+    OSCdef(\klangnetzRecordQuery, { ~recordStatusSend.() },
+        '/klangnetz/record/query', recvPort: ~oscListenPort);
+
     // =================================================================
     // Messhilfen für die zwei ungemessenen Werte
     // =================================================================
@@ -2476,6 +2653,9 @@ s.waitForBoot({
         ~maxPolyphony, ~tailDefs.size + 1, ~tailDefs.size, ~droneLimit)).postln;
     ("Sound-Parameter-Layer aktiv: % Parameter unter /klangnetz/param/<name>, Port % - siehe Adressliste im Kopf der Datei.".format(
         ~params.size, ~oscListenPort)).postln;
+    ("Mitschnitt: /klangnetz/record/start|stop|toggle|query auf Port %, WAV/int24 mit % Kanaelen nach % - Status geht an 127.0.0.1:%.".format(
+        ~oscListenPort, s.options.numOutputBusChannels, ~recordDir,
+        ~recordStatusPort)).postln;
     "KlangNetz: Panning auf Pan4 umgebaut (2026-07-31), Rotation+Hardware-Kanal-Permutation per NRT-Messung verifiziert - alle vier Boxpositionen 100% scharf, Netzmitte 25/25/25/25%.".postln;
 });
 )
@@ -2499,6 +2679,17 @@ s.waitForBoot({
 // NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/param/panSharpness", 3.0);
 // )
 
+// ---- Vierkanal-Mitschnitt testen (ohne Web-UI) -------------------------
+// Danach liegt eine wachsende klangnetz_<zeitstempel>.wav in recordings/;
+// nach dem Stop ist sie mit jedem Player abspielbar. Zweimal start
+// hintereinander schreibt KEINE zweite Datei, sondern meldet
+// "Aufnahme laeuft bereits".
+// (
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/record/start");
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/record/query");
+// NetAddr("127.0.0.1", 8002).sendMsg("/klangnetz/record/stop");
+// )
+
 // ---- Kanal-/Positionstest (bei neuer/geaenderter Verkabelung) ---------
 // Der Reihe nach auswerten. Ausführlich kommentiert bei den Funktionen
 // oben im Block. Braucht eine INTERAKTIVE Sitzung (IDE oder sclang-REPL) —
@@ -2514,7 +2705,9 @@ s.waitForBoot({
 // )
 
 // ---- Aufräumen -----------------------------------------------------
+// ~recordStop ZUERST: sonst bleibt die WAV-Datei ohne fertigen Header liegen.
 // (
+// ~recordStop.();
 // ~netHitNodeOscFunc.free;
 // OSCdef(\impulseStream).free;
 // ~droneReaper.stop;

@@ -11,9 +11,12 @@ remoteSettings.txt und dem OSC-Paket schiefgehen kann:
 import os
 import re
 import shutil
+import socket
 import struct
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +47,19 @@ SAMPLE = "\n".join([
 
 def by_address(parameters):
     return {p.address: p for p in parameters}
+
+
+def close_app_sockets(test, app):
+    """Die drei UDP-Sockets einer App beim Testende schliessen.
+
+    Zwei Sender (imPulse, sclang) und der Empfaenger des Aufnahme-
+    Rueckkanals. Im Betrieb leben sie so lange wie der Prozess und werden
+    nie geschlossen; eine Testsuite legt aber dutzende Apps an und meldete
+    sonst ebenso viele ResourceWarnings.
+    """
+    test.addCleanup(app.config["IMPULSE_RECORD_STATUS"].close)
+    test.addCleanup(app.config["IMPULSE_SENDER"].close)
+    test.addCleanup(app.config["IMPULSE_SC_SENDER"].close)
 
 
 class ParseTest(unittest.TestCase):
@@ -430,6 +446,21 @@ class OscEncodingTest(unittest.TestCase):
             builder.add_arg(value)
             self.assertEqual(build_osc_message(address, value),
                              builder.build().dgram, address)
+
+    def test_no_argument_matches_python_osc_too(self):
+        """Beide Encoder muessen bei ``None`` dasselbe leere Paket bauen.
+
+        OscSender waehlt je nach Adresse den einen oder den anderen Weg --
+        die Record-Kommandos duerfen davon nicht abhaengen.
+        """
+        try:
+            from pythonosc import osc_message_builder
+        except ImportError:
+            self.skipTest("python-osc nicht installiert")
+        address = server.RECORD_START
+        builder = osc_message_builder.OscMessageBuilder(address=address)
+        self.assertEqual(build_osc_message(address, None),
+                         builder.build().dgram)
 
 
 class PresetNameTest(unittest.TestCase):
@@ -1909,11 +1940,23 @@ class PaletteEndpointTest(unittest.TestCase):
         with open(self.settings, "w", encoding="utf-8") as handle:
             handle.write("float\t/net/impulse/color/r\tx\t1\t0\t1\n")
         self.palette = os.path.join(self.directory, server.PALETTE_FILENAME)
-        app = server.create_app(self.settings, "127.0.0.1", 9999,
-                                os.path.join(self.directory, "presets"),
-                                self.palette)
+        app = self.make_app(self.palette)
         app.config["TESTING"] = True
         self.client = app.test_client()
+
+    def make_app(self, palette):
+        """create_app plus Aufraeumen des Record-Status-Sockets.
+
+        Jede App bindet einen UDP-Port fuer den Rueckkanal des
+        Aufnahmeknopfes; ohne das Schliessen sammelt die Suite offene Sockets
+        (und meldet ResourceWarnings). Port 0 statt 8003, damit ein laufendes
+        Web-UI auf derselben Maschine die Tests nicht scheitern laesst.
+        """
+        app = server.create_app(self.settings, "127.0.0.1", 9999,
+                                os.path.join(self.directory, "presets"),
+                                palette, record_status_port=0)
+        close_app_sockets(self, app)
+        return app
 
     def test_get_on_a_missing_file_is_an_empty_palette(self):
         payload = self.client.get("/api/palette").get_json()
@@ -1982,8 +2025,7 @@ class PaletteEndpointTest(unittest.TestCase):
         self.assertIn("warm", html)
 
     def test_default_palette_path_when_none_is_given(self):
-        app = server.create_app(self.settings, "127.0.0.1", 9999,
-                                os.path.join(self.directory, "presets"))
+        app = self.make_app(None)
         self.assertEqual(app.config["IMPULSE_PALETTE_PATH"],
                          server.default_palette_path(self.settings))
 
@@ -2165,6 +2207,287 @@ class MelodyTest(unittest.TestCase):
         excluded = java.split("EXCLUDED = {")[1].split("};")[0]
         for key, _label, _hint in server.MELODY_FIELDS:
             self.assertIn('"/net/melody/%s"' % key, excluded)
+
+class RecordOscEncodingTest(unittest.TestCase):
+    """Die Record-Kommandos tragen KEIN Argument.
+
+    Ein versehentlich mitgeschicktes Argument waere kein Fehler, den man
+    sieht: sclangs OSCdef-Funktionen ignorieren msg[1] hier einfach. Deshalb
+    steht die Zusicherung im Test und nicht nur im Kommentar.
+    """
+
+    def test_message_without_argument_has_an_empty_type_tag(self):
+        data = build_osc_message(server.RECORD_START, None)
+        self.assertEqual(data, b"/klangnetz/record/start\x00,\x00\x00\x00")
+
+    def test_round_trip_without_argument(self):
+        address, args = server.parse_osc_message(
+            build_osc_message(server.RECORD_TOGGLE, None))
+        self.assertEqual(address, server.RECORD_TOGGLE)
+        self.assertEqual(args, [])
+
+    def test_round_trip_with_int_and_string(self):
+        # Genau die Form, die sclang zurueckschickt: Zustand plus Dateiname.
+        data = (server._osc_string(server.RECORD_STATUS)
+                + server._osc_string(",is")
+                + struct.pack(">i", 1)
+                + server._osc_string("/tmp/klangnetz_2026-08-01_12-00-00.wav"))
+        address, args = server.parse_osc_message(data)
+        self.assertEqual(address, server.RECORD_STATUS)
+        self.assertEqual(args, [1, "/tmp/klangnetz_2026-08-01_12-00-00.wav"])
+
+    def test_round_trip_with_float(self):
+        address, args = server.parse_osc_message(
+            build_osc_message("/klangnetz/param/masterVolume", 0.5))
+        self.assertEqual(address, "/klangnetz/param/masterVolume")
+        self.assertEqual(len(args), 1)
+        self.assertAlmostEqual(args[0], 0.5, places=6)
+
+    def test_message_without_a_type_tag_is_read_as_no_arguments(self):
+        # Erlaubt laut OSC-Spezifikation und von manchen Sendern so gebaut.
+        address, args = server.parse_osc_message(server._osc_string("/x/y"))
+        self.assertEqual((address, args), ("/x/y", []))
+
+    def test_unsupported_type_is_an_error_not_a_wrong_value(self):
+        data = (server._osc_string("/x/y") + server._osc_string(",b")
+                + b"\x00\x00\x00\x00")
+        with self.assertRaises(ValueError):
+            server.parse_osc_message(data)
+
+    def test_garbage_is_rejected(self):
+        with self.assertRaises(ValueError):
+            server.parse_osc_message(server._osc_string("kein-slash"))
+
+
+class FakeSclang:
+    """Ein UDP-Empfaenger, der sich wie der Record-Teil der .scd verhaelt.
+
+    Bildet genau die Zustandslogik von ~recordStart/~recordStop/~recordToggle
+    nach, inklusive des ignorierten Doppel-Starts und des Dateinamens, der
+    nach dem Stop stehen bleibt. Antwortet -- wie sclang -- auf JEDES der vier
+    Kommandos mit einer Status-Meldung.
+    """
+
+    def __init__(self) -> None:
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(("127.0.0.1", 0))
+        self.port = self.socket.getsockname()[1]
+        self.status_port = 0
+        self.answer = True              # aus = "sclang laeuft nicht"
+        self.recording = False
+        self.path = ""
+        self.seen = []                  # (Adresse, Argumente) in Reihenfolge
+        self.starts = 0
+        self._lock = threading.Lock()
+        self._out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while True:
+            try:
+                data, _sender = self.socket.recvfrom(4096)
+            except OSError:
+                return
+            try:
+                address, args = server.parse_osc_message(data)
+            except (ValueError, struct.error):
+                continue
+            with self._lock:
+                self.seen.append((address, args))
+                if address == server.RECORD_START and not self.recording:
+                    self._start()
+                elif address == server.RECORD_STOP:
+                    self.recording = False
+                elif address == server.RECORD_TOGGLE:
+                    if self.recording:
+                        self.recording = False
+                    else:
+                        self._start()
+                if not self.answer:
+                    continue
+                payload = (server._osc_string(server.RECORD_STATUS)
+                           + server._osc_string(",is")
+                           + struct.pack(">i", 1 if self.recording else 0)
+                           + server._osc_string(self.path))
+            self._out.sendto(payload, ("127.0.0.1", self.status_port))
+
+    def _start(self) -> None:
+        self.starts += 1
+        self.recording = True
+        self.path = "/repo/recordings/klangnetz_2026-08-01_12-00-%02d.wav" % self.starts
+
+    def addresses(self):
+        with self._lock:
+            return [a for a, _args in self.seen]
+
+    def close(self) -> None:
+        self.socket.close()
+        self._out.close()
+
+
+class RecordEndpointTest(unittest.TestCase):
+    """Die vier /api/record/*-Routen gegen ein gefaktes sclang.
+
+    Echte UDP-Pakete auf dem Loopback, weil genau der Weg das Neue ist: ein
+    Kommando ohne Argument hin, eine Status-Meldung zurueck. Ein Mock des
+    Senders wuerde beides ueberspringen und nur pruefen, dass eine Funktion
+    aufgerufen wurde.
+    """
+
+    def setUp(self):
+        if server.Flask is None:
+            self.skipTest("Flask nicht installiert")
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.settings = os.path.join(self.directory, "remoteSettings.txt")
+        with open(self.settings, "w", encoding="utf-8") as handle:
+            handle.write("int\t/net/impulse/speed\tx\t16\t1\t1500\n")
+        self.sclang = FakeSclang()
+        self.addCleanup(self.sclang.close)
+        app = server.create_app(self.settings, "127.0.0.1", 9999,
+                                os.path.join(self.directory, "presets"),
+                                os.path.join(self.directory, "palette.txt"),
+                                sc_port=self.sclang.port,
+                                record_status_port=0)
+        app.config["TESTING"] = True
+        close_app_sockets(self, app)
+        self.listener = app.config["IMPULSE_RECORD_STATUS"]
+        self.assertTrue(self.listener.active, "Status-Port nicht gebunden")
+        # Erst jetzt bekannt: der Listener hat sich einen freien Port geholt.
+        self.sclang.status_port = self.listener.port
+        self.client = app.test_client()
+
+    def test_start_sends_the_command_without_an_argument(self):
+        payload = self.client.post("/api/record/start").get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(self.sclang.seen[0], (server.RECORD_START, []))
+
+    def test_start_reports_the_state_from_sclang(self):
+        payload = self.client.post("/api/record/start").get_json()
+        self.assertTrue(payload["answered"])
+        self.assertTrue(payload["known"])
+        self.assertTrue(payload["recording"])
+        self.assertTrue(payload["path"].endswith(".wav"))
+
+    def test_second_start_does_not_open_a_second_file(self):
+        first = self.client.post("/api/record/start").get_json()
+        second = self.client.post("/api/record/start").get_json()
+        # sclang ignoriert den zweiten Start, meldet aber trotzdem -- der
+        # Knopf zeigt danach den wahren Zustand, nicht den geklickten.
+        self.assertEqual(self.sclang.starts, 1)
+        self.assertTrue(second["recording"])
+        self.assertEqual(second["path"], first["path"])
+
+    def test_stop_keeps_the_finished_file_name(self):
+        started = self.client.post("/api/record/start").get_json()
+        stopped = self.client.post("/api/record/stop").get_json()
+        self.assertFalse(stopped["recording"])
+        self.assertEqual(stopped["path"], started["path"])
+
+    def test_stop_without_a_recording_is_not_an_error(self):
+        response = self.client.post("/api/record/stop")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["recording"])
+
+    def test_toggle_flips_the_state(self):
+        self.assertTrue(self.client.post("/api/record/toggle")
+                        .get_json()["recording"])
+        self.assertFalse(self.client.post("/api/record/toggle")
+                         .get_json()["recording"])
+        self.assertEqual(self.sclang.addresses(),
+                         [server.RECORD_TOGGLE, server.RECORD_TOGGLE])
+
+    def test_status_asks_sclang_and_changes_nothing(self):
+        self.client.post("/api/record/start")
+        payload = self.client.get("/api/record/status").get_json()
+        self.assertEqual(self.sclang.addresses()[-1], server.RECORD_QUERY)
+        self.assertEqual(self.sclang.starts, 1)
+        self.assertTrue(payload["recording"])
+
+    def test_status_reports_unknown_when_sclang_is_silent(self):
+        # Der Fall "Web-UI laeuft, sclang nicht" -- haeufiger als jeder
+        # andere. Kein 500er, aber auch kein vorgetaeuschter Zustand.
+        self.sclang.answer = False
+        response = self.client.get("/api/record/status")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["answered"])
+        self.assertFalse(payload["known"])
+
+    def test_a_stale_answer_is_not_mistaken_for_a_fresh_one(self):
+        self.client.post("/api/record/start")
+        self.sclang.answer = False
+        payload = self.client.post("/api/record/stop").get_json()
+        # Der Listener kennt noch den alten Stand ("laeuft"), aber auf DIESES
+        # Kommando kam nichts -- answered sagt es, und das UI zeigt deshalb
+        # "kein Kontakt" statt einer Aufnahme, die es nicht mehr gibt.
+        self.assertFalse(payload["answered"])
+
+    def test_a_foreign_datagram_does_not_change_the_state(self):
+        self.client.post("/api/record/start")
+        noise = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(noise.close)
+        noise.sendto(b"kein OSC", ("127.0.0.1", self.listener.port))
+        noise.sendto(build_osc_message("/etwas/anderes", 1),
+                     ("127.0.0.1", self.listener.port))
+        time.sleep(0.1)
+        self.assertTrue(self.listener.snapshot()["recording"])
+
+    def test_bootstrap_carries_the_record_wiring(self):
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("\"record\"", html)
+        self.assertIn("\"statusPort\": %d" % self.listener.port, html)
+
+
+class RecordSectionTest(unittest.TestCase):
+    """Der Knopf haengt im Sound-Tab und braucht keine Adresse aus dem Dump."""
+
+    def test_record_section_sits_in_the_sound_tab(self):
+        tabs = server.build_tabs([], None, None, None)
+        by_id = {tab["id"]: tab for tab in tabs}
+        self.assertIn("record", by_id[server.TAB_SOUND]["sections"])
+        for tab_id, tab in by_id.items():
+            if tab_id != server.TAB_SOUND:
+                self.assertNotIn("record", tab["sections"])
+
+    def test_record_section_comes_first_in_its_tab(self):
+        sections = server.build_tabs([], None, None, None)
+        sound = next(t for t in sections if t["id"] == server.TAB_SOUND)
+        self.assertEqual(sound["sections"][0], "record")
+
+
+class RecordScdTest(unittest.TestCase):
+    """Gegenprobe an der .scd -- die Adressen sind auf beiden Seiten getippt."""
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "supercollider", "klangnetz_bells.scd")
+        if not os.path.exists(path):
+            self.skipTest("klangnetz_bells.scd nicht gefunden")
+        with open(path, encoding="utf-8") as handle:
+            self.scd = handle.read()
+
+    def test_every_command_address_is_answered_by_the_scd(self):
+        for address in (server.RECORD_START, server.RECORD_STOP,
+                        server.RECORD_TOGGLE, server.RECORD_QUERY):
+            self.assertIn("'%s'" % address, self.scd,
+                          "%s wird gesendet, aber in der .scd nicht empfangen"
+                          % address)
+
+    def test_the_scd_sends_exactly_the_status_address_we_listen_for(self):
+        self.assertIn("'%s'" % server.RECORD_STATUS, self.scd)
+
+    def test_the_status_port_matches_the_scd(self):
+        self.assertIn("~recordStatusPort = %d;" % server.DEFAULT_RECORD_STATUS_PORT,
+                      self.scd)
+
+    def test_the_command_port_matches_the_scd(self):
+        # Die Kommandos gehen an denselben Port wie die Sound-Parameter.
+        self.assertIn("~oscListenPort = %d;" % server.SC_OSC_PORT, self.scd)
 
 
 if __name__ == "__main__":

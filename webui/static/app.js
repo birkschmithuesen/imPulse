@@ -2683,6 +2683,176 @@ function buildScParams(params, host, port, withNote) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Vierkanal-Mitschnitt
+ *
+ * Der einzige Knopf im ganzen UI mit einem echten RUECKKANAL: sclang meldet
+ * seinen Aufnahmezustand an den Server (siehe RecordStatusListener in
+ * server.py), der Knopf zeigt also, was WIRKLICH laeuft -- nicht, was zuletzt
+ * geklickt wurde. Das ist hier kein Luxus: eine Aufnahme, die nicht laeuft,
+ * faellt sonst erst nach dem Dreh auf.
+ *
+ * Drei Zustaende, in Farbe UND Form unterschieden (dieselbe Regel wie im
+ * Sequencer-Panel, Bedienung im Dunkeln): laeuft (roter Punkt, pulsierend),
+ * bereit (hohler Punkt), unbekannt (kein Kontakt zu sclang, Warnton).
+ * ------------------------------------------------------------------------- */
+
+const RECORD_POLL_MS = 2000;
+
+// Die Verdrahtung (Port, Bind-Fehler) steht nur im Bootstrap, nicht in der
+// Antwort von /api/parameters -- sie aendert sich waehrend einer Sitzung
+// nicht. Deshalb hier gemerkt und nicht aus dem render()-Datensatz gelesen:
+// nach einem "Neu laden" stuende sie sonst nicht mehr zur Verfuegung.
+const recordConfig = bootstrap.record || {};
+// Genau EIN Poll-Timer, auch nach mehrfachem "Neu laden". render() baut alle
+// Panels neu; ohne das Abraeumen liefe der Timer der alten, laengst aus dem
+// Dokument entfernten Sektion weiter -- ein Poll mehr pro Neuladen, fuer
+// immer.
+let recordTimer = null;
+
+// Nimmt nur den Host, keinen Datensatz -- wie buildPaletteSection(): der
+// Knopf haengt an keiner Adresse aus remoteSettings.txt.
+function buildRecordSection(host) {
+  const config = recordConfig;
+  if (recordTimer !== null) { clearInterval(recordTimer); recordTimer = null; }
+
+  const section = document.createElement('section');
+  section.className = 'rec';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Mitschnitt (4 Kanaele)';
+  section.appendChild(title);
+
+  const row = document.createElement('div');
+  row.className = 'rec-row';
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'rec-button';
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  const label = document.createElement('span');
+  label.className = 'lbl';
+  label.textContent = 'Aufnahme starten';
+  button.appendChild(dot);
+  button.appendChild(label);
+  row.appendChild(button);
+
+  const state = document.createElement('div');
+  state.className = 'rec-state';
+  const line = document.createElement('span');
+  line.className = 'rec-line';
+  line.textContent = 'Zustand wird abgefragt …';
+  const file = document.createElement('span');
+  file.className = 'rec-file';
+  state.appendChild(line);
+  state.appendChild(file);
+  row.appendChild(state);
+
+  section.appendChild(row);
+
+  const help = document.createElement('p');
+  help.className = 'help';
+  help.textContent = 'Schneidet die vier fertigen Ausgangskanaele mit (nach '
+    + 'Panning, Hall und Limiter) nach recordings/klangnetz_<zeitstempel>.wav, '
+    + 'WAV/int24 in der Samplerate des Interfaces. Geschrieben wird die Datei '
+    + 'von sclang auf Port ' + (config.port || 8002) + ', nicht von diesem UI.';
+  section.appendChild(help);
+
+  if (config.error) {
+    const warn = document.createElement('p');
+    warn.className = 'help warn';
+    warn.textContent = config.error + ' – der Knopf sendet trotzdem, kann den '
+      + 'Zustand aber nicht anzeigen.';
+    section.appendChild(warn);
+  }
+
+  // Was der Knopf zuletzt vom Server gehoert hat. null = noch nichts/kein
+  // Kontakt; genau dann geht der Klick als /toggle raus, weil ein start oder
+  // stop ins Blaue geraten waere.
+  let recording = null;
+  let busy = false;
+
+  function show(payload) {
+    const known = !!(payload && payload.known && payload.answered !== false);
+    recording = known ? !!payload.recording : null;
+    const path = (payload && payload.path) || '';
+    // Nur der Dateiname: der ganze Pfad ist auf einem Telefon-Display die
+    // halbe Zeile, und der Ordner steht ohnehin im Hilfetext.
+    const name = path.split(/[\\/]/).pop();
+
+    button.classList.toggle('on', recording === true);
+    button.classList.toggle('unknown', recording === null);
+    if (recording === true) {
+      label.textContent = 'Aufnahme stoppen';
+      line.textContent = 'REC laeuft';
+      line.className = 'rec-line rec-on';
+      file.textContent = name || '';
+    } else if (recording === false) {
+      label.textContent = 'Aufnahme starten';
+      line.textContent = 'bereit';
+      line.className = 'rec-line';
+      file.textContent = name ? 'zuletzt: ' + name : '';
+    } else {
+      label.textContent = 'Aufnahme umschalten';
+      line.textContent = 'kein Kontakt zu sclang';
+      line.className = 'rec-line rec-unknown';
+      file.textContent = '';
+    }
+  }
+
+  async function call(path, what) {
+    if (busy) { return; }
+    busy = true;
+    button.disabled = true;
+    try {
+      const response = await fetch(path, { method: 'POST' });
+      const payload = await response.json();
+      show(payload);
+      if (!payload.answered) {
+        setStatus('Mitschnitt: ' + what + ' gesendet, aber keine Antwort von '
+          + 'sclang – laeuft es?', 'warn');
+      } else {
+        setStatus(payload.recording
+          ? 'Mitschnitt laeuft: ' + (payload.path || '?')
+          : 'Mitschnitt gestoppt' + (payload.path ? ': ' + payload.path : ''),
+          'ok');
+      }
+    } catch (err) {
+      setStatus('Mitschnitt: ' + what + ' fehlgeschlagen – ' + err, 'err');
+    } finally {
+      busy = false;
+      button.disabled = false;
+    }
+  }
+
+  button.addEventListener('click', () => {
+    if (recording === true) { call('/api/record/stop', 'Stop'); }
+    else if (recording === false) { call('/api/record/start', 'Start'); }
+    // Zustand unbekannt: umschalten statt raten. Verliert das UI den Kontakt
+    // waehrend einer Aufnahme, bringt ein Klick sie so trotzdem zu Ende.
+    else { call('/api/record/toggle', 'Umschalten'); }
+  });
+
+  async function poll() {
+    // Waehrend eines laufenden Kommandos NICHT dazwischenfragen: die Antwort
+    // des Kommandos ist die frischere, und zwei Abfragen gleichzeitig
+    // koennten sich in der Anzeige ueberholen.
+    if (busy) { return; }
+    try {
+      const response = await fetch('/api/record/status');
+      show(await response.json());
+    } catch (err) {
+      show(null);            // Server weg: ehrlich "unbekannt" zeigen
+    }
+  }
+
+  poll();
+  recordTimer = setInterval(poll, RECORD_POLL_MS);
+
+  host.appendChild(section);
+}
+
+/* ---------------------------------------------------------------------------
  * Tabs
  *
  * Fuenf Themen-Tabs statt einer langen Liste. Welcher Parameter in welchen
@@ -2745,6 +2915,7 @@ function buildTabs(data) {
       if (name === 'palette') { buildPaletteSection(panel); }
       if (name === 'split') { buildSplit(data, panel); }
       if (name === 'songStructure') { buildSongStructure(data, panel); }
+      if (name === 'record') { buildRecordSection(panel); }
     });
 
     // 2. Kuratierte Regler direkt sichtbar
