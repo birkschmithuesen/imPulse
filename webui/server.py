@@ -188,6 +188,17 @@ SEQUENCER_TRACK_FIELDS = ["noteValue", "repeatCount", "energy",
 # RemoteControlledIntParameter keine Aufzaehlung kann - im UI steht der Name.
 TREE_LABELS = ["alle", "vorn", "hinten", "rechts", "links"]
 
+# Erklaerung zum Baum-Filter, einmal je Sequencer-Sektion. Sie steht HIER und
+# nicht sechsmal in app.js: derselbe Satz unter jedem der sechs Tracks waere
+# Rauschen, und der Vorrang von originStripeOverride ist eine inhaltliche
+# Aussage ueber die Java-Seite (OriginSequencer.advanceOrigin), die hier
+# pruefbar bleibt.
+TREE_HELP = ("Baum: schraenkt den Ursprungs-Stripe eines Tracks auf einen der "
+             "vier Baeume ein. „alle“ = kein Filter, der Track "
+             "wuerfelt aus allen Stripes. Der Filter wirkt nur, solange "
+             "„Ursprung“ auf „zufall“ steht – ein "
+             "fest gesetzter Stripe (originStripeOverride) hat Vorrang.")
+
 # Speed-Klassen aus SpeedQuantizer.MULTIPLIERS, gleiche Reihenfolge.
 # Adress-Suffix und Anzeigename; das Suffix spiegelt die Java-Seite (Punkt
 # vermieden, siehe Kommentar dort).
@@ -261,6 +272,7 @@ def build_sequencer(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, An
         "noteValues": [{"value": v, "symbol": s, "name": n}
                        for v, s, n in NOTE_VALUES],
         "treeLabels": list(TREE_LABELS),
+        "treeHelp": TREE_HELP,
     }
 
 
@@ -326,6 +338,7 @@ TAB_SOUND = "sound"
 TAB_SPAWN = "spawn"
 TAB_NOTES = "noten"
 TAB_PHYSICS = "physik"
+TAB_COLORS = "farben"
 
 TAB_TITLES: List[Tuple[str, str]] = [
     (TAB_MIXER, "Mixer"),
@@ -333,6 +346,10 @@ TAB_TITLES: List[Tuple[str, str]] = [
     (TAB_SPAWN, "Spawn-Verhalten"),
     (TAB_NOTES, "Noten-Verhalten"),
     (TAB_PHYSICS, "Impuls-Verhalten"),
+    # Haengt hinten an: die Kern-Reihenfolge der fuenf Themen-Tabs bleibt,
+    # wie sie ist. Farbe ist Gestaltung und wird am Stueck angefasst, nicht
+    # zwischen Physik-Reglern verstreut.
+    (TAB_COLORS, "Farben"),
 ]
 
 # Reihenfolge zaehlt: die erste passende Regel gewinnt.
@@ -341,12 +358,27 @@ TAB_RULES: List[Tuple[str, str]] = [
     ("Master/", TAB_MIXER),
     # speedQuantize VOR /net/impulse/, sonst faengt die Physik-Regel es ab.
     ("/net/impulse/speedQuantize/", TAB_NOTES),
+    # Dieselbe Falle bei den Farben: /net/impulse/color/* wuerde sonst von
+    # der Physik-Regel eingesammelt, /nodes/colors/* von der Node-Regel.
+    # fadeOut steht bewusst dabei -- es ist der Nachleucht-Farbfaktor des
+    # Impulses und teilt sich mit color/* ohnehin schon eine Gruppe
+    # (SPLIT_GROUP_PREFIXES); eine Gruppe geht als GANZES in einen Tab.
+    ("/net/impulse/color/", TAB_COLORS),
+    ("/net/impulse/fadeOut/", TAB_COLORS),
+    ("/nodes/colors/", TAB_COLORS),
     ("/net/sequencer/", TAB_SPAWN),
     ("/net/randomSpawn/", TAB_SPAWN),
     ("/net/activate", TAB_SPAWN),
     ("/net/impulse/", TAB_PHYSICS),
     ("/nodes/", TAB_PHYSICS),
 ]
+
+# Tabs, deren Gruppen direkt sichtbar sind statt hinter "Erweitert".
+# Gedacht fuer Tabs ohne kuratierte Auswahl: eine Farbkarte traegt keine
+# eigene Adresse (kind == "color", drei Adressen darunter), TAB_PRIMARY kann
+# sie also gar nicht nach oben holen -- der Farben-Tab bestuende sonst
+# ausschliesslich aus einem zugeklappten <details>.
+TAB_EXPANDED = {TAB_COLORS}
 
 # Kuratierte SC-Parameter je Tab (Namen, nicht Adressen). Der Rest desselben
 # Tabs landet im Erweitert-Bereich.
@@ -492,6 +524,7 @@ def build_tabs(groups: List[Dict[str, Any]],
             "primary": [],
             "groups": [],
             "scParams": [],
+            "expanded": tab_id in TAB_EXPANDED,
         }
 
     # Spezial-Sektionen
@@ -499,6 +532,10 @@ def build_tabs(groups: List[Dict[str, Any]],
         by_tab[TAB_SPAWN]["sections"].append("sequencer")
     if speed:
         by_tab[TAB_NOTES]["sections"].append("speedClasses")
+    # Die Palette-Leiste braucht keine Adresse aus remoteSettings.txt und ist
+    # deshalb bedingungslos da -- anders als Sequencer und Speed-Klassen, die
+    # ohne ihre Parameter nicht gebaut werden koennen.
+    by_tab[TAB_COLORS]["sections"].append("palette")
 
     # SC-Parameter je Eintrag, nicht je Gruppe: masterVolume gehoert in den
     # Mixer, brightness ins Sound Design, obwohl beide "Master"/"Glocke"
@@ -520,7 +557,20 @@ def build_tabs(groups: List[Dict[str, Any]],
     # Generische Gruppen
     for group in groups:
         controls = group.get("controls") or []
-        addresses = [c.get("address") for c in controls if c.get("address")]
+        addresses = []
+        for control in controls:
+            if control.get("address"):
+                addresses.append(control["address"])
+            elif control.get("kind") == "color" and control.get("base"):
+                # Eine Farbkarte traegt KEINE eigene Adresse, sondern drei
+                # darunter (<basis>/Hue|Sat|Bright). Ohne diesen Zweig hat
+                # eine Gruppe aus lauter Farbkarten gar keine Adresse, faellt
+                # durch das "if not addresses: continue" und landet in KEINEM
+                # Tab -- genau das ist mit /nodes/colors passiert: 18 Werte,
+                # sechs Karten, seit dem Tab-Umbau im UI unerreichbar, ohne
+                # Fehlermeldung. Der Test haelt es fest.
+                addresses.append("%s/%s" % (control["base"],
+                                            COLOR_COMPONENTS[0]))
         if not addresses:
             continue
         tab_id = tab_for_address(addresses[0])
@@ -924,6 +974,201 @@ def wait_for_preset_file(path: str, previous_mtime: Optional[float],
         time.sleep(step)
 
 
+# ---------------------------------------------------------------------------
+# Farbpalette
+#
+# Eine kleine Sammlung wiederverwendbarer Farben, die an JEDER
+# Farbwaehler-Karte per Klick anwendbar ist. Sie liegt server-seitig in
+# data/colorPalettes.txt und nicht im localStorage des Browsers: sie soll
+# einen Neustart ueberleben und auf jedem Geraet dieselbe sein -- genau das
+# meint "eine Palette, die von allen gewaehlt werden kann".
+#
+# Format wie data/stripeTrees.txt: Tab-getrennte Spalten, '#' leitet einen
+# Kommentar ein, von Hand editierbar. Vier Spalten:
+#
+#     name<TAB>hue<TAB>sat<TAB>bright     (die drei Werte in 0..1, wie LedColor)
+#
+# Bei doppeltem Namen gewinnt die LETZTE Zeile -- dieselbe Regel und derselbe
+# Grund wie bei StripeTreeStore: die natuerliche Handkorrektur ist eine
+# angehaengte Zeile am Ende, "erste gewinnt" wuerde sie still verschlucken.
+#
+# Ein Preset ist das hier ausdruecklich NICHT: die Palette haelt nur
+# Farbwerte, nicht welche Karte welche Farbe traegt. Was wo steht, ist
+# Aufgabe der Presets, die es schon gibt.
+# ---------------------------------------------------------------------------
+
+PALETTE_FILENAME = "colorPalettes.txt"
+PALETTE_COMPONENTS = ("hue", "sat", "bright")
+# Deckel gegen eine Palette, die sich unbemerkt aufblaeht: die Swatch-Reihe
+# steht unter JEDER Farbkarte, ab ein paar Dutzend Farben ist sie hoeher als
+# die Karte selbst.
+PALETTE_MAX_ENTRIES = 24
+PALETTE_NAME_MAX_LENGTH = 32
+
+PALETTE_HEADER = (
+    "# Farbpalette fuer das Web-UI (Sektion \"Farben\").\n"
+    "#\n"
+    "# Format: name<TAB>hue<TAB>sat<TAB>bright -- die drei Werte in 0..1.\n"
+    "# '#' leitet einen Kommentar ein. Bei doppeltem Namen gewinnt die\n"
+    "# LETZTE Zeile (eine angehaengte Handkorrektur schlaegt den alten\n"
+    "# Eintrag), genau wie in data/stripeTrees.txt.\n"
+    "#\n"
+    "# Wird vom Web-UI geschrieben und ist von Hand editierbar.\n")
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def parse_palette(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Parst den Inhalt von colorPalettes.txt.
+
+    Kaputte Zeilen werden gemeldet und uebersprungen, nicht als Abbruch
+    weitergereicht -- dasselbe Verhalten wie parse_settings() und wie die
+    Store-Klassen auf der Java-Seite: eine einzelne unerwartete Zeile soll
+    das UI nicht lahmlegen.
+    """
+    entries: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    by_name: Dict[str, int] = {}
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = raw.rstrip("\r\n").split("\t")
+        if len(fields) < 4:
+            warnings.append("Zeile %d uebersprungen (%d Felder statt 4)"
+                            % (lineno, len(fields)))
+            continue
+        name = fields[0].strip()
+        if not name:
+            warnings.append("Zeile %d uebersprungen (leerer Name)" % lineno)
+            continue
+        try:
+            values = [float(fields[i + 1]) for i in range(3)]
+        except ValueError:
+            warnings.append("Zeile %d uebersprungen (unlesbare Zahl)" % lineno)
+            continue
+        if any(v != v for v in values):
+            warnings.append("Zeile %d uebersprungen (keine Zahl)" % lineno)
+            continue
+        entry: Dict[str, Any] = {"name": name[:PALETTE_NAME_MAX_LENGTH]}
+        for key, value in zip(PALETTE_COMPONENTS, values):
+            entry[key] = _clamp01(value)
+        if entry["name"] in by_name:
+            warnings.append("Name %r in Zeile %d ersetzt den frueheren Eintrag"
+                            % (entry["name"], lineno))
+            entries[by_name[entry["name"]]] = entry
+        else:
+            by_name[entry["name"]] = len(entries)
+            entries.append(entry)
+    return entries, warnings
+
+
+def format_palette(entries: List[Dict[str, Any]]) -> str:
+    """Schreibt die Palette im Dateiformat, mit Kopfkommentar."""
+    parts = [PALETTE_HEADER]
+    for entry in entries:
+        # "%.4f" schreibt in Python immer mit Punkt, unabhaengig von der
+        # Systemsprache -- dieselbe Anforderung wie Locale.US auf der
+        # Java-Seite, hier ohne eigenes Zutun erfuellt. Ein Test haelt es
+        # fest, damit es niemand versehentlich aufgibt.
+        parts.append("%s\t%.4f\t%.4f\t%.4f\n"
+                     % (entry["name"], entry["hue"], entry["sat"],
+                        entry["bright"]))
+    return "".join(parts)
+
+
+def load_palette(path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Liest die Palette. Fehlende Datei = leere Palette, kein Fehler.
+
+    Die Datei entsteht erst beim ersten Speichern -- ein UI, das ohne sie
+    einen Fehler zeigt, waere im Auslieferungszustand kaputt.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return [], []
+    except OSError as exc:
+        return [], ["Palette nicht lesbar: %s" % exc]
+    return parse_palette(text)
+
+
+def save_palette(path: str, entries: List[Dict[str, Any]]) -> None:
+    """Schreibt die Palette atomar (Temp-Datei + Rename).
+
+    Dasselbe Muster wie NodeCrossingStore/LedAnchorStore auf der Java-Seite:
+    ein abgebrochener Schreibvorgang darf keine halbe Datei hinterlassen.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(format_palette(entries))
+    os.replace(temp, path)
+
+
+def validate_palette(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]],
+                                        Optional[str]]:
+    """Prueft und normalisiert eine vom Browser geschickte Palette.
+
+    Rueckgabe: (normalisierte Liste, None) oder (None, Fehlermeldung). Eine
+    leere Liste ist gueltig -- die letzte Farbe zu entfernen muss moeglich
+    sein.
+
+    Anders als beim Parsen wird hier NICHT stillschweigend uebersprungen: was
+    aus dem Browser kommt, ist keine handgepflegte Datei, sondern das
+    Ergebnis eines Klicks. Ein still verschluckter Eintrag saehe im UI aus
+    wie ein Speichern, das funktioniert hat.
+    """
+    if not isinstance(raw, list):
+        return None, "Palette ist keine Liste"
+    if len(raw) > PALETTE_MAX_ENTRIES:
+        return None, ("Hoechstens %d Farben in der Palette"
+                      % PALETTE_MAX_ENTRIES)
+    entries: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            return None, "Eintrag %d ist kein Objekt" % index
+        name = item.get("name")
+        name = name.strip() if isinstance(name, str) else ""
+        if not name:
+            return None, "Eintrag %d hat keinen Namen" % index
+        if len(name) > PALETTE_NAME_MAX_LENGTH:
+            return None, ("Name in Eintrag %d ist laenger als %d Zeichen"
+                          % (index, PALETTE_NAME_MAX_LENGTH))
+        # Ein Tabulator im Namen zerlegte die Zeile beim naechsten Lesen in
+        # fuenf Felder, ein Zeilenumbruch machte zwei Zeilen daraus, ein
+        # fuehrendes '#' einen Kommentar: die Datei waere still kaputt.
+        if ("\t" in name or "\n" in name or "\r" in name
+                or name.startswith("#")):
+            return None, ("Name in Eintrag %d enthaelt ein Zeichen, das die "
+                          "Datei zerlegen wuerde (Tabulator, Zeilenumbruch "
+                          "oder fuehrendes #)" % index)
+        if name in seen:
+            return None, "Name %r kommt zweimal vor" % name
+        seen.add(name)
+        entry: Dict[str, Any] = {"name": name}
+        for key in PALETTE_COMPONENTS:
+            try:
+                value = float(item.get(key))
+            except (TypeError, ValueError):
+                return None, "%s in Eintrag %d ist keine Zahl" % (key, index)
+            if value != value or value in (float("inf"), float("-inf")):
+                return None, "%s in Eintrag %d ist keine Zahl" % (key, index)
+            entry[key] = _clamp01(value)
+        entries.append(entry)
+    return entries, None
+
+
+def default_palette_path(settings_path: str) -> str:
+    """Palette neben der Parameterdatei: <dir von settings>/colorPalettes.txt."""
+    return os.path.join(os.path.dirname(os.path.abspath(settings_path)),
+                        PALETTE_FILENAME)
+
+
 def group_key(address: str) -> str:
     """Gruppenschluessel aus dem Adress-Praefix.
 
@@ -1216,7 +1461,7 @@ def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Para
 
 
 def create_app(settings_path: str, osc_host: str, osc_port: int,
-               presets_path: str):
+               presets_path: str, palette_path: Optional[str] = None):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
@@ -1233,6 +1478,18 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
     app.config["IMPULSE_STORE"] = store
     app.config["IMPULSE_SENDER"] = sender
     app.config["IMPULSE_SC_SENDER"] = sc_sender
+
+    # Vorgabe erst hier aufloesen, nicht in der Signatur: sie haengt am
+    # settings_path, ein Default-Argument wuerde einmal beim Import
+    # ausgewertet.
+    if palette_path is None:
+        palette_path = default_palette_path(settings_path)
+    app.config["IMPULSE_PALETTE_PATH"] = palette_path
+
+    def palette_payload() -> Dict[str, Any]:
+        entries, warnings = load_palette(palette_path)
+        return {"ok": True, "entries": entries, "path": palette_path,
+                "warnings": warnings}
 
     def apply_value(param: Parameter, value: float) -> Applied:
         coerced = param.coerce(value)
@@ -1267,6 +1524,7 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                     ],
                 },
                 "presets": preset_list_payload(),
+                "palette": palette_payload(),
             }),
         )
 
@@ -1401,6 +1659,35 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         payload.update({"name": name, "overwritten": existed})
         return jsonify(payload)
 
+    @app.route("/api/palette")
+    def api_palette():
+        return jsonify(palette_payload())
+
+    @app.route("/api/palette", methods=["POST"])
+    def api_palette_save():
+        """Die komplette Palette ersetzen.
+
+        Voll-Liste statt Hinzufuegen/Entfernen einzelner Eintraege: die
+        Reihenfolge haelt ohnehin der Browser, und zwei Endpoints auf
+        derselben Datei waeren zwei Wege, die auseinanderlaufen koennen.
+        Preis: zwei gleichzeitig offene Browser ueberschreiben sich
+        gegenseitig. Bei einer Installation mit einem Operator ist das der
+        richtige Tausch -- im README steht es trotzdem.
+
+        Anders als /api/preset/save geht hier kein OSC raus: die Palette ist
+        reine UI-Sache, imPulse kennt sie nicht.
+        """
+        body = request.get_json(silent=True) or {}
+        entries, problem = validate_palette(body.get("entries"))
+        if problem is not None:
+            return jsonify({"ok": False, "error": problem}), 400
+        try:
+            save_palette(palette_path, entries)
+        except OSError as exc:
+            return jsonify({"ok": False,
+                            "error": "Palette nicht schreibbar: %s" % exc}), 500
+        return jsonify(palette_payload())
+
     return app
 
 
@@ -1414,6 +1701,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=os.environ.get("IMPULSE_PRESETS"),
                         help="Ordner mit den Preset-Dateien "
                              "(Vorgabe: presets/ neben --settings)")
+    parser.add_argument("--palette",
+                        default=os.environ.get("IMPULSE_PALETTE"),
+                        help="Datei mit der Farbpalette "
+                             "(Vorgabe: colorPalettes.txt neben --settings)")
     parser.add_argument("--osc-host",
                         default=os.environ.get("IMPULSE_OSC_HOST", DEFAULT_OSC_HOST),
                         help="Ziel-Host fuer OSC (Vorgabe: %(default)s)")
@@ -1433,10 +1724,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     settings_path = os.path.abspath(args.settings)
     presets_path = (os.path.abspath(args.presets) if args.presets
                     else default_presets_path(settings_path))
-    app = create_app(settings_path, args.osc_host, args.osc_port, presets_path)
+    palette_path = (os.path.abspath(args.palette) if args.palette
+                    else default_palette_path(settings_path))
+    app = create_app(settings_path, args.osc_host, args.osc_port, presets_path,
+                     palette_path)
 
     print("[webui] remoteSettings: %s" % settings_path)
     print("[webui] Presets:        %s" % presets_path)
+    print("[webui] Palette:        %s" % palette_path)
     print("[webui] OSC-Ziel:       %s:%d" % (args.osc_host, args.osc_port))
     print("[webui] HTTP:           http://%s:%d" % (args.host, args.port))
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

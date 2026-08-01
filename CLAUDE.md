@@ -151,29 +151,48 @@ Zwei Dinge, die man beim Ändern kennen muss:
 - **Nach dem Laden zieht der Server die Regleranzeige nach**, indem er dieselbe Preset-Datei mit `parse_settings()` liest — das geht, weil Preset- und `remoteSettings.txt`-Format identisch sind. Die Werte gehen in der HTTP-Antwort zurück und werden im Browser *still* gesetzt (kein zweites OSC); geklemmt wird auf die Range aus `remoteSettings.txt`, nicht auf die aus der Preset-Datei — dieselbe Regel wie `PresetStore.applyPreset()`. Adressen, die der Dump nicht kennt, und Werte ausserhalb der verengten UI-Range (`UI_RANGE_OVERRIDES`) nennt die Statuszeile, statt sie zu verschlucken.
 - **Speichern wartet auf die Datei.** `/preset/save` ist asynchron (imPulse schreibt erst im nächsten `draw()`), also pollt der Endpoint bis zu 1 s auf eine geänderte `mtime` und antwortet sonst mit 504 statt Erfolg zu behaupten — der häufigste Fehlerfall ist „Web-UI läuft, imPulse nicht". `valid_preset_name()` in `server.py` und die Regex im JS spiegeln `PresetStore.isValidName()`; Autorität bleibt Java, dort geht es um Pfad-Traversal.
 
-**Fünf Themen-Tabs** (Mixer, Sound Design, Spawn-Verhalten, Noten-Verhalten,
-Impuls-Verhalten) statt einer langen Liste. Welche Adresse in welchen Tab
-gehört, entscheidet `TAB_RULES`/`TAB_PRIMARY` in `server.py` — dort ist es
+**Sechs Themen-Tabs** (Mixer, Sound Design, Spawn-Verhalten, Noten-Verhalten,
+Impuls-Verhalten, Farben) statt einer langen Liste. Welche Adresse in welchen
+Tab gehört, entscheidet `TAB_RULES`/`TAB_PRIMARY` in `server.py` — dort ist es
 prüfbar, und `test_webui.py` stellt sicher, dass **jeder** Regler in genau
 einem Tab landet und keiner doppelt. Oben je Tab die kuratierten Regler,
 darunter ein eingeklapptes `<details>` mit dem Rest.
 
 Die Reihenfolge der Regeln zählt: `/net/impulse/speedQuantize/` muss **vor**
 `/net/impulse/` stehen, sonst zöge die Physik-Regel die Speed-Klassen an sich.
+Dieselbe Falle bei den Farben: `/net/impulse/color/`,
+`/net/impulse/fadeOut/` und `/nodes/colors/` stehen vor `/net/impulse/` bzw.
+`/nodes/`.
+
+**Eine Gruppe geht als GANZES in einen Tab**, bestimmt von der Adresse ihres
+ersten Reglers. Eine Farbkarte trägt aber **keine eigene Adresse**, sondern
+drei darunter (`<basis>/Hue|Sat|Bright`) — `build_tabs()` nimmt für sie
+deshalb ausdrücklich die Hue-Adresse. Ohne diesen Zweig hat eine Gruppe aus
+lauter Farbkarten gar keine Adresse und fällt aus **jedem** Tab heraus. Genau
+das war seit dem Tab-Umbau mit `/nodes/colors` passiert: 18 Werte, sechs
+Farbwähler, im UI schlicht nicht vorhanden, ohne Fehlermeldung. Ein Test hält
+für jede Gruppe fest, dass sie in einem Tab ankommt.
+
+Der Farben-Tab trägt als einziger `TAB_EXPANDED`: seine Gruppen stehen direkt
+im Panel statt hinter „Erweitert". `TAB_PRIMARY` arbeitet auf Adressen und
+greift bei Farbkarten deshalb nicht — ohne das Flag bestünde der ganze Tab
+aus einem zugeklappten `<details>`.
 
 **`buildTabs()` baut ALLE Panels und schaltet nur `hidden` um** — nicht erst
 beim Öffnen eines Tabs. Die Regler tragen sich beim Bauen in die flache
 `controls`-Map ein, und über genau die laufen Preset-Laden und der
 `applied`/`echoed`-Rücklauf. Ein Regler auf einem nie geöffneten Tab stünde
 sonst nicht in der Map und würde von einem Preset still nicht angezeigt.
-Headless mit jsdom gegengeprüft: 67 Einträge in der Map, ein Regler auf einem
-inaktiven Tab lässt sich setzen, und das Umschalten baut nichts neu.
+Headless mit jsdom gegengeprüft: alle Regler in der Map (67 beim Fünf-Tab-
+Umbau, 81 beim Farben-Tab), ein Regler auf einem inaktiven Tab lässt sich
+setzen, das Umschalten baut nichts neu, und ein Swatch-Klick setzt genau eine
+Farbkarte, ohne die Nachbarn anzufassen.
 
 Kopfzeile, Statuszeile und Preset-Sektion stehen bewusst **über** der
 Tab-Leiste: sie gelten für alle Tabs, und ein Preset-Feld, das nur auf einem
 Tab sichtbar wäre, wäre eine Falle.
 
-**Drei Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
+**Vier Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
 flache Liste aus 38 Sequencer-Reglern unbedienbar wäre. Der Server liefert
 dafür Struktur statt einer Reglerliste (`build_sequencer`,
 `build_speed_classes`, `sc_param_groups` in `server.py`), das Aussehen macht
@@ -182,11 +201,49 @@ dafür Struktur statt einer Reglerliste (`build_sequencer`,
 - **Sequencer** — BPM als große Ziffer, eigener Not-Aus, sechs Track-Karten
   mit je eigener Spurfarbe; Notenwerte als segmentierte Leiste mit **Symbol
   und Kürzel** (nicht jede Windows-Schrift hat U+1D15D..U+1D161, ein Symbol
-  allein wäre dort ein leeres Kästchen).
+  allein wäre dort ein leeres Kästchen). `originTreeFilter` ist ein
+  **Auswahlbalken** mit fünf Klartext-Zuständen, siehe unten.
 - **Speed-Klassen** — die fünf Gewichte plus ein Verteilungsbalken, der sie
   normiert zeigt; die Gewichte selbst summieren sich bewusst nicht auf 100.
 - **Sound (SuperCollider)** — die `/klangnetz/param/*`-Adressen, die
   **nicht** durch `remoteSettings.txt` laufen.
+- **Palette** — die Farbpalette im Farben-Tab, siehe unten. Als einzige
+  braucht sie keine Adresse aus `remoteSettings.txt` und ist deshalb
+  bedingungslos da.
+
+**Der Baum-Filter je Track ist ein Auswahlbalken, kein 0..4-Schieber.** Fünf
+Klartext-Zustände (`alle`/`vorn`/`hinten`/`rechts`/`links`), gleiche Bauform
+wie die Notenwert-Leiste darüber. „0 = zufällig" ist an einem Zahlenregler
+nicht zu erraten; ein Schalter-plus-Dropdown wären zwei Bedienelemente für
+einen Parameter mit fünf gleichrangigen Zuständen plus ein verborgener
+„zuletzt gewählter Baum", der nach einem Preset-Laden gegenüber dem Sketch
+falsch stehen kann. Der OSC-Wertebereich bleibt unverändert `int 0..4`.
+
+Dazu zwei Erklärungen mit unterschiedlicher Lebensdauer: `TREE_HELP`
+(`server.py`) steht als feste Zeile unter der Spurenreihe — dort und nicht
+sechsmal in `app.js`, weil sie eine Aussage über `OriginSequencer` trifft und
+so prüfbar bleibt. Der Hinweis **je Track** erscheint dagegen nur, wenn
+`originStripeOverride >= 0` den Filter gerade aushebelt: das ist der
+Zustand, in dem ein eingestellter Filter wirkungslos ist, ohne Fehler und
+ohne Symptom.
+
+**Die Farbpalette** (`data/colorPalettes.txt`, `GET`/`POST /api/palette`) ist
+eine Sammlung wiederverwendbarer Farben. Dieselbe Swatch-Reihe steht unter
+**jeder** Farbwähler-Karte; ein Klick setzt Hue/Sat/Bright genau dieser Karte
+über den ganz normalen `queueSendMany`-Weg, kein Sonderpfad. Fünf Dinge:
+
+- **Format wie `data/stripeTrees.txt`** — Tab-Spalten
+  `name hue sat bright` (0..1), `#` als Kommentar, von Hand editierbar, bei
+  doppeltem Namen gewinnt die **letzte** Zeile (angehängte Handkorrektur).
+- **Server-seitig, nicht im localStorage.** Sie soll einen Neustart
+  überleben und auf jedem Gerät dieselbe sein — genau das meint „eine
+  Palette, die von allen gewählt werden kann".
+- **Voll-Liste-Semantik**: der POST trägt die komplette Palette, der Server
+  ersetzt die Datei. Zwei Endpoints auf derselben Datei wären zwei Wege, die
+  auseinanderlaufen können. Preis: zwei offene Browser überschreiben sich.
+- **Kein OSC.** Die Palette ist reine UI-Sache, imPulse kennt sie nicht.
+- **Kein Preset-Ersatz.** Sie hält nur Farbwerte, nicht welche Karte welche
+  Farbe trägt — das können die Presets schon.
 
 Vier Dinge, die man beim Ändern kennen muss:
 

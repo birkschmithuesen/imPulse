@@ -670,6 +670,17 @@ class SequencerSectionTest(unittest.TestCase):
         self.assertEqual(seq["treeLabels"][1:],
                          ["vorn", "hinten", "rechts", "links"])
 
+    def test_sequencer_carries_a_help_line_for_the_tree_filter(self):
+        """Ohne Erklaerung ist "alle" fuer einen Operator ein Raetsel.
+
+        Der Text muss den Vorrang von originStripeOverride nennen: das ist
+        die Falle, bei der der Filter eingestellt ist und trotzdem nichts
+        tut (siehe OriginSequencer.advanceOrigin).
+        """
+        seq = server.build_sequencer(self._params())
+        self.assertTrue(seq["treeHelp"])
+        self.assertIn("originStripeOverride", seq["treeHelp"])
+
     def test_tree_labels_match_the_java_constant(self):
         """Driftet TREE_NAMES in StripeTreeStore.java, faellt es hier auf."""
         path = os.path.join(os.path.dirname(os.path.dirname(
@@ -767,6 +778,15 @@ class TabLayoutTest(unittest.TestCase):
             "float\t/net/impulse/splitSpeedJitter\tx\t0\t0\t1",
             "float\t/net/impulse/splitLifetimeJitter\tx\t0\t0\t1",
             "float\t/net/impulse/color/r\tx\t1\t0\t1",
+            "float\t/net/impulse/color/g\tx\t1\t0\t1",
+            "float\t/net/impulse/color/b\tx\t1\t0\t1",
+            "float\t/net/impulse/color/gamma\tx\t1\t0\t4",
+            "int\t/net/impulse/color/useRemoteCol\tx\t0\t0\t1",
+            "float\t/net/impulse/fadeOut/r\tx\t0.97\t0\t1",
+            "float\t/nodes/colors/central/fired/Hue\tx\t0\t0\t1",
+            "float\t/nodes/colors/central/fired/Sat\tx\t1\t0\t1",
+            "float\t/nodes/colors/central/fired/Bright\tx\t1\t0\t1",
+            "float\t/nodes/radius/central\tx\t2\t0\t20",
             "float\t/net/impulse/speed/randomize/period\tx\t30\t1\t300",
             "int\t/net/impulse/oscMaxCount\tx\t32\t0\t256",
             "int\t/net/randomSpawn/enabled\tx\t1\t0\t1",
@@ -794,10 +814,62 @@ class TabLayoutTest(unittest.TestCase):
         store.refresh(force=True)
         return store.snapshot()
 
-    def test_five_tabs_in_the_briefed_order(self):
+    def test_six_tabs_in_the_briefed_order(self):
         tabs = self._snapshot()["tabs"]
+        # Die fuenf Kern-Tabs behalten ihre Reihenfolge, "farben" haengt
+        # hinten an -- die Struktur aus dem Fuenf-Tab-Umbau wird nicht
+        # umsortiert, nur ergaenzt.
         self.assertEqual([t["id"] for t in tabs],
-                         ["mixer", "sound", "spawn", "noten", "physik"])
+                         ["mixer", "sound", "spawn", "noten", "physik",
+                          "farben"])
+
+    def test_colour_addresses_land_in_the_colour_tab(self):
+        for address in ("/net/impulse/color/r",
+                        "/net/impulse/color/gamma",
+                        "/net/impulse/color/useRemoteCol",
+                        "/net/impulse/fadeOut/r",
+                        "/nodes/colors/central/fired/Hue",
+                        "/nodes/colors/outer/waiting/Bright"):
+            self.assertEqual(server.tab_for_address(address),
+                             server.TAB_COLORS, address)
+
+    def test_non_colour_impulse_and_node_addresses_stay_in_physics(self):
+        # Die Farb-Regeln stehen VOR den allgemeinen -- greifen sie zu breit,
+        # leert sich der Physik-Tab, ohne dass irgendwo ein Fehler entsteht.
+        for address in ("/net/impulse/speed", "/net/impulse/lifetime",
+                        "/net/impulse/splitSpeedJitter",
+                        "/nodes/radius/central", "/nodes/times/recover"):
+            self.assertEqual(server.tab_for_address(address),
+                             server.TAB_PHYSICS, address)
+
+    def test_colour_tab_shows_its_groups_without_the_details_fold(self):
+        """Der Farben-Tab hat keine kuratierte Auswahl.
+
+        Farbkarten tragen keine eigene Adresse (kind == "color"), TAB_PRIMARY
+        kann sie also nicht nach oben holen. Ohne das expanded-Flag stuende
+        der ganze Tab eingeklappt hinter "Erweitert" -- ein Tab, dessen
+        Inhalt man erst aufklappen muss.
+        """
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        self.assertTrue(tabs[server.TAB_COLORS]["expanded"])
+        self.assertFalse(tabs[server.TAB_PHYSICS]["expanded"])
+
+    def test_colour_tab_actually_carries_the_colour_controls(self):
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        colour = tabs[server.TAB_COLORS]
+        bases = [c["base"] for group in colour["groups"]
+                 for c in group["controls"] if c.get("kind") == "color"]
+        self.assertIn("/nodes/colors/central/fired", bases)
+        addresses = [c.get("address") for group in colour["groups"]
+                     for c in group["controls"]]
+        self.assertIn("/net/impulse/color/gamma", addresses)
+
+    def test_palette_section_sits_in_the_colour_tab(self):
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        self.assertIn("palette", tabs[server.TAB_COLORS]["sections"])
+        for tab_id, tab in tabs.items():
+            if tab_id != server.TAB_COLORS:
+                self.assertNotIn("palette", tab["sections"], tab_id)
 
     def test_every_control_lands_in_exactly_one_tab(self):
         """Der eigentliche Zweck: kein Regler faellt beim Umbau heraus."""
@@ -838,10 +910,35 @@ class TabLayoutTest(unittest.TestCase):
         self.assertEqual(
             server.tab_for_address("/net/impulse/speedQuantize/weight/8x"), "noten")
         self.assertEqual(server.tab_for_address("/net/impulse/speed"), "physik")
-        self.assertEqual(server.tab_for_address("/net/impulse/color/r"), "physik")
+        # Farbe gehoert zu den Farben, NICHT zur Physik - dieselbe
+        # Reihenfolge-Falle wie bei speedQuantize.
+        self.assertEqual(server.tab_for_address("/net/impulse/color/r"), "farben")
         self.assertEqual(server.tab_for_address("/nodes/times/recover"), "physik")
         # Unbekanntes verschwindet nicht, es landet sichtbar in der Physik
         self.assertEqual(server.tab_for_address("/etwas/ganz/neues"), "physik")
+
+    def test_no_group_falls_out_of_every_tab(self):
+        """Regression: eine Gruppe aus lauter Farbkarten war unerreichbar.
+
+        build_tabs() ordnet eine Gruppe ueber die Adresse ihres ersten
+        Reglers zu. Eine Farbkarte traegt aber keine eigene Adresse, sondern
+        drei darunter -- die Gruppe /nodes/colors (18 Werte, sechs Karten)
+        hatte damit gar keine und fiel aus JEDEM Tab heraus. Kein Fehler,
+        kein Symptom, die Regler waren schlicht nicht da.
+        """
+        snapshot = self._snapshot()
+        primary = {c["address"] for tab in snapshot["tabs"]
+                   for c in tab["primary"]}
+        in_tabs = {group["key"] for tab in snapshot["tabs"]
+                   for group in tab["groups"]}
+        for group in snapshot["groups"]:
+            # Gruppen, deren Regler restlos in die kuratierte Auswahl
+            # gewandert sind, duerfen fehlen -- die stehen ja oben im Tab.
+            remaining = [c for c in group["controls"]
+                         if c.get("address") not in primary]
+            if remaining:
+                self.assertIn(group["key"], in_tabs,
+                              "Gruppe %s steht in keinem Tab" % group["key"])
 
     def test_primary_controls_are_not_repeated_in_the_groups(self):
         for tab in self._snapshot()["tabs"]:
@@ -936,6 +1033,289 @@ class ScParamTest(unittest.TestCase):
         in_table = {p["name"] for p in server.SC_PARAMS}
         self.assertEqual(in_scd - in_table, set(),
                          "in der .scd registriert, fehlt aber in SC_PARAMS")
+
+
+class PaletteFileTest(unittest.TestCase):
+    """data/colorPalettes.txt: Parser, Schreiber, Validierung.
+
+    Dieselben Regeln wie bei data/stripeTrees.txt: von Hand editierbar,
+    Kommentare mit '#', und bei doppeltem Namen gewinnt die LETZTE Zeile --
+    die natuerliche Handkorrektur ist eine angehaengte Zeile am Ende.
+    """
+
+    def test_parses_name_and_three_components(self):
+        entries, warnings = server.parse_palette(
+            "warm\t0.08\t0.9\t1.0\nkalt\t0.55\t0.7\t0.8\n")
+        self.assertEqual(warnings, [])
+        self.assertEqual([e["name"] for e in entries], ["warm", "kalt"])
+        self.assertAlmostEqual(entries[0]["hue"], 0.08)
+        self.assertAlmostEqual(entries[1]["bright"], 0.8)
+
+    def test_comments_and_blank_lines_are_skipped_without_warning(self):
+        entries, warnings = server.parse_palette(
+            "# Kopf\n\n   \nwarm\t0.08\t0.9\t1.0\n# Ende\n")
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(warnings, [])
+
+    def test_broken_line_is_reported_not_fatal(self):
+        entries, warnings = server.parse_palette(
+            "warm\t0.08\t0.9\t1.0\nkaputt\t0.5\nnochwas\ta\tb\tc\n")
+        self.assertEqual([e["name"] for e in entries], ["warm"])
+        self.assertEqual(len(warnings), 2)
+
+    def test_values_are_clamped_to_zero_one(self):
+        entries, _warnings = server.parse_palette("weit\t-3\t7\t0.5\n")
+        self.assertEqual(entries[0]["hue"], 0.0)
+        self.assertEqual(entries[0]["sat"], 1.0)
+
+    def test_duplicate_name_last_line_wins(self):
+        # Wie StripeTreeStore: die Handkorrektur wird angehaengt, "erste
+        # gewinnt" wuerde sie still verschlucken. Gemeldet wird sie trotzdem.
+        entries, warnings = server.parse_palette(
+            "warm\t0.08\t0.9\t1.0\nwarm\t0.10\t0.5\t0.5\n")
+        self.assertEqual(len(entries), 1)
+        self.assertAlmostEqual(entries[0]["hue"], 0.10)
+        self.assertEqual(len(warnings), 1)
+
+    def test_round_trip_through_the_file_format(self):
+        entries = [{"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0},
+                   {"name": "kalt", "hue": 0.55, "sat": 0.7, "bright": 0.8}]
+        again, warnings = server.parse_palette(server.format_palette(entries))
+        self.assertEqual(warnings, [])
+        self.assertEqual(again, entries)
+
+    def test_written_numbers_use_a_decimal_point(self):
+        # Dieselbe Falle wie Locale.US in LedAnchorStore: ein Komma machte
+        # die Datei fuer den eigenen Parser unlesbar.
+        text = server.format_palette(
+            [{"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0}])
+        body = [l for l in text.splitlines() if l and not l.startswith("#")]
+        self.assertIn(".", body[0])
+        self.assertNotIn(",", body[0])
+
+    def test_columns_are_separated_by_tabs(self):
+        text = server.format_palette(
+            [{"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0}])
+        body = [l for l in text.splitlines() if l and not l.startswith("#")]
+        self.assertEqual(len(body[0].split("\t")), 4)
+
+    def test_missing_file_is_an_empty_palette_not_an_error(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        entries, warnings = server.load_palette(
+            os.path.join(directory, "gibtsnicht.txt"))
+        self.assertEqual(entries, [])
+        self.assertEqual(warnings, [])
+
+    def test_save_then_load_returns_the_same_palette(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, server.PALETTE_FILENAME)
+        entries = [{"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0}]
+        server.save_palette(path, entries)
+        loaded, warnings = server.load_palette(path)
+        self.assertEqual(loaded, entries)
+        self.assertEqual(warnings, [])
+
+    def test_save_replaces_instead_of_appending(self):
+        # Kein Anhaengen, genau wie NodeCrossingStore.save(): zweimal
+        # speichern darf die Palette nicht verdoppeln.
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, server.PALETTE_FILENAME)
+        server.save_palette(path, [{"name": "a", "hue": 0.1, "sat": 1,
+                                    "bright": 1}])
+        server.save_palette(path, [{"name": "b", "hue": 0.2, "sat": 1,
+                                    "bright": 1}])
+        loaded, _warnings = server.load_palette(path)
+        self.assertEqual([e["name"] for e in loaded], ["b"])
+
+    def test_save_leaves_no_temp_file_behind(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, server.PALETTE_FILENAME)
+        server.save_palette(path, [])
+        self.assertEqual(os.listdir(directory), [server.PALETTE_FILENAME])
+
+    def test_validate_rejects_a_non_list(self):
+        entries, error = server.validate_palette({"name": "warm"})
+        self.assertIsNone(entries)
+        self.assertIsNotNone(error)
+
+    def test_validate_rejects_an_unnamed_entry(self):
+        entries, error = server.validate_palette(
+            [{"name": "  ", "hue": 0.1, "sat": 1, "bright": 1}])
+        self.assertIsNone(entries)
+        self.assertIn("Namen", error)
+
+    def test_validate_rejects_characters_that_would_break_the_file(self):
+        for name in ("wa\trm", "wa\nrm", "#warm"):
+            entries, error = server.validate_palette(
+                [{"name": name, "hue": 0.1, "sat": 1, "bright": 1}])
+            self.assertIsNone(entries, name)
+            self.assertIsNotNone(error, name)
+
+    def test_validate_rejects_nan_and_infinity(self):
+        for bad in (float("nan"), float("inf")):
+            entries, error = server.validate_palette(
+                [{"name": "warm", "hue": bad, "sat": 1, "bright": 1}])
+            self.assertIsNone(entries)
+            self.assertIsNotNone(error)
+
+    def test_validate_rejects_a_missing_component(self):
+        entries, error = server.validate_palette(
+            [{"name": "warm", "hue": 0.1, "sat": 1}])
+        self.assertIsNone(entries)
+        self.assertIn("bright", error)
+
+    def test_validate_rejects_a_duplicate_name(self):
+        entries, error = server.validate_palette(
+            [{"name": "warm", "hue": 0.1, "sat": 1, "bright": 1},
+             {"name": "warm", "hue": 0.2, "sat": 1, "bright": 1}])
+        self.assertIsNone(entries)
+        self.assertIsNotNone(error)
+
+    def test_validate_rejects_more_than_the_maximum(self):
+        raw = [{"name": "f%d" % i, "hue": 0.1, "sat": 1, "bright": 1}
+               for i in range(server.PALETTE_MAX_ENTRIES + 1)]
+        entries, error = server.validate_palette(raw)
+        self.assertIsNone(entries)
+        self.assertIsNotNone(error)
+
+    def test_validate_accepts_exactly_the_maximum(self):
+        raw = [{"name": "f%d" % i, "hue": 0.1, "sat": 1, "bright": 1}
+               for i in range(server.PALETTE_MAX_ENTRIES)]
+        entries, error = server.validate_palette(raw)
+        self.assertIsNone(error)
+        self.assertEqual(len(entries), server.PALETTE_MAX_ENTRIES)
+
+    def test_validate_clamps_and_normalises(self):
+        entries, error = server.validate_palette(
+            [{"name": " warm ", "hue": 2, "sat": -1, "bright": "0.5"}])
+        self.assertIsNone(error)
+        self.assertEqual(entries, [{"name": "warm", "hue": 1.0, "sat": 0.0,
+                                    "bright": 0.5}])
+
+    def test_empty_list_is_allowed(self):
+        # Die letzte Farbe zu entfernen muss moeglich sein.
+        entries, error = server.validate_palette([])
+        self.assertIsNone(error)
+        self.assertEqual(entries, [])
+
+    def test_default_path_sits_next_to_the_settings_file(self):
+        path = server.default_palette_path(
+            os.path.join("a", "data", "remoteSettings.txt"))
+        self.assertEqual(os.path.basename(path), server.PALETTE_FILENAME)
+        self.assertEqual(os.path.basename(os.path.dirname(path)), "data")
+
+    def test_the_repo_file_parses_without_warnings(self):
+        """Gegenprobe an der echten data/colorPalettes.txt."""
+        path = os.path.join(server.REPO_ROOT, "data", server.PALETTE_FILENAME)
+        if not os.path.exists(path):
+            self.skipTest("data/colorPalettes.txt fehlt")
+        entries, warnings = server.load_palette(path)
+        self.assertEqual(warnings, [])
+        self.assertLessEqual(len(entries), server.PALETTE_MAX_ENTRIES)
+        for entry in entries:
+            for key in server.PALETTE_COMPONENTS:
+                self.assertGreaterEqual(entry[key], 0.0)
+                self.assertLessEqual(entry[key], 1.0)
+
+
+class PaletteEndpointTest(unittest.TestCase):
+    """GET/POST /api/palette.
+
+    Braucht Flask und wird sonst uebersprungen -- dasselbe Muster wie beim
+    python-osc-Gegentest weiter oben. Die Suite selbst bleibt ohne
+    Fremdabhaengigkeiten lauffaehig.
+    """
+
+    def setUp(self):
+        if server.Flask is None:
+            self.skipTest("Flask nicht installiert")
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.settings = os.path.join(self.directory, "remoteSettings.txt")
+        with open(self.settings, "w", encoding="utf-8") as handle:
+            handle.write("float\t/net/impulse/color/r\tx\t1\t0\t1\n")
+        self.palette = os.path.join(self.directory, server.PALETTE_FILENAME)
+        app = server.create_app(self.settings, "127.0.0.1", 9999,
+                                os.path.join(self.directory, "presets"),
+                                self.palette)
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_get_on_a_missing_file_is_an_empty_palette(self):
+        payload = self.client.get("/api/palette").get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["entries"], [])
+        self.assertEqual(payload["warnings"], [])
+
+    def test_post_writes_the_file_and_get_reads_it_back(self):
+        body = {"entries": [{"name": "warm", "hue": 0.08, "sat": 0.9,
+                             "bright": 1.0}]}
+        response = self.client.post("/api/palette", json=body)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(os.path.exists(self.palette))
+        entries = self.client.get("/api/palette").get_json()["entries"]
+        self.assertEqual(entries, body["entries"])
+
+    def test_post_answers_with_the_stored_palette(self):
+        # Der Browser uebernimmt die Antwort als neuen Zustand -- sie muss
+        # also das enthalten, was wirklich in der Datei steht.
+        payload = self.client.post("/api/palette", json={"entries": [
+            {"name": " warm ", "hue": 5, "sat": 0.9, "bright": 1.0}]}).get_json()
+        self.assertEqual(payload["entries"],
+                         [{"name": "warm", "hue": 1.0, "sat": 0.9,
+                           "bright": 1.0}])
+
+    def test_post_replaces_instead_of_appending(self):
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "a", "hue": 0.1, "sat": 1, "bright": 1},
+            {"name": "b", "hue": 0.2, "sat": 1, "bright": 1}]})
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "b", "hue": 0.2, "sat": 1, "bright": 1}]})
+        entries = self.client.get("/api/palette").get_json()["entries"]
+        self.assertEqual([e["name"] for e in entries], ["b"])
+
+    def test_post_with_an_empty_list_clears_the_palette(self):
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "a", "hue": 0.1, "sat": 1, "bright": 1}]})
+        response = self.client.post("/api/palette", json={"entries": []})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.get("/api/palette").get_json()["entries"],
+                         [])
+
+    def test_post_with_an_invalid_entry_is_rejected_and_changes_nothing(self):
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "a", "hue": 0.1, "sat": 1, "bright": 1}]})
+        response = self.client.post("/api/palette", json={"entries": [
+            {"name": "", "hue": 0.1, "sat": 1, "bright": 1}]})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.get_json()["ok"])
+        entries = self.client.get("/api/palette").get_json()["entries"]
+        self.assertEqual([e["name"] for e in entries], ["a"])
+
+    def test_post_without_a_list_is_rejected(self):
+        response = self.client.post("/api/palette", json={"entries": "warm"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_without_a_body_is_rejected(self):
+        response = self.client.post("/api/palette")
+        self.assertEqual(response.status_code, 400)
+
+    def test_index_carries_the_palette_in_the_bootstrap(self):
+        self.client.post("/api/palette", json={"entries": [
+            {"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0}]})
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("palette", html)
+        self.assertIn("warm", html)
+
+    def test_default_palette_path_when_none_is_given(self):
+        app = server.create_app(self.settings, "127.0.0.1", 9999,
+                                os.path.join(self.directory, "presets"))
+        self.assertEqual(app.config["IMPULSE_PALETTE_PATH"],
+                         server.default_palette_path(self.settings))
 
 
 if __name__ == "__main__":
