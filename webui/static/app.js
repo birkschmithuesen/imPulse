@@ -1148,6 +1148,339 @@ function buildSpeedClasses(data, host) {
   host.appendChild(section);
 }
 
+/* Song-Struktur: die Dramaturgie ueber eine ganze Nacht.
+ *
+ * Vier Bloecke: Not-Aus, Live-Zustand, Uebergangsmatrix als 4x4-Gitter,
+ * Verweildauern je Level. Dazu vier Knoepfe fuer den manuellen Sprung.
+ *
+ * Die Matrix ist bewusst ein GITTER und keine Liste aus sechzehn Reglern:
+ * "Zeile = wo ich bin, Spalte = wo ich hinkoennte" ist in einem Gitter auf
+ * einen Blick zu sehen und in einer Liste gar nicht.
+ *
+ * Der Prozentwert neben jedem Regler ist der NORMIERTE Anteil, der Regler
+ * selbst zeigt das rohe Gewicht. Die zwei Zahlen unterscheiden sich, sobald
+ * eine Zeile sich nicht zu 100 summiert - und genau das ist erlaubt, sonst
+ * muesste man bei jeder Aenderung die anderen drei nachrechnen. */
+function buildSongStructure(data, host) {
+  const song = data.songStructure;
+  if (!song) { return; }
+
+  const section = document.createElement('section');
+  section.className = 'seq';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Song-Struktur';
+  section.appendChild(title);
+
+  const body = document.createElement('div');
+  body.style.padding = '0.7rem 0.8rem';
+  body.style.display = 'grid';
+  body.style.gap = '0.8rem';
+
+  // ---- Not-Aus -----------------------------------------------------------
+  const power = document.createElement('label');
+  power.className = 'seq-power';
+  power.style.justifySelf = 'start';
+  power.title = song.enabled.address;
+  const powerBox = document.createElement('input');
+  powerBox.type = 'checkbox';
+  const powerDot = document.createElement('span');
+  powerDot.className = 'dot';
+  const powerText = document.createElement('span');
+  power.appendChild(powerBox);
+  power.appendChild(powerDot);
+  power.appendChild(powerText);
+
+  function applyPower(value, silent) {
+    const on = Number(value) >= 1;
+    powerBox.checked = on;
+    power.classList.toggle('on', on);
+    powerText.textContent = on
+      ? 'Dramaturgie laeuft' : 'aus – der Preset-Scheduler entscheidet';
+    if (!silent) { queueSend(song.enabled.address, on ? 1 : 0); }
+  }
+  powerBox.addEventListener('change', () => applyPower(powerBox.checked ? 1 : 0, false));
+  applyPower(data.values[song.enabled.address], true);
+  controls.set(song.enabled.address, {
+    element: power,
+    set: (v, silent) => applyPower(v, silent !== false),
+    get: () => (powerBox.checked ? 1 : 0),
+    flash: () => {},
+  });
+  body.appendChild(power);
+
+  const intro = document.createElement('p');
+  intro.className = 'help';
+  intro.textContent = 'Waehlt bei jedem faelligen Wechsel zuerst das naechste '
+    + 'Energie-Level (gewichtet nach der Zeile des aktuellen), dann ein Preset '
+    + 'aus diesem Level. Wer welchem Level angehoert, steht in '
+    + 'data/energyLevels.txt. Solange das hier an ist, hat es Vorrang vor dem '
+    + 'alphabetischen Preset-Scheduler.';
+  body.appendChild(intro);
+
+  // ---- Live-Zustand ------------------------------------------------------
+  // Kommt aus data/songStructureState.txt, die imPulse bei jedem Levelwechsel
+  // schreibt - NICHT per OSC: es gibt keinen Rueckkanal hierher, imPulse
+  // sendet nur an 8002 und dort hoert SuperCollider. Der Server liest die
+  // Datei, weil er auf derselben Maschine laeuft; dasselbe Muster wie bei der
+  // Preset-Liste.
+  const state = document.createElement('div');
+  state.className = 'song-state';
+  body.appendChild(state);
+  renderSongState(state, bootstrap.songState);
+  startSongStatePoll(state);
+
+  // ---- Manueller Sprung --------------------------------------------------
+  const jump = document.createElement('div');
+  jump.className = 'song-jump';
+  const jumpLabel = document.createElement('span');
+  jumpLabel.textContent = 'Jetzt wechseln zu:';
+  jump.appendChild(jumpLabel);
+  song.levels.forEach((level, i) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'song-goto';
+    button.textContent = level;
+    button.style.setProperty('--tc', trackColor(i));
+    button.title = (song.hints && song.hints[i]) || level;
+    button.addEventListener('click', () => gotoLevel(i + 1, state));
+    jump.appendChild(button);
+  });
+  body.appendChild(jump);
+
+  const jumpHelp = document.createElement('p');
+  jumpHelp.className = 'help';
+  jumpHelp.textContent = 'Wirkt sofort und einmalig – danach wuerfelt die '
+    + 'Matrix wieder. Nur wirksam, wenn die Dramaturgie an ist.';
+  body.appendChild(jumpHelp);
+
+  // ---- Uebergangsmatrix --------------------------------------------------
+  const matrixTitle = document.createElement('h3');
+  matrixTitle.className = 'song-sub';
+  matrixTitle.textContent = 'Uebergangs-Wahrscheinlichkeiten';
+  body.appendChild(matrixTitle);
+
+  const grid = document.createElement('div');
+  grid.className = 'song-matrix';
+  grid.style.gridTemplateColumns = 'auto repeat(' + song.levels.length + ', 1fr)';
+
+  const corner = document.createElement('div');
+  corner.className = 'song-corner';
+  corner.textContent = 'von \\ nach';
+  grid.appendChild(corner);
+  song.levels.forEach((level, i) => {
+    const head = document.createElement('div');
+    head.className = 'song-head';
+    head.textContent = level;
+    head.style.setProperty('--tc', trackColor(i));
+    grid.appendChild(head);
+  });
+
+  const rowHandles = [];
+  song.matrix.forEach((row, from) => {
+    const rowHead = document.createElement('div');
+    rowHead.className = 'song-rowhead';
+    rowHead.textContent = song.levels[from];
+    rowHead.style.setProperty('--tc', trackColor(from));
+    rowHead.title = (song.hints && song.hints[from]) || song.levels[from];
+    grid.appendChild(rowHead);
+
+    const handles = [];
+    const shares = [];
+    rowHandles.push({ handles: handles, shares: shares });
+
+    row.forEach((cell, to) => {
+      const box = document.createElement('div');
+      box.className = 'song-cell';
+      const handle = miniSlider('', cell, data.values[cell.address],
+        (v) => v.toFixed(0));
+      handle.element.style.setProperty('--tc', trackColor(to));
+      const share = document.createElement('span');
+      share.className = 'song-share';
+      shares.push(share);
+
+      // Umgehaengt wird die set()-METHODE, nicht nur das input-Event: das
+      // Laden eines Presets ruft control.set(wert, true) und loest dabei
+      // bewusst kein input aus - an einem reinen Event-Listener bliebe die
+      // Prozentanzeige auf der alten Verteilung stehen. (Presets koennen die
+      // Matrix zwar nicht mehr setzen, siehe PresetStore.EXCLUDED_PREFIXES,
+      // aber der Rueckweg aus /api/set geht denselben Weg.)
+      const innerSet = handle.set;
+      handle.set = (value, silent) => {
+        innerSet(value, silent);
+        redrawRow(from);
+      };
+      controls.set(cell.address, handle);
+      handle.element.querySelector('input[type=range]')
+        .addEventListener('input', () => redrawRow(from));
+
+      handles.push(handle);
+      box.appendChild(handle.element);
+      box.appendChild(share);
+      grid.appendChild(box);
+    });
+  });
+
+  function redrawRow(from) {
+    const entry = rowHandles[from];
+    const values = entry.handles.map((h) => Math.max(0, h.get()));
+    const total = values.reduce((a, b) => a + b, 0);
+    entry.shares.forEach((span, to) => {
+      if (total <= 0) {
+        // Genau das macht WeightedChoice.pick() bei lauter Nullen: Rueckfall
+        // auf "mittel".
+        span.textContent = to === 1 ? 'Rueckfall' : '–';
+        span.classList.toggle('zero', to !== 1);
+        return;
+      }
+      const share = values[to]/total;
+      span.textContent = Math.round(share*100) + ' %';
+      span.classList.toggle('zero', values[to] <= 0);
+    });
+  }
+  rowHandles.forEach((_entry, from) => redrawRow(from));
+  body.appendChild(grid);
+
+  const matrixHelp = document.createElement('p');
+  matrixHelp.className = 'help';
+  matrixHelp.textContent = 'Zeile = aktuelles Level, Spalte = naechstes. Der '
+    + 'Regler zeigt das rohe Gewicht, die Zahl darunter den daraus normierten '
+    + 'Anteil – eine Zeile muss sich nicht zu 100 summieren. Ein Gewicht von 0 '
+    + 'wird nie gezogen. Die Diagonale ist der Preset-Wechsel innerhalb '
+    + 'desselben Levels.';
+  body.appendChild(matrixHelp);
+
+  // ---- Verweildauern -----------------------------------------------------
+  const dwellTitle = document.createElement('h3');
+  dwellTitle.className = 'song-sub';
+  dwellTitle.textContent = 'Verweildauer je Level (Minuten)';
+  body.appendChild(dwellTitle);
+
+  const dwell = document.createElement('div');
+  dwell.className = 'song-dwell';
+  song.dwell.forEach((entry, i) => {
+    const card = document.createElement('div');
+    card.className = 'song-dwell-row';
+    card.style.setProperty('--tc', trackColor(i));
+    const name = document.createElement('span');
+    name.className = 'song-dwell-name';
+    name.textContent = entry.level;
+    name.title = (song.hints && song.hints[i]) || entry.level;
+    card.appendChild(name);
+    card.appendChild(miniSlider('min', entry.min,
+      data.values[entry.min.address], (v) => v.toFixed(1)).element);
+    card.appendChild(miniSlider('max', entry.max,
+      data.values[entry.max.address], (v) => v.toFixed(1)).element);
+    dwell.appendChild(card);
+  });
+  body.appendChild(dwell);
+
+  const dwellHelp = document.createElement('p');
+  dwellHelp.className = 'help';
+  dwellHelp.textContent = 'Gleichverteilt gezogen, sobald ein Level beginnt. '
+    + 'Wird die Spanne waehrend eines laufenden Abschnitts verengt, wird die '
+    + 'schon gezogene Dauer darauf geklemmt – ein Verkuerzen wirkt also sofort '
+    + 'und man muss nicht die alte Dauer abwarten.';
+  body.appendChild(dwellHelp);
+
+  section.appendChild(body);
+  host.appendChild(section);
+}
+
+/* Die Statuszeile der Song-Struktur. Getrennt von buildSongStructure, weil
+ * sie auch aus dem Poll und nach einem manuellen Sprung neu gezeichnet wird. */
+function renderSongState(host, state) {
+  host.innerHTML = '';
+  if (!state || !state.level) {
+    const none = document.createElement('span');
+    none.className = 'song-state-idle';
+    // Vor dem ersten Levelwechsel gibt es die Datei nicht. Das ist der
+    // Normalfall beim Start und kein Fehler.
+    none.textContent = 'noch kein Levelwechsel seit dem Start von imPulse';
+    host.appendChild(none);
+    return;
+  }
+  const index = Number(state.levelIndex);
+  const badge = document.createElement('span');
+  badge.className = 'song-state-level';
+  badge.textContent = state.level;
+  if (isFinite(index)) { badge.style.setProperty('--tc', trackColor(index)); }
+  host.appendChild(badge);
+
+  const text = document.createElement('span');
+  text.className = 'song-state-text';
+  let line = state.preset ? 'Preset ' + state.preset : '';
+  if (state.dwellSeconds) {
+    const total = Number(state.dwellSeconds);
+    const since = state.sinceMillis
+      ? Math.max(0, Math.round((Date.now() - Number(state.sinceMillis))/1000))
+      : null;
+    line += ' – ' + Math.round(total/60*10)/10 + ' min gezogen';
+    if (since !== null) {
+      const left = Math.max(0, total - since);
+      line += ', noch ca. ' + Math.floor(left/60) + ':'
+        + String(left % 60).padStart(2, '0');
+    }
+  }
+  text.textContent = line;
+  host.appendChild(text);
+}
+
+/* Pollt den Zustand. Fuenf Sekunden reichen: die kuerzeste Verweildauer sind
+ * 30 Sekunden. Ein Push-Kanal (SSE/WebSocket) waere hier eine zweite
+ * Verbindungsart fuer eine Zeile Text. */
+function startSongStatePoll(host) {
+  if (startSongStatePoll.timer) { clearInterval(startSongStatePoll.timer); }
+  startSongStatePoll.timer = setInterval(async () => {
+    if (!document.body.contains(host)) {
+      clearInterval(startSongStatePoll.timer);
+      startSongStatePoll.timer = null;
+      return;
+    }
+    try {
+      const response = await fetch('/api/songstructure');
+      const data = await response.json();
+      if (data && data.ok) { renderSongState(host, data.state); }
+    } catch (err) {
+      // Still: eine Statuszeile darf keine Fehlermeldung im Sekundentakt
+      // erzeugen, wenn der Server gerade neu startet.
+    }
+  }, 5000);
+}
+
+/* Manueller Levelwechsel. Eigene Route, weil /songStructure/goto ein KOMMANDO
+ * ist und bewusst nicht in remoteSettings.txt steht - /api/set kennt nur
+ * Adressen aus dem Dump. */
+async function gotoLevel(level, stateHost) {
+  try {
+    const response = await fetch('/api/goto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level: level }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      setStatus('Levelwechsel fehlgeschlagen: '
+        + (data.error || 'HTTP ' + response.status), 'err');
+      return;
+    }
+    setStatus('Levelwechsel nach "' + data.name + '" gesendet – wirkt nur, '
+      + 'wenn die Dramaturgie eingeschaltet ist', 'ok');
+    // Der Zustand aendert sich erst, wenn imPulse den Wechsel vollzogen und
+    // die Datei geschrieben hat. Ein kurzer Nachschlag statt auf den
+    // 5-Sekunden-Takt zu warten.
+    setTimeout(async () => {
+      try {
+        const fresh = await fetch('/api/songstructure');
+        const payload = await fresh.json();
+        if (payload && payload.ok) { renderSongState(stateHost, payload.state); }
+      } catch (err) { /* egal */ }
+    }, 500);
+  } catch (err) {
+    setStatus('Netzwerkfehler: ' + err, 'err');
+  }
+}
+
 /* SC-Sound-Parameter. Eigener Port (8002), eigene Tabelle, kein Rueckkanal -
  * die Sektion sagt das selbst, sonst haelt man die Anzeige fuer den
  * Live-Zustand von SuperCollider. */
@@ -1324,6 +1657,7 @@ function buildTabs(data) {
     (tab.sections || []).forEach((name) => {
       if (name === 'sequencer') { buildSequencer(data, panel); }
       if (name === 'speedClasses') { buildSpeedClasses(data, panel); }
+      if (name === 'songStructure') { buildSongStructure(data, panel); }
     });
 
     // 2. Kuratierte Regler direkt sichtbar
