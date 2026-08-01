@@ -15,6 +15,33 @@ public class SplitStaggerTest {
     return p;
   }
 
+  // Wie oft jede Notenwert-Klasse gezogen wird, wenn der Zufallswert
+  // gleichverteilt von 0 bis 1 durchgefahren wird. Der Index ist der der
+  // Klasse (0 = Ganze .. 4 = Sechzehntel), nicht der Notenwert selbst.
+  static int[] countDraws(float[] weights, int draws) {
+    int[] counts = new int[SplitStagger.NOTE_COUNT];
+    int unknown = 0;
+    for (int i = 0; i < draws; i++) {
+      int noteValue = SplitStagger.pickNoteValue(weights, (i + 0.5)/draws);
+      int index = -1;
+      for (int k = 0; k < OriginSequencer.NOTE_VALUES.length; k++) {
+        if (OriginSequencer.NOTE_VALUES[k] == noteValue) {
+          index = k;
+        }
+      }
+      // Einmal am Ende gemeldet statt je Ziehung: eine Pruefung je Ziehung
+      // blaehte den Bericht auf 100 000 Zeilen auf und verdeckte damit die
+      // Aussagen, um die es geht.
+      if (index < 0) {
+        unknown++;
+      } else {
+        counts[index]++;
+      }
+    }
+    Check.eq("jede Ziehung ist eine bekannte Notenwert-Klasse", 0, unknown);
+    return counts;
+  }
+
   public static void main(String[] args) throws Exception {
     // ---- delayBeats: der Abstand zwischen den Kindern ----
     // Slot 0 ist der Zweig, der sofort startet. Exakt 0, nicht "fast 0" -
@@ -39,6 +66,85 @@ public class SplitStaggerTest {
         SplitStagger.delayBeats(1, 1), SplitStagger.delayBeats(0, 1), 1e-12);
     Check.near("negativer Slot gibt keinen Versatz",
         0.0, SplitStagger.delayBeats(16, -2), 1e-12);
+
+    // ---- pickNoteValue: welchen Notenwert diese Aufspaltung bekommt ----
+    // Gezogen wird je Split-Ereignis, nicht je Kind: alle Zweige derselben
+    // Aufspaltung stehen damit auf demselben Raster. Das prueft der Aufrufer
+    // (LedNetworkTransportEffect, haengt an oscP5); hier steht die Ziehung.
+    float[] onlyEighth = new float[SplitStagger.NOTE_COUNT];
+    onlyEighth[3] = 100f;
+    Check.eq("ein einziges Gewicht zieht immer sich selbst",
+        8, SplitStagger.pickNoteValue(onlyEighth, 0.0));
+    Check.eq("auch am oberen Rand des Zufallswerts",
+        8, SplitStagger.pickNoteValue(onlyEighth, 1.0));
+
+    // Verteilung ueber viele Ziehungen, wie in SplitFanoutTest. Der
+    // Zufallswert wird gleichverteilt durchgefahren statt gewuerfelt - der
+    // Test soll die Gewichtsrechnung pruefen, nicht Math.random().
+    float[] mix = new float[SplitStagger.NOTE_COUNT];
+    mix[2] = 20f;  // Viertel
+    mix[3] = 30f;  // Achtel
+    mix[4] = 50f;  // Sechzehntel
+    int draws = 100000;
+    int[] counts = countDraws(mix, draws);
+    Check.eq("Ganze hat Gewicht 0 und kommt nie", 0, counts[0]);
+    Check.eq("Halbe hat Gewicht 0 und kommt nie", 0, counts[1]);
+    Check.near("Viertel bei 20 %", 0.20, counts[2]/(double) draws, 0.01);
+    Check.near("Achtel bei 30 %", 0.30, counts[3]/(double) draws, 0.01);
+    Check.near("Sechzehntel bei 50 %", 0.50, counts[4]/(double) draws, 0.01);
+
+    // Die Summe muss nicht 100 sein - ein Operator dreht einzelne Regler,
+    // ohne den Rest nachzurechnen.
+    float[] raw = new float[SplitStagger.NOTE_COUNT];
+    raw[3] = 3f;
+    raw[4] = 1f;
+    int[] rawCounts = countDraws(raw, draws);
+    Check.near("3:1 macht 75 % Achtel", 0.75, rawCounts[3]/(double) draws, 0.01);
+    Check.near("und 25 % Sechzehntel", 0.25, rawCounts[4]/(double) draws, 0.01);
+
+    // Der entartete Fall faellt auf Sechzehntel: den kuerzesten Versatz und
+    // den Auslieferungswert des einen festen Notenwert-Reglers, den diese
+    // Gewichte 2026-08-01 abgeloest haben. Eine unbrauchbare Gewichtstabelle
+    // soll die Aufspaltung lassen, wie sie war, statt sie ueber einen ganzen
+    // Takt auseinanderzuziehen - dieselbe Regel wie SplitFanout.NEUTRAL_INDEX
+    // ("alle Zweige") und SpeedQuantizer.NEUTRAL_INDEX (1x).
+    Check.eq("alle Gewichte 0 gibt Sechzehntel",
+        16, SplitStagger.pickNoteValue(new float[SplitStagger.NOTE_COUNT], 0.5));
+    Check.eq("null als Gewichtstabelle gibt Sechzehntel",
+        16, SplitStagger.pickNoteValue(null, 0.5));
+    Check.eq("zu kurze Gewichtstabelle gibt Sechzehntel",
+        16, SplitStagger.pickNoteValue(new float[2], 0.5));
+    Check.eq("NaN als Zufallswert gibt Sechzehntel",
+        16, SplitStagger.pickNoteValue(mix, Double.NaN));
+    float[] negative = new float[SplitStagger.NOTE_COUNT];
+    negative[0] = -5f;
+    negative[1] = Float.NaN;
+    Check.eq("negative und NaN-Gewichte zaehlen als 0",
+        16, SplitStagger.pickNoteValue(negative, 0.5));
+    // Ein Zufallswert ausserhalb 0..1 darf keinen Notenwert erzeugen, den
+    // delayBeats() nicht kennt.
+    Check.eq("Zufallswert unter 0 zieht die erste Klasse mit Gewicht",
+        4, SplitStagger.pickNoteValue(mix, -3.0));
+    Check.eq("Zufallswert ueber 1 zieht die letzte Klasse mit Gewicht",
+        16, SplitStagger.pickNoteValue(mix, 7.0));
+
+    // Was herauskommt, ist immer ein Notenwert, den die Rasterung unveraendert
+    // laesst - sonst rastete delayBeats() ihn still auf einen anderen.
+    float[] alle = new float[SplitStagger.NOTE_COUNT];
+    for (int i = 0; i < alle.length; i++) {
+      alle[i] = 1f;
+    }
+    int[] alleCounts = countDraws(alle, draws);
+    for (int i = 0; i < alle.length; i++) {
+      Check.that("jede Klasse kommt bei gleichen Gewichten vor", alleCounts[i] > 0);
+    }
+    for (int i = 0; i <= 20; i++) {
+      int nv = SplitStagger.pickNoteValue(alle, i/20.0);
+      Check.eq("gezogener Notenwert ueberlebt die Rasterung",
+          nv, OriginSequencer.quantizeNoteValue(nv));
+      Check.that("und ergibt einen Versatz groesser 0",
+          SplitStagger.delayBeats(nv, 1) > 0.0);
+    }
 
     // ---- Nichts faellig vor der Zeit ----
     SplitStagger s = new SplitStagger();

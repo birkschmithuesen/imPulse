@@ -51,6 +51,36 @@ class SplitStagger {
     }
   };
 
+  // Zahl der Notenwert-Klassen, aus denen der Versatz gezogen wird -
+  // dieselben wie beim Sequencer und in derselben Reihenfolge
+  // (Index 0 = Ganze ... Index 4 = Sechzehntel).
+  static final int NOTE_COUNT = OriginSequencer.NOTE_VALUES.length;
+
+  // Der Rueckfall fuer den entarteten Fall: Sechzehntel, der kuerzeste
+  // Versatz. Bis 2026-08-01 war das der Auslieferungswert des einen festen
+  // Notenwert-Reglers, den diese Gewichte abgeloest haben; eine unbrauchbare
+  // Gewichtstabelle soll die Aufspaltung also lassen, wie sie war, statt sie
+  // ueber einen ganzen Takt auseinanderzuziehen. Dieselbe Regel wie
+  // SplitFanout.NEUTRAL_INDEX und SpeedQuantizer.NEUTRAL_INDEX.
+  static final int NEUTRAL_NOTE_INDEX = NOTE_COUNT - 1;
+
+  // Der Notenwert EINER Aufspaltung, gezogen nach Gewichten.
+  //
+  // Gezogen wird je Split-Ereignis, nicht je Kind: alle Zweige derselben
+  // Aufspaltung stehen damit auf demselben Raster. Zoege jedes Kind fuer sich,
+  // waeren schon die Abstaende innerhalb einer Aufspaltung ungleich - und
+  // damit genau die Gleichmaessigkeit weg, an der ein Rhythmus ueberhaupt zu
+  // erkennen ist. Was variieren soll, ist die Aufspaltung als Ganzes: mal
+  // eine dichte Sechzehntel-Figur, mal ein weiter Viertel-Abstand.
+  //
+  // Die Ziehung selbst steht in WeightedChoice, geteilt mit SplitFanout und
+  // SpeedQuantizer: ein Gewicht von 0 zieht nie, NaN und negative Werte
+  // gelten als 0, die Summe muss nicht 100 sein.
+  static int pickNoteValue(float[] weights, double random01) {
+    return OriginSequencer.noteValueAt(
+        WeightedChoice.pick(weights, NOTE_COUNT, NEUTRAL_NOTE_INDEX, random01));
+  }
+
   // Versatz des slot-ten Kindes in Beats. Slot 0 ist der Zweig, der sofort
   // startet, und bekommt exakt 0 - sonst haenge auch er an der Uhr, und der
   // Split verschoebe sich als Ganzes gegenueber dem, was der Zuschauer
