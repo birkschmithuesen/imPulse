@@ -896,6 +896,63 @@ benennen, was passiert ("alle 92 Knoten bekommen neue Töne, kein weiches
 Überblenden möglich"), nicht nur warnen. Das reine Verschieben eines
 Reglers darf hier nicht schon die Neuberechnung auslösen.
 
+## 9b. Oktaven-Range als OSC-Parameter (ENTSCHIEDEN, ergänzt 2026-08-01)
+
+> **Entschieden am 2026-08-01:** Birk will die Oktaven-Range — tiefster Ton
+> plus Anzahl Oktaven, über die sich die Zuordnung verteilt — ebenfalls als
+> OSC-Parameter live einstellen können, nicht nur als Code-Konstante.
+
+Das sind exakt die beiden Werte, die in Schritt 3d bereits als
+`~rootMidiNote` und `~numOctaves` benannt wurden (aktuell 45 bzw. 3,
+`klangnetz_bells.scd` Zeilen 324-325) — dieser Abschnitt macht sie zu
+Parametern, statt neue Konzepte einzuführen:
+
+```
+/net/melody/rootMidiNote   RemoteControlledIntParameter,  24 .. 84, Default: 45 (A2)
+/net/melody/numOctaves     RemoteControlledIntParameter,   1 ..  6, Default: 3
+```
+
+**Wertebereich-Begründung:** 24 (C1) bis 84 (C6) deckt den für Glockenklänge
+sinnvollen Bereich ab, ohne dass `~glockenBell` in Frequenzbereiche gerät,
+für die die Teiltonverhältnisse nicht mehr plausibel klingen (siehe
+Kommentare zum SynthDef). `numOctaves` nach oben auf 6 begrenzt, weil
+`notesPerOctaveSet = scale.length * numOctaves` sonst bei den 5-stufigen
+Pentatonik-Modi (B) unnötig groß und bei den 7-stufigen Modi (die meisten)
+schnell den ganzen hörbaren Bereich sprengen würde.
+
+**Dieselbe Konsequenz wie beim Startknoten (Abschnitt 9): eine Änderung an
+einem der beiden Parameter löst dieselbe Neuberechnung/Persistierung aus,**
+kein sanftes Verstellen — aus zwei Gründen, die beide bereits in Schritt 3d
+stehen und hier nur zusammengezogen werden:
+
+1. **`rootMidiNote` verschiebt jede resultierende `midiNote` gleichermaßen**
+   (reine Addition, `midiNote = rootMidiNote + semitone`) — das allein wäre
+   sogar live überblendbar. Aber:
+2. **`numOctaves` ändert `notesPerOctaveSet` und damit den Modulo-Teiler der
+   Oktavfaltung selbst** (Schritt 3d: `gefaltet = scaleIndex mod
+   notesPerOctaveSet`). Eine andere Faltungsbreite ergibt für praktisch
+   jeden Knoten ein anderes Ergebnis, nicht nur eine Transposition — die
+   bereits berechnete Zuordnung ist mit dem neuen `numOctaves` schlicht
+   falsch, keine Variante davon.
+
+Weil beide Parameter denselben Neuberechnungs-Mechanismus auslösen wie
+`startNode`, gehören sie in dieselbe Web-UI-Sektion (siehe Ende Abschnitt 9)
+und in dieselbe `PresetStore.EXCLUDED`-Liste — Transport statt Inhalt,
+gleiche Begründung.
+
+**Wichtige Randbedingung aus Schritt 3d, hier nur wiederholt weil sie bei
+einer Änderung von `numOctaves` erneut greift:** der Startknoten muss nach
+jeder `numOctaves`-Änderung weiterhin in der neu berechneten *mittleren*
+Oktave verankert werden (`scale.length * (numOctaves div 2)`), nicht auf dem
+alten `scaleIndex`-Wert stehen bleiben. Wird `numOctaves` z. B. von 3 auf 5
+erhöht, ohne den Startpunkt neu zu verankern, sitzt die Tonika plötzlich am
+unteren Rand der neuen, breiteren Spanne — mit genau der Fehlermöglichkeit,
+die Schritt 3d als Grund nennt, warum die Verankerung in der Mitte kein
+Detail, sondern Voraussetzung ist. Praktisch bedeutet das: die
+Neuberechnungs-Routine muss `rootMidiNote`, `numOctaves` UND `startNode`
+gemeinsam als einen atomaren Vorgang behandeln, nicht als drei unabhängige
+Trigger, die sich addieren.
+
 ## 10. Klangbias nach Ursprungs-Baum statt nach Netzregion (ENTSCHIEDEN)
 
 > **Entschieden am 2026-08-01:** der Klangbias soll davon abhängen, von
@@ -1003,6 +1060,14 @@ Lautsprecher-Ortung über `~toQuad` ist davon unberührt.
    Parameter `/net/melody/startNode` mit Default "höchster Grad"; eine
    Änderung löst eine vollständige Neuberechnung aus und ist deshalb
    kein Live-Regler. Ausgearbeitet in **Abschnitt 9**.
+
+2b. **Oktaven-Range — entschieden: `rootMidiNote`/`numOctaves` ebenfalls per
+    OSC.** Dieselben zwei Werte, die Schritt 3d als Voraussetzung für die
+    Oktavfaltung bereits nennt, werden zu Parametern
+    (`/net/melody/rootMidiNote`, `/net/melody/numOctaves`) statt Konstanten.
+    Löst denselben Neuberechnungs-Mechanismus wie `startNode` aus, alle drei
+    Parameter müssen als ein atomarer Vorgang behandelt werden. Ausgearbeitet
+    in **Abschnitt 9b**.
 
 3. **Zyklus-Kompromiss — entschieden: angenommen wie beschrieben.**
    Rückwärtskanten bekommen keine Intervall-Garantie, es wird **keine**
