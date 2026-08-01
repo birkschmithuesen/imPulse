@@ -467,7 +467,17 @@ s.options.numInputBusChannels = 2;
 // droneVolume dagegen MIT Callback und Lag: eine Drohne wird ueber Sekunden
 // gehalten, ein Regler daran soll sofort und ohne Knacken wirken -- dieselbe
 // Ueberlegung wie bei droneLpfMult und travelMix.
-~registerParam.(\droneVolume, 1.0, 0.0, 1.5, { |val|
+// Default 0.0 (Birk, 2026-08-01, Live-Betrieb): der Travel-Sound-Layer
+// (granulare Windschicht, siehe travelMix/travelGrainRatio) ist ein neues,
+// noch nicht abgenommenes Klangelement -- soll beim Sketch-Start NICHT
+// automatisch hoerbar sein, sondern bewusst live zugeschaltet werden. Die
+// Drohnen-Tonschicht selbst (die bestehende, unveraenderte Tondrohne, siehe
+// \\impulseDrone tone-Variable) klingt bei droneVolume=0 komplett stumm --
+// das betrifft also die GESAMTE Drohnen-Stimme, nicht nur die Windschicht.
+// Falls die bisherige Tondrohne (travelMix=0-Verhalten) unabhaengig vom
+// neuen Wind-Feature weiter hoerbar sein soll, droneVolume separat wieder
+// hochziehen -- als Startpunkt fuer den ersten Live-Test bewusst beides aus.
+~registerParam.(\droneVolume, 0.0, 0.0, 1.5, { |val|
     ~drones !? { |d| d.keysValuesDo({ |id, entry|
         entry[\synth].set(\droneVolume, val);
     }) };
@@ -1147,7 +1157,10 @@ s.waitForBoot({
         // besser als hartes Clipping. Preis: Limiter schaut 0,01 s voraus und
         // verzögert damit den GESAMTEN Ausgang um 10 ms — gleichmässig über
         // alle vier Kanäle, das Klangbild bleibt also unberührt.
-        sig = Limiter.ar(sig, 0.95, 0.01);
+        // Schwelle 0.15 (Birk, vor Ort gemessen, master-Commit b1c6e13
+        // 2026-08-01) -- von diesem Feature-Branch nachgezogen, damit
+        // beide Branches denselben abgenommenen Limiter-Wert fahren.
+        sig = Limiter.ar(sig, 0.15, 0.01);
         // GEMESSEN 2026-07-31 (Show-Rechner, Birk vor Ort): die Hardware-
         // Verkabelung des ZOOM AMS-24 ist KEINE einfache Rotation der
         // Panner-Kanal-Reihenfolge, sondern eine echte Vertauschung.
