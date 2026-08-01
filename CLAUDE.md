@@ -67,13 +67,15 @@ Kein Build-System für den Sketch selbst — reines Processing-Projekt. Für die
 
 `oscP5` (bringt auch `netP5` mit) und `Syphon` liegen als Kopie in `libraries/`. Für den **Betrieb in der Processing-IDE** löst Processing Bibliotheken **aus dem Sketchbook** (`~/Documents/Processing/libraries`) auf, nicht aus dem Sketch-Ordner — dort müssen sie per Contribution Manager installiert sein.
 
+Der Ordnername der Übersetzungs-Kopie kommt aus der Haupt-`.pde`, nicht aus dem Quellordner — ein `git worktree` heisst zwangsläufig anders als der Hauptcheckout (`imPulse-split-feature` neben `imPulse`), und mit dem Ordnernamen brach `test/build.sh` dort mit „Not a valid sketch folder" ab, ausgerechnet im Arbeitsverzeichnis, in dem entwickelt wird.
+
 Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Skript übersetzt eine Kopie des Sketches in `TMPDIR` und legt die Jars aus `libraries/*/library/*.jar` in einen `code/`-Unterordner. Einen `code/`-Ordner nimmt Processing immer in den Klassenpfad, ohne Sketchbook. Das war nötig, weil `~/Documents/Processing/libraries` auf dem Entwicklungsrechner unter der macOS-Datenschutzsperre für den Documents-Ordner nicht lesbar ist und jeder Aufruf mit „No library found for netP5 / oscP5 / codeanticode.syphon" endete — auch mit abgeschalteter Sandbox. Nebenwirkung: die Prüfung hängt nicht mehr an einer Installation ausserhalb des Repos, nur noch an Processing selbst (Pfad über `IMPULSE_PROCESSING_JAVA` überschreibbar).
 
 `artnet4j` (`ch.bildspur.artnet`) wird **nicht mehr gebraucht** — der aktive Ausgabepfad ist die selbstgeschriebene `ArtNetOutput`-Klasse, die bewusst nur an `LedColor` und der Java-Standardbibliothek hängt. `controlP5` wird ebenfalls nicht mehr gebraucht — das Dropdown-basierte Kalibrier-UI ist der Zwei-Cursor-Kalibrierung (`NodeCalibration`) gewichen, die direkt über Tastatur und das HUD im Sketch-Fenster läuft.
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`, `SpeedQuantizer`, `StripeTreeStore`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`, `WeightedChoice`, `SpeedQuantizer`, `SplitFanout`, `SplitStagger`, `StripeTreeStore`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
@@ -90,6 +92,8 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `MusicalClockTest` — die akkumulierende Beat-Phase: kein Sprung bei BPM-Wechsel, Notenwert-Intervalle, entartete BPM, Rücksprung der Wanduhr
 - `OriginSequencerTest` — Feuertakt je Notenwert, `repeatCount` hält den Ursprung, `originStripeOverride`, kein Sofort-Feuern beim Wiedereinschalten, kein Nachholen nach einem Hänger, Rasterung der Notenwerte
 - `StripeTreeStoreTest` — die Baum-Zuordnung: Parsen samt Kommentaren, unbekannter Baumname, Index ausserhalb des Bereichs, doppelter Stripe (letzte Zeile gewinnt), leerer Baum liefert `null`, fehlende Datei, Gegenprobe an der echten `data/stripeTrees.txt`
+- `SplitFanoutTest` — die Zahl der Zweige einer Aufspaltung: der neutrale Auslieferungsfall (`weight/all=100` nimmt immer alle), die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, entartete Gewichte fallen auf „alle" zurück, Knoten mit einem/zwei/vier möglichen Zweigen (bei zwei fallen „einer weniger" und „genau einer" zusammen), nie 0 Zweige bei vorhandenen Kandidaten, und `chooseOrder` liefert verschiedene Indizes im Bereich, in wechselnder Reihenfolge, auch bei unbrauchbaren Zufallswerten
+- `SplitStaggerTest` — die Warteschlange der zeitversetzten Kinder: Slot 0 hat exakt keinen Versatz, Notenwert-Intervalle samt Rasterung, fällig genau auf der Grenze, Reihenfolge nach Fälligkeit, ein Rückwärtssprung der Beat-Position verliert nichts, `MAX_PENDING` weist den neuen Eintrag ab statt einen wartenden zu verwerfen, und die Kindwerte kommen unverändert wieder heraus
 - `SpeedQuantizerTest` — die gewichtete Auswahl der Speed-Klasse: die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, Normalisierung nicht-prozentualer Gewichte, entartete Gewichte (alle 0, negativ, NaN)
 - `PresetStoreTest` — Format, Datei, Snapshot und Anwenden eines Presets, inklusive der ausgeschlossenen und still übergangenen Adressen
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
@@ -268,6 +272,69 @@ Bei voller Stärke und einem Zufallswert von 0 wäre er sonst exakt 0 — ein Ki
 mit Speed 0 stünde für immer still, eines mit `decayScale` 0 verlöre nie
 Energie und stürbe nie. Zwei unsterbliche Zustände, die das Netz über eine
 Nacht volllaufen lassen.
+
+**Split-Anzahl und Split-Versatz** (`SplitFanout.java`, `SplitStagger.java`,
+angewandt in `activationEncounteredNode()` / `spawnSplitChildren()` /
+`releasePendingSplits()`): eine Aufspaltung nahm bis 2026-08-01 immer **alle**
+moeglichen Zweige, alle im selben Frame. Jetzt wird gewuerfelt, wieviele es
+werden, und die gewaehlten koennen im BPM-Raster nacheinander starten.
+
+- `/net/impulse/split/weight/{all,oneLess,single}` (float 0..100, Defaults
+  **100/0/0**) — Gewichte der drei Kategorien, normalisiert in
+  `SplitFanout.branchCount()` wie bei den Speed-Klassen
+- `/net/impulse/split/staggerEnabled` (int 0/1, Default **0**)
+- `/net/impulse/split/staggerNoteValue` (int 1..16, Default 16) — gerastet auf
+  1/2/4/8/16, dieselbe Rasterung wie beim Sequencer
+
+Zusammen ergeben die Auslieferungswerte **bitgleich** das vorherige Verhalten.
+
+Sechs Dinge, die man beim Ändern kennen muss:
+
+- **Die Kategorien sind relativ, nicht absolut.** „Einer weniger" statt
+  „2 Zweige": ein Knoten hat je nach Rand des Stripes und Richtung des
+  Elternimpulses mal drei, mal weniger **mögliche** Zweige — `data/nodeCrossings.txt`
+  führt zwar nur Kreuzungen aus zwei Stripes, die Zweigzahl ist aber trotzdem
+  nicht fest. Eine absolute Zahl bedeutete an jedem Knoten etwas anderes und
+  wäre an manchen gar nicht erfüllbar. Bei zwei Kandidaten fallen „einer
+  weniger" und „genau einer" zusammen — die richtige Antwort, kein Fehler.
+- **Nie 0 Zweige bei vorhandenen Kandidaten.** Ein Impuls, der an einer
+  Kreuzung spurlos verschwindet, wäre ein Loch im Netz ohne Fehlermeldung, und
+  die `nodeDeadTime` des Knotens wäre trotzdem verbraucht. Der entartete Fall
+  (keine Gewichte, NaN) fällt auf „alle" zurück, also auf das Verhalten von
+  vor dem Feature.
+- **Der Versatz zählt in Beats, nicht in Millisekunden.** Die Fälligkeit kommt
+  aus `MusicalClock`, derselben Phase, auf der der Origin-Sequencer läuft — ein
+  Tempowechsel ändert damit die Rate, nicht die Position. Die Uhr läuft
+  unabhängig von `/net/sequencer/enabled` weiter, der Versatz braucht den
+  Sequencer also nicht; er teilt nur seine Phase. Deshalb steht
+  `releasePendingSplits()` in `drawMe()` **hinter** `tickSequencer()`.
+- **Ein wartendes Kind verliert keine Energie.** Der Zerfall hängt an der
+  Wanduhr und machte ein später startendes Geschwister systematisch dunkler als
+  seinen Zwilling — der Versatz soll rhythmisch sein, nicht auch noch eine
+  Dynamikstufe. Bei den üblichen Werten ginge es ohnehin um 0,005 Energie.
+- **Ein nicht genommener Kandidat verbraucht keine Impuls-ID.** Kandidaten sind
+  `PendingSpawn`-Objekte, keine `TravellingActivation`. Die IDs sind der
+  Schlüssel des Positionsstroms `/net/impulse`; eine Lücke darin wäre auf der
+  Klangseite eine Drohne, die nie kommt.
+- **`SplitFanout.chooseOrder()` liefert die Zweige gemischt**, nicht nur als
+  Menge: die Reihenfolge bestimmt, welcher Zweig sofort startet und welcher
+  versetzt. Die Kandidatenreihenfolge wäre ein Vorrang für den kleinsten
+  LED-Index — ein stiller Bias, den kein Regler zeigt. `SplitStagger.MAX_PENDING`
+  (512) deckelt die Warteschlange gegen einen Fall, den ein Regler herstellen
+  kann (langer Notenwert bei niedriger BPM); abgewiesen wird der **neue**
+  Eintrag, nicht ein wartender.
+
+Die gewichtete Ziehung selbst steht in `WeightedChoice.java` und wird von
+`SpeedQuantizer` und `SplitFanout` geteilt. Zwei Kopien wären zwei Regeln für
+dieselbe Sache: eine Nachbesserung an der einen ginge an der anderen still
+vorbei.
+
+Im Web-UI sitzt das Ganze als Sektion „Split-Verhalten" im Tab
+**Noten-Verhalten** — der Versatz hängt am BPM-Raster wie die Speed-Klassen
+daneben, und die zwei Hälften eines Features gehören auf denselben Tab. Die
+Regel in `TAB_RULES` trägt einen abschliessenden Schrägstrich
+(`/net/impulse/split/`), sonst zöge sie die älteren `splitSpeedJitter`- und
+`splitLifetimeJitter`-Adressen aus der Physik mit.
 
 **Origin-Sequencer** (`MusicalClock.java`, `OriginSequencer.java`, getickt aus
 `drawMe()` über `tickSequencer()`): der strukturierte Spawn-Layer neben dem
