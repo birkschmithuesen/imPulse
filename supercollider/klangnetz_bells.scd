@@ -598,7 +598,7 @@ s.waitForBoot({
         // besser als hartes Clipping. Preis: Limiter schaut 0,01 s voraus und
         // verzögert damit den GESAMTEN Ausgang um 10 ms — gleichmässig über
         // alle vier Kanäle, das Klangbild bleibt also unberührt.
-        sig = Limiter.ar(sig, 0.95, 0.01);
+        sig = Limiter.ar(sig, 0.15, 0.01);
         // GEMESSEN 2026-07-31 (Show-Rechner, Birk vor Ort): die Hardware-
         // Verkabelung des ZOOM AMS-24 ist KEINE einfache Rotation der
         // Panner-Kanal-Reihenfolge, sondern eine echte Vertauschung.
