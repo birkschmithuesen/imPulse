@@ -40,6 +40,59 @@ Datei nach einem imPulse-Neustart sofort neu ein.
 Vollstaendige Range-/Sections-Analyse aller OSC-Parameter:
 `docs/webui-parameter-review-2026-07-30.md`.
 
+### Drei Spezial-Sektionen
+
+Drei Gruppen bekommen ein handgebautes Bedienfeld statt generischer Regler —
+38 Sequencer-Parameter als flache Liste waeren unbedienbar. Der Server
+liefert dafuer Struktur (`build_sequencer`, `build_speed_classes`,
+`sc_param_groups`), das Aussehen macht `static/app.js`.
+
+- **Sequencer**: BPM als grosse Ziffer mit eigenem Not-Aus, darunter sechs
+  Track-Karten mit je eigener Spurfarbe. Notenwerte als Knopfleiste mit
+  Symbol **und** Kuerzel (`1/4`) — nicht jede Windows-Schrift hat
+  U+1D15D..U+1D161, ein Symbol allein waere dort ein leeres Kaestchen.
+  `originStripeOverride` zeigt `-1` als „zufall" statt als Zahl.
+- **Speed-Klassen**: die fuenf Gewichte aus
+  `/net/impulse/speedQuantize/weight/*` plus ein Verteilungsbalken, der sie
+  normiert als Prozente zeigt. Die Gewichte selbst muessen sich nicht auf 100
+  summieren — normalisiert wird auf der Java-Seite (`SpeedQuantizer.pick`).
+- **Sound (SuperCollider)**: siehe unten, eigener Port.
+
+Die Adressen dieser drei Sektionen nimmt `sequencer_addresses()` aus dem
+generischen Rendering heraus. Ohne das stuende jeder Regler zweimal auf der
+Seite — zwei Bedienelemente fuer denselben Parameter, die auseinanderlaufen
+koennen.
+
+**Die Rasteranzeige je Track ist die Uhr des Browsers.** Sie rechnet aus BPM
+und Notenwert, in welchem *Abstand* ein Track feuert, und ist ausdruecklich
+**keine** Rueckmeldung aus imPulse: dafuer gaebe es keinen Kanal, der Sketch
+sendet nur an Port 8002 und dort hoert SuperCollider. Ihre Phase kann
+gegenueber dem Sketch beliebig verschoben sein. Deshalb heisst sie „Raster"
+und behauptet nirgends „feuert jetzt". Nuetzlich ist sie trotzdem: beim
+Einrichten sieht man auf einen Blick, welcher Track dicht und welcher duenn
+laeuft.
+
+### Sound-Parameter gehen an einen zweiten Port (8002)
+
+Die `/klangnetz/param/*`-Adressen laufen **nicht** durch
+`remoteSettings.txt` — das ist die Parameterliste von imPulse. SuperCollider
+hat seine eigene Registry (`~registerParam` in
+`supercollider/klangnetz_bells.scd`) und hoert auf Port **8002**. Das UI hat
+dafuer einen zweiten `OscSender` und den Endpoint `POST /api/sc`.
+
+Zwei Dinge, die man dabei kennen muss:
+
+- **`SC_PARAMS` in `server.py` ist eine handgepflegte Kopie der Registry.**
+  Wer in der `.scd` einen Parameter ergaenzt, ergaenzt ihn auch dort. Zwei
+  Tests in `test_webui.py` vergleichen die Tabelle in **beide** Richtungen
+  mit der Datei, damit sie nicht still abdriftet. Die Alternative waere ein
+  Parser fuer sclang-Syntax — der bei der naechsten Umformatierung
+  unbemerkt das Falsche liefert.
+- **Es gibt keinen Rueckkanal.** Die angezeigten Werte sind die Defaults aus
+  der `.scd`, nicht der Live-Zustand von sclang; laeuft sclang nicht, bleibt
+  eine Aenderung wirkungslos, ohne dass das UI es merkt. Die Sektion sagt das
+  selbst in ihrem Warnhinweis.
+
 Jede Aenderung geht **sofort** raus (erste Bewegung direkt, danach hoechstens
 alle 150 ms eine Nachricht, der letzte Wert in jedem Fall) — kein Speichern-Knopf.
 
@@ -243,6 +296,18 @@ Regleranzeige (Klemmung auf die `remoteSettings.txt`-Range, unbekannte
 Adressen, Werte ausserhalb der UI-Range) und das Warten auf die von imPulse
 geschriebene Datei.
 
+Dazu die drei Spezial-Sektionen: dass der Sequencer alle sechs Tracks mit
+allen Feldern liefert, dass ein aelterer imPulse-Stand `None` statt einer
+leeren Sektion ergibt, dass kein Parameter doppelt gerendert wird (an einem
+echten Snapshot geprueft) und dass `SC_PARAMS` in beide Richtungen zur `.scd`
+passt.
+
 ```bash
 python3 webui/test_webui.py
 ```
+
+**Fuer die UI-Schicht selbst gibt es kein Testgeruest im Repo.** `webui/` soll
+ohne Node/npm auskommen (siehe oben), und ein jsdom-Test wuerde genau das
+einfuehren. Das Rendering des Sequencer-Panels wurde einmalig headless mit
+jsdom gegengeprueft — der Test ist bewusst **nicht** aufgenommen. Wer daran
+etwas aendert, prueft im Browser nach.

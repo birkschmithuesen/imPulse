@@ -1,0 +1,56 @@
+# Baum-Zuordnung je Stripe (automatisch generiert, 2026-08-01)
+#
+# Format: stripeIndex  baum  confidence  distanceMeters
+#   baum: vorn | hinten | rechts | links
+#   confidence: sicher | unsicher  (unsicher = distance > 1.5m oder
+#     zweitnaechster Baum < 1m entfernt vom zugeordneten)
+#
+# Herleitung: automatische Naechster-Nachbar-Zuordnung des ersten LED-Ankers
+# jedes Stripes (aus data/ledPositions.txt) zu den vier Baum-Positionen.
+# Baum-Positionen abgeleitet aus den vier Lautsprecherpositionen im
+# SC-Patch (supercollider/klangnetz_bells.scd, Zeile 288/1547:
+# vorn (0,+4), rechts (+7,0), hinten (0,-4), links (-7,0)) plus Birks
+# Korrektur vor Ort (2026-08-01): linker Baum ~2m rechts vom linken
+# Lautsprecher, rechter Baum ~2m links vom rechten Lautsprecher, vorderer
+# und hinterer Baum je ~1m rechts vom jeweiligen Lautsprecher.
+# Berechnete Baum-Positionen: vorn(1,4) hinten(1,-4) rechts(5,0) links(-5,0)
+#
+# ACHTUNG: automatischer Best-Guess, von Birk noch nicht verifiziert.
+# 8 Stripes sind als "unsicher" markiert (Distanz zum zugeordneten Baum
+# > 1.5m, moeglicherweise falsch) - Birk korrigiert das in Ruhe per Hand,
+# einfach diese Datei editieren (kein Neustart noetig, wird beim naechsten
+# /net/sequencer/trackN/originTreeOverride-Aufruf frisch gelesen... ODER
+# je nach Implementierung: Neustart noetig, falls beim Boot eingelesen -
+# siehe Doku in CLAUDE.md, Abschnitt "Baum-Zuordnung", die das Claude-Code
+# waehrend der Umsetzung ergaenzt).
+#
+0	vorn	unsicher	2.22
+1	rechts	sicher	0.21
+2	hinten	sicher	0.29
+3	hinten	sicher	0.68
+4	hinten	sicher	0.32
+5	hinten	sicher	0.26
+6	links	unsicher	2.80
+7	links	sicher	0.38
+8	vorn	sicher	0.41
+9	vorn	sicher	0.57
+10	hinten	sicher	0.25
+11	hinten	sicher	0.32
+12	links	sicher	0.59
+13	links	sicher	0.77
+14	vorn	sicher	0.17
+15	vorn	unsicher	1.64
+16	vorn	sicher	0.47
+17	vorn	sicher	0.50
+18	rechts	sicher	0.59
+19	rechts	sicher	0.45
+20	rechts	sicher	0.38
+21	rechts	sicher	0.62
+22	links	unsicher	2.70
+23	links	unsicher	2.71
+24	hinten	sicher	0.68
+25	hinten	unsicher	1.67
+26	rechts	sicher	0.52
+27	rechts	sicher	0.75
+28	vorn	unsicher	3.60
+29	links	unsicher	3.17

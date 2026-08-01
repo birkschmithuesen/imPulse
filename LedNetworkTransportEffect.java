@@ -56,6 +56,34 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledIntParameter impulseEnergyExponent; // Exponent applied to input volume provided by /tube/trigger
   RemoteControlledIntParameter impulseSpeed; // speed (leds/second)
 
+  // Streuung der Kindwerte bei einer Aufspaltung an einem Node. Ohne sie
+  // bekommt jedes Kind exakt Speed und Lebensdauer des Elternimpulses, die
+  // Geschwister sterben synchron und wirken identisch.
+  //
+  // Beide Auslieferungswerte 0 - das ist exakt das bisherige Verhalten, ein
+  // Operator dreht sie bewusst hoch. Unabhaengig voneinander einstellbar.
+  RemoteControlledFloatParameter splitSpeedJitter;
+  RemoteControlledFloatParameter splitLifetimeJitter;
+
+  // Rhythmisch quantisierte Spawn-Geschwindigkeit: die Geschwindigkeit eines
+  // neuen Impulses ist ein Vielfaches von impulseSpeed (der 1x-Klasse), nach
+  // Gewichten gezogen. Referenz ist impulseSpeed SELBST, kein eigener
+  // Parameter - sonst gaebe es zwei Regler, die beide "die Geschwindigkeit"
+  // heissen, und die Zeitbasis-Kopplung (lifetime, nodeDeadTime,
+  // randomSpawn/interval haengen an impulseSpeed) haette einen zweiten,
+  // unbeteiligten Bezugspunkt.
+  //
+  // enabled=0 im Auslieferungszustand: dann bekommt jeder Spawn exakt
+  // impulseSpeed wie bisher, ohne Ziehung.
+  RemoteControlledIntParameter speedQuantizeEnabled;
+  RemoteControlledFloatParameter speedQuantizeJitter;
+  // Ein Gewicht je Klasse aus SpeedQuantizer.MULTIPLIERS, gleiche Reihenfolge.
+  RemoteControlledFloatParameter[] speedClassWeights =
+      new RemoteControlledFloatParameter[SpeedQuantizer.MULTIPLIERS.length];
+  // Wiederverwendet statt je Spawn neu angelegt - bei dichtem Betrieb spawnen
+  // mehrere Impulse je Frame.
+  private final float[] weightScratch = new float[SpeedQuantizer.MULTIPLIERS.length];
+
   // Optionaler Sinus-Randomizer je Parameter (Speed und Lifetime unabhaengig,
   // kein gemeinsamer Takt). Bei enabled=1 UEBERSCHREIBT der Oszillator den
   // manuell gesetzten Wert in jedem Frame:
@@ -100,6 +128,42 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledFloatParameter randomSpawnDirectionBias; // /net/randomSpawn/directionBias - Wahrscheinlichkeit fuer "vorwaerts"
   RemoteControlledFloatParameter randomSpawnJitter;     // /net/randomSpawn/jitter - 0=exakt periodisch, 1=stark verjittert
 
+  // Strukturierter Layer neben dem chaotischen randomSpawn: ein BPM-Takt und
+  // sechs Tracks, die von wiederkehrenden Urspruengen spawnen. Beide Layer
+  // laufen unabhaengig und sind gleichzeitig aktivierbar.
+  //
+  // Kein /net/sequencer/activeTracks: zwei Schalter fuer dieselbe Sache
+  // erzeugen einen stillen Fehlerzustand (Operator schaltet Track 4 ein, es
+  // passiert nichts, weil activeTracks=3 ihn abschneidet). enabled je Track
+  // ist ausserdem ausdrucksstaerker - jede Teilmenge statt nur ein Praefix.
+  // Der grobe Not-Aus ist /net/sequencer/enabled.
+  RemoteControlledIntParameter sequencerEnabled;
+  RemoteControlledFloatParameter sequencerBpm;
+  RemoteControlledIntParameter[] trackEnabled = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledIntParameter[] trackNoteValue = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledIntParameter[] trackRepeatCount = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledFloatParameter[] trackEnergy = new RemoteControlledFloatParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledFloatParameter[] trackSwingJitter = new RemoteControlledFloatParameter[OriginSequencer.TRACK_COUNT];
+  RemoteControlledIntParameter[] trackOriginOverride = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  // 0 = kein Filter, 1..4 = nur Stripes des jeweiligen Baums (siehe
+  // StripeTreeStore.TREE_NAMES). Wirkt nur, wenn originStripeOverride == -1;
+  // ein ausdruecklich gesetzter Stripe hat Vorrang.
+  RemoteControlledIntParameter[] trackOriginTree = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  // Die Baum-Zuordnung. Wird von aussen gesetzt (setStripeTrees), damit der
+  // Effekt die Datei nicht selbst liest - dieselbe Trennung wie bei
+  // LedPositionMap.
+  StripeTreeStore stripeTrees;
+  final MusicalClock musicalClock = new MusicalClock();
+  OriginSequencer originSequencer;
+  // Wiederverwendet statt in jedem Frame neu angelegt - drawMe() laeuft mit
+  // 40 Hz, und ein Frame soll den Speicherbereiniger nicht beschaeftigen.
+  private final TrackConfig[] trackConfigs = new TrackConfig[OriginSequencer.TRACK_COUNT];
+  private final RandomSource mathRandom = new RandomSource() {
+    public double next() {
+      return Math.random();
+    }
+  };
+
   LedNetworkTransportEffect(String _id, int _numLeds, int _nStripes, int _nLedsInStripe,
       LedInNetInfo[] _ledNetInfo, ArrayList <LedNetworkNode> nodes_,
       LedPositionMap _positionMap, OscP5 _oscP5, NetAddress _remoteLocation) {
@@ -125,6 +189,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     impulseLifetime= new RemoteControlledFloatParameter("/net/impulse/lifetime", 0.02f, 0.0001f, 1f);
     impulseSpeed= new RemoteControlledIntParameter("/net/impulse/speed", 16, 1, 1500);
     impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
+    splitSpeedJitter= new RemoteControlledFloatParameter("/net/impulse/splitSpeedJitter", 0f, 0f, 1f);
+    splitLifetimeJitter= new RemoteControlledFloatParameter("/net/impulse/splitLifetimeJitter", 0f, 0f, 1f);
 
     // Randomizer: Auslieferungszustand aus (0), ein Operator schaltet ihn live
     // per OSC/Web-UI ein. Die Defaults spannen einen Bereich um den jeweiligen
@@ -162,6 +228,48 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     randomSpawnDirectionBias= new RemoteControlledFloatParameter("/net/randomSpawn/directionBias", 1f, 0f, 1f);
     randomSpawnJitter= new RemoteControlledFloatParameter("/net/randomSpawn/jitter", 0f, 0f, 1f);
 
+    // Sequencer: global aus im Auslieferungszustand. Die Track-Defaults sind
+    // nur der Zustand, den ein Operator vorfindet, wenn er ihn erstmals
+    // einschaltet - deshalb zwei laufende Tracks (Ganze und Halbe, ruhig)
+    // statt sechs.
+    sequencerEnabled= new RemoteControlledIntParameter("/net/sequencer/enabled", 0, 0, 1);
+    sequencerBpm= new RemoteControlledFloatParameter("/net/sequencer/bpm", 60f, 20f, 200f);
+    originSequencer= new OriginSequencer(nStripes);
+    // Ganze, Halbe, Viertel, Achtel, Viertel, Achtel - die ersten zwei an.
+    int[] defaultNoteValues = { 1, 2, 4, 8, 4, 8 };
+    int[] defaultEnabled = { 1, 1, 0, 0, 0, 0 };
+    for (int i=0; i<OriginSequencer.TRACK_COUNT; i++) {
+      String base="/net/sequencer/track"+i+"/";
+      trackEnabled[i]= new RemoteControlledIntParameter(base+"enabled", defaultEnabled[i], 0, 1);
+      // Range 1..16 statt einer Aufzaehlung - RemoteControlledIntParameter
+      // kann keine. OriginSequencer.quantizeNoteValue() rastet beim Lesen auf
+      // 1/2/4/8/16, ein Regler auf 5 verhaelt sich also wie 4.
+      trackNoteValue[i]= new RemoteControlledIntParameter(base+"noteValue", defaultNoteValues[i], 1, 16);
+      trackRepeatCount[i]= new RemoteControlledIntParameter(base+"repeatCount", 3, 1, 8);
+      trackEnergy[i]= new RemoteControlledFloatParameter(base+"energy", 0.6f, 0f, 1f);
+      trackSwingJitter[i]= new RemoteControlledFloatParameter(base+"swingJitter", 0f, 0f, 1f);
+      // -1 = zufaelliger Ursprung (Normalfall), sonst fixer Stripe.
+      trackOriginOverride[i]= new RemoteControlledIntParameter(base+"originStripeOverride", -1, -1, nStripes-1);
+      trackOriginTree[i]= new RemoteControlledIntParameter(base+"originTreeFilter", 0, 0, StripeTreeStore.TREE_NAMES.length);
+      trackConfigs[i]= new TrackConfig();
+    }
+
+    // Auslieferungswerte: aus. Die Gewichte darunter sind der Zustand, den
+    // ein Operator vorfindet, wenn er einschaltet - 1x bleibt der weit
+    // ueberwiegende Normalfall, ein 8x-Ausreisser ist etwa jeder hundertste.
+    speedQuantizeEnabled= new RemoteControlledIntParameter("/net/impulse/speedQuantize/enabled", 0, 0, 1);
+    speedQuantizeJitter= new RemoteControlledFloatParameter("/net/impulse/speedQuantize/jitter", 0f, 0f, 1f);
+    // Adressnamen ohne Punkt: "0x5" statt "0.5x". Ein Punkt in einer
+    // OSC-Adresse ist zwar erlaubt, aber remoteSettings.txt und das Web-UI
+    // lesen Adressen als Text und der Punkt liest sich dort wie ein
+    // Dezimaltrenner in einem Namen.
+    String[] weightNames = { "0x5", "1x", "2x", "4x", "8x" };
+    float[] weightDefaults = { 0f, 85f, 10f, 4f, 1f };
+    for (int i=0; i<SpeedQuantizer.MULTIPLIERS.length; i++) {
+      speedClassWeights[i]= new RemoteControlledFloatParameter(
+          "/net/impulse/speedQuantize/weight/"+weightNames[i], weightDefaults[i], 0f, 100f);
+    }
+
     // 0 schaltet den Strom ab - der Notausgang, wenn Netz oder Klangrechner
     // waehrend der Show nicht mitkommen. /net/hitNode laeuft davon unberuehrt
     // weiter.
@@ -183,17 +291,20 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       if (theValue>0&&theValue<nodes.size()) {
         LedNetworkNode activeNode=nodes.get(theValue);
         int nLeds=ledNetInfo.length;
+        // Einmal je Kommando gezogen, nicht je Richtung: die zwei Zweige
+        // desselben Anstosses sollen zusammengehoeren.
+        float cmdSpeed=spawnSpeed();
         for (Integer nodeLedIdx : activeNode.ledIndices) {
           LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
           //  activation spreads in boths directions
-          int forwPos=nodeLedIdx +1;           
+          int forwPos=nodeLedIdx +1;
           if (forwPos>0&&forwPos<nLeds) {
-			activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, impulseSpeed.getValue(), 1f ));
+			activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, cmdSpeed, 1f ));
 		}
           //do not go back the same stripe:
-          int backwPos=nodeLedIdx -1;            
+          int backwPos=nodeLedIdx -1;
           if (backwPos>0&&backwPos<nLeds) {
-			activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -impulseSpeed.getValue(), 1f));
+			activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -cmdSpeed, 1f));
 		}
         }
       }
@@ -203,7 +314,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       newMessage.getTypetagAsBytes()[0]=='i'
       ) {
       int theValue=newMessage.get(0).intValue();
-      activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), 1f ));
+      activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), 1f ));
     }
 
     //System.out.println(newMessage);
@@ -224,7 +335,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       //System.out.println("Calculated Energy: "  + energy);
       //PApplet.println(theValue);
       if (theValue<nStripes) {
-        activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, impulseSpeed.getValue(), energy));
+        activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), energy));
       }
     }
   }
@@ -243,17 +354,26 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   //represents one travelling activation
   public class TravellingActivation {
     TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_) {
-      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++);
+      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++, 1f);
+    }
+
+    // Mit ausdruecklichem decayScale - fuer die Kinder einer Aufspaltung, die
+    // ihre Lebensdauer streuen sollen (siehe /net/impulse/splitLifetimeJitter).
+    TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
+        float decayScale_) {
+      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++, decayScale_);
     }
 
     // Mit ausdruecklicher ID - nur fuer den Filler, der die ID seines
     // Elternimpulses uebernimmt statt eine neue zu verbrauchen.
-    TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_, int id_) {
+    TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
+        int id_, float decayScale_) {
       ledIdxPos=ledIdxPos_;
       stripeIdx=stripeIdx_;
       speed=speed_;
       energy=energy_;
       id=id_;
+      decayScale=decayScale_;
     }
 
     int getLedIndex() {
@@ -264,14 +384,24 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     float speed; // [leds/second] also encodes direction in sign
     float energy; // some measure of strength
     final int id; // fortlaufend, fuer /net/impulse
+    // Faktor AUF den globalen impulseLifetime, nicht dessen Ersatz. 1.0 bei
+    // jedem normalen Spawn, gestreut nur bei den Kindern einer Aufspaltung.
+    //
+    // Bewusst ein Multiplikator: mit einem absoluten Zerfallswert je Impuls
+    // wuerde jeder Impuls den Wert seiner Geburt einfrieren. Dann erreichte
+    // der Sinus-Randomizer (/net/impulse/lifetime/randomize/*) nur noch neu
+    // gespawnte Impulse, und ein Operator, der den Lifetime-Regler zieht,
+    // saehe die lebenden Impulse unbeeindruckt weiterlaufen - beides ohne
+    // Fehlermeldung.
+    final float decayScale;
     void setEnergy(float _energy){energy=_energy;}
   }
 
   //represents fillers needed when high travelling speeds lead to skipping some leds in each frame
   public class TravellingActivationFiller extends TravellingActivation {
     TravellingActivationFiller(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
-        int parentId_) {
-      super(ledIdxPos_, stripeIdx_, speed_, energy_, parentId_);
+        int parentId_, float decayScale_) {
+      super(ledIdxPos_, stripeIdx_, speed_, energy_, parentId_, decayScale_);
     }
   }
 
@@ -288,11 +418,12 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     float timeStep=(float) (currentTime-lastCyclePos);
     lastCyclePos=currentTime;
     // vor jeder Nutzung von impulseSpeed/impulseLifetime in diesem Frame -
-    // auch spawnRandomImpulses() liest impulseSpeed
+    // spawnRandomImpulses() und tickSequencer() lesen impulseSpeed ueber
+    // spawnSpeed()
     applyRandomizers(currentTime);
-    float speed=impulseSpeed.getValue();
 
     spawnRandomImpulses(currentTime);
+    tickSequencer(currentTime);
 
     //iterate through activations and build a new list of activations in the meanwhile.
     LinkedList<TravellingActivation> newActivations=new LinkedList<TravellingActivation>();
@@ -302,7 +433,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // let each activation travel a bit in it's direction
       curActivation.ledIdxPos+=curActivation.speed*timeStep;
       // loose energy
-      curActivation.energy -= timeStep*impulseLifetime.getValue();
+      curActivation.energy -= timeStep*impulseLifetime.getValue()*curActivation.decayScale;
       // if the activation hasn't fallen off the end of the stripe...
       int activationLedIdx=curActivation.getLedIndex(); // global led position
       int direction;// needed to reuse loop for positive and negative speeds
@@ -320,7 +451,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
             break;
           }
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
-          newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy, curActivation.id));
+          newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy, curActivation.id, curActivation.decayScale));
         }
       }
       if (activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime))) {
@@ -380,6 +511,16 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         //float childEnergy=curActivation.energy/nActivations/2.0f;
         //curActivation.setEnergy(childEnergy);
         float childEnergy=curActivation.energy;
+        // Streuung je Kind, siehe /net/impulse/splitSpeedJitter und
+        // /net/impulse/splitLifetimeJitter. Bei beiden Auslieferungswerten 0
+        // liefert SplitVariance.jitter() den Ausgangswert unveraendert, das
+        // Verhalten ist dann bitgleich dem vorherigen.
+        //
+        // Gezogen wird JE ZWEIG und je Groesse einzeln - ein gemeinsamer
+        // Zufallswert fuer alle Zweige eines Treffers wuerde sie wieder
+        // gleichschalten, also genau das nicht loesen, worum es geht.
+        float speedJitter=splitSpeedJitter.getValue();
+        float lifetimeJitter=splitLifetimeJitter.getValue();
         for (Integer nodeLedIdx : hitNode.ledIndices) {
           LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
 
@@ -394,13 +535,19 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           //  activation spreads in boths directions
           int forwPos=nodeLedIdx +jump;
           if (forwPos>0&&forwPos<nLeds) {
-            newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, curActivation.speed, childEnergy));
+            newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex,
+                SplitVariance.jitter(curActivation.speed, speedJitter, Math.random()),
+                childEnergy,
+                SplitVariance.jitter(1f, lifetimeJitter, Math.random())));
           }
           //do not go back the same stripe:
           if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex || activationLedIdx < nodeLedIdx) {//ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
             int backwPos=nodeLedIdx -jump;
             if (backwPos>0&&backwPos<nLeds) {
-              newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -curActivation.speed, childEnergy));
+              newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex,
+                  SplitVariance.jitter(-curActivation.speed, speedJitter, Math.random()),
+                  childEnergy,
+                  SplitVariance.jitter(1f, lifetimeJitter, Math.random())));
             }
           }
         }
@@ -426,7 +573,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     oscP5.send(myMessage, remoteLocation);
   }
 
-  // Gedrosselter Positionsstrom der reisenden Impulse.
+  // Gedrosselter Positionsstrom der reisenden Impulse:
+  //   /net/impulse <id:int> <x:float> <y:float> <energy:float> <speed:float>
+  // Das fuenfte Argument ist der BETRAG der Geschwindigkeit in LEDs/Sekunde
+  // und kam spaeter dazu - rein angehaengt, siehe unten.
   //
   // Ueberspringt Filler explizit (gleiche Klassenpruefung wie an ihrer
   // Entfernungsstelle in der Zeichenschleife) - ein Elternimpuls und seine
@@ -473,6 +623,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       myMessage.add(positionMap.x(ledIndex));
       myMessage.add(positionMap.y(ledIndex));
       myMessage.add(a.energy);
+      // Betrag der Geschwindigkeit in LEDs/Sekunde, rein ANGEHAENGT - genau
+      // das Muster, mit dem /net/hitNode schon um x/y erweitert wurde: ein
+      // Empfaenger, der nur die ersten vier Argumente liest, bleibt unberuehrt.
+      //
+      // Das Vorzeichen traegt die Richtung und ist fuer die Klangfarbe
+      // bedeutungslos, deshalb der Betrag. Die Klangseite koppelt daran die
+      // Filterfrequenz des Travel-Sounds (schneller = schaerfer).
+      myMessage.add(Math.abs(a.speed));
       oscP5.send(myMessage, remoteLocation);
     }
   }
@@ -520,14 +678,97 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     int count=randomSpawnCount.getValue(); // bereits durch min/max des Parameters auf 1..nStripes begrenzt
     float energy=randomSpawnEnergy.getValue();
     float directionBias=randomSpawnDirectionBias.getValue();
-    float speed=impulseSpeed.getValue(); // bewusst kein eigener Speed-Parameter, siehe Feldkommentar
 
     for (int stripeIdx : pickDistinctStripes(count)) {
       boolean forward=Math.random() < directionBias;
+      // Je Impuls eine eigene Klasse (spawnSpeed): bei count > 1 soll nicht
+      // der ganze Schwung gleich schnell sein. Grundwert bleibt impulseSpeed,
+      // bewusst kein eigener Speed-Parameter fuer den Ambient-Layer.
+      float speed=spawnSpeed();
       // "rueckwaerts" beginnt am anderen Ende des Stripes, sonst wuerde der Impuls sofort
       // wieder aus den Bounds fallen (siehe activationIsValid) statt eine sichtbare Strecke zu reisen
       float startPos=forward ? stripeIdx*nLedsInStripe : stripeIdx*nLedsInStripe + (nLedsInStripe-1);
       activations.add(new TravellingActivation(startPos, stripeIdx, forward ? speed : -speed, energy));
+    }
+  }
+
+  // Geschwindigkeit fuer EINEN neu gespawnten Impuls, immer als positiver
+  // Betrag - die Richtung setzt der Aufrufer ueber das Vorzeichen.
+  //
+  // Der einzige Ort, an dem eine Spawn-Geschwindigkeit entsteht: alle fuenf
+  // Spawn-Pfade (Tube-Trigger, activateStripe, activateNode, RandomSpawn,
+  // Sequencer) gehen hierdurch. Split-Kinder NICHT - die erben die (schon
+  // vervielfachte) Geschwindigkeit ihres Elternimpulses und bekommen
+  // obendrauf splitSpeedJitter, siehe activationEncounteredNode().
+  private float spawnSpeed() {
+    float base=impulseSpeed.getValue();
+    if (speedQuantizeEnabled.getValue() != 1) {
+      return base;
+    }
+    for (int i=0; i<speedClassWeights.length; i++) {
+      weightScratch[i]=speedClassWeights[i].getValue();
+    }
+    int cls=SpeedQuantizer.pick(weightScratch, Math.random());
+    float speed=base*SpeedQuantizer.multiplierAt(cls);
+    // Swing auf der Geschwindigkeit, gleiche Formel und gleicher
+    // Auslieferungswert 0 wie ueberall sonst: Choreografie primaer exakt,
+    // Jitter ein optionaler Regler obendrauf.
+    return SplitVariance.jitter(speed, speedQuantizeJitter.getValue(), Math.random());
+  }
+
+  // Die Baum-Zuordnung nachreichen. Aus setup() zu rufen, nachdem
+  // data/stripeTrees.txt geladen ist. Bleibt sie ungesetzt, wirkt jeder
+  // originTreeFilter wie 0 - die Show laeuft dann ohne Filter weiter.
+  void setStripeTrees(StripeTreeStore store) {
+    stripeTrees=store;
+  }
+
+  // Strukturierter Spawn-Layer, siehe /net/sequencer/* in CLAUDE.md. Laeuft
+  // unabhaengig neben spawnRandomImpulses() - beide Layer sind gleichzeitig
+  // aktivierbar, der eine ist der chaotische Ambient-Teppich, der andere die
+  // wiedererkennbare Choreografie.
+  //
+  // Die Uhr laeuft AUCH bei sequencerEnabled=0 weiter: sie ist die gemeinsame
+  // Phase, und ein Stillstand waehrend der Aus-Phase machte das
+  // Wiedereinschalten von der Dauer der Pause abhaengig.
+  private void tickSequencer(double currentTime) {
+    musicalClock.advance(currentTime, sequencerBpm.getValue());
+    if (sequencerEnabled.getValue() != 1) {
+      return;
+    }
+    for (int i=0; i<OriginSequencer.TRACK_COUNT; i++) {
+      TrackConfig c=trackConfigs[i];
+      c.enabled=trackEnabled[i].getValue()==1;
+      c.noteValue=trackNoteValue[i].getValue();
+      c.repeatCount=trackRepeatCount[i].getValue();
+      c.energy=trackEnergy[i].getValue();
+      c.swingJitter=trackSwingJitter[i].getValue();
+      c.originStripeOverride=trackOriginOverride[i].getValue();
+      // Baum-Filter: der erlaubte Stripe-Vorrat. null = kein Filter, und
+      // genau das liefert der Store auch fuer Filterwert 0, fuer einen
+      // ungueltigen Wert und fuer einen Baum ohne Stripes - der Track
+      // spawnt dann wie bisher, statt still zu verstummen.
+      c.originPool=(stripeTrees == null)
+          ? null : stripeTrees.stripesFor(trackOriginTree[i].getValue());
+    }
+    int[] firing=originSequencer.update(musicalClock.beats(), trackConfigs, mathRandom);
+    if (firing.length == 0) {
+      return;
+    }
+    // Geschwindigkeit je Track einzeln gezogen (spawnSpeed): zwei Tracks, die
+    // im selben Beat feuern, sollen nicht zwangslaeufig dieselbe Klasse
+    // bekommen. Grundwert bleibt impulseSpeed, damit getaktete und zufaellige
+    // Impulse denselben Bezugspunkt haben. decayScale 1.0 (der Konstruktor
+    // ohne ausdruecklichen Wert): ein gespawnter Impuls folgt dem globalen
+    // Lifetime, gestreut wird erst an einer Kreuzung.
+    for (int i=0; i<firing.length; i++) {
+      int track=firing[i];
+      int stripeIdx=originSequencer.originOf(track);
+      if (stripeIdx < 0 || stripeIdx >= nStripes) {
+        continue;
+      }
+      activations.add(new TravellingActivation(stripeIdx*nLedsInStripe, stripeIdx,
+          spawnSpeed(), trackConfigs[track].energy));
     }
   }
 

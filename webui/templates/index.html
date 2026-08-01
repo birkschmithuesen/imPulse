@@ -38,7 +38,16 @@
     </div>
   </section>
 
-  <main id="groups"></main>
+  <!-- Fuenf Themen-Tabs. Die Zuordnung kommt vom Server (TABS in
+       server.py); app.js baut ALLE Panels und schaltet nur die
+       Sichtbarkeit um, damit Preset-Laden und der applied/echoed-Ruecklauf
+       auch Regler auf inaktiven Tabs erreichen. -->
+  <nav class="tab-bar" id="tabBar" role="tablist"></nav>
+  <main id="tabPanels"></main>
+
+  <!-- Rueckfall fuer einen aelteren Server ohne Tab-Daten, siehe
+       buildTabs() in app.js. -->
+  <div id="groups" hidden></div>
 
   <script type="application/json" id="bootstrap">{{ bootstrap|safe }}</script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>

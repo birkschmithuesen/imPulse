@@ -65,7 +65,9 @@
 //
 // Empfängt OSC von imPulse (Processing-Sketch) auf Port 8002:
 //   /net/hitNode <nodeId:int>    <energy:float> <x:float> <y:float>
-//   /net/impulse <impulseId:int> <x:float>      <y:float> <energy:float>
+//   /net/impulse <impulseId:int> <x:float>      <y:float> <energy:float> <speed:float>
+//   /sc/preset/load <name:string>   Sound-Preset laden (siehe ~presetLoad)
+//   /sc/preset/save <name:string>   Sound-Preset schreiben (siehe ~presetSave)
 // (siehe LedNetworkTransportEffect.java sendOscMessage() und
 // sendImpulseStream(), Adresse in imPulse.pde:
 // NetAddress oscOutput = new NetAddress("127.0.0.1", 8002))
@@ -142,6 +144,15 @@
 //     eine bewusst leise gemischte Szene noch anheben lässt; der Limiter
 //     dahinter fängt das ab, bevor es hart clippt.
 //
+//   /klangnetz/param/bellVolume     0.0 .. 1.5   Default 1.0
+//   /klangnetz/param/droneVolume    0.0 .. 1.5   Default 1.0
+//     Layer-Fader je Klangschicht, multiplikativ VOR masterVolume:
+//     bellVolume in \glockenBell (Node-Treffer), droneVolume in
+//     \impulseDrone (reisende Impulse). Damit laesst sich das Verhaeltnis
+//     der zwei Schichten vor Ort einstellen, ohne ~maxAmp/~droneAmpScale
+//     im Code anzufassen. droneVolume wirkt SOFORT auf laufende Drohnen,
+//     bellVolume erst auf den naechsten Ton (One-Shot, wie brightness).
+//
 //   /klangnetz/param/reverbMix      0.0 .. 1.0   Default 0.15
 //   /klangnetz/param/reverbRoom     0.0 .. 1.0   Default 0.5
 //   /klangnetz/param/reverbDamp     0.0 .. 1.0   Default 0.5
@@ -165,6 +176,13 @@
 //     weicher/diffuser. Netzmitte bleibt bei JEDEM Wert exakt
 //     25/25/25/25% (siehe ~toQuad-Kommentar). Wirkt nur auf NEU
 //     getriggerte Toene/Drohnen, aus demselben Grund wie brightness.
+//
+//   /klangnetz/param/regionBiasAmount  0.0 .. 1.0   Default 0.6
+//     Staerke des Klangbias nach Netzregion (vier Quadranten, siehe
+//     ~regionZone/~regionBias im Code). 0 = aus, der Klang ist dann
+//     bitgleich dem ohne dieses Feature. Verschiebt je Zone die Notenwahl
+//     (in SKALENSTUFEN, bleibt also in Phrygisch) sowie brightness und
+//     detune. Wirkt auf NEUE Toene, wie brightness/detune selbst.
 //
 //   /klangnetz/param/brightness     0.0 .. 2.0   Default 1.0
 //     \glockenBell: Amp-Faktor auf die VIER oberen Partialtöne (Grundton
@@ -190,6 +208,41 @@
 //     ~registerParam-Aufruf unten) — anders als brightness/detune, weil
 //     eine Drohne (anders als eine Glocke) über Sekunden gehalten wird
 //     und ein Live-Regler an ihr hörbar Sinn ergibt.
+//
+//   ---- Travel-Sound (Wind-/Rauschschicht der reisenden Impulse) ----
+//   Alle sechs sitzen in \impulseDrone, es gibt KEINEN zweiten Synth je
+//   Impuls -- Begruendung bei den ~registerParam-Aufrufen im Code.
+//
+//   /klangnetz/param/travelMix       0.0 .. 1.0    Default 0.0
+//     Crossfade Tondrohne <-> Koernerschicht. 0 = bisheriger Klang,
+//     bitgleich. Wirkt SOFORT auf laufende Drohnen.
+//   /klangnetz/param/travelRq        0.02 .. 1.0   Default 0.35
+//     Koernerdauer als Anteil von 20 ms. Klein = kurze, harte Koerner
+//     (sandig, einzeln hoerbar), gross = ineinanderlaufend. UMGEWIDMET
+//     2026-08-01: hiess frueher Filterguete eines Bandpasses, den es
+//     nicht mehr gibt. Wirkt SOFORT auf laufende Drohnen.
+//   /klangnetz/param/travelGrainRatio 0.01 .. 2.0  Default 0.125
+//     Koerner je Sekunde als Vielfaches von travelFreq -- die Dichte
+//     traegt damit dieselbe Speed-Klasse wie die Grenzfrequenz.
+//     Wirkt SOFORT auf laufende Drohnen.
+//   /klangnetz/param/travelAmpScale  0.0 .. 2.0    Default 1.0
+//     Trimm nur der Rauschschicht. Wirkt SOFORT.
+//   /klangnetz/param/travelFreqBase       50 .. 4000    Default 400
+//   /klangnetz/param/travelSpeedRef        1 .. 1500    Default 16
+//   /klangnetz/param/travelOctavesPerStep  0.25 .. 3    Default 1.0
+//   /klangnetz/param/travelSnap            0 / 1        Default 1
+//   /klangnetz/param/travelFreqMin        20 .. 2000    Default 80
+//   /klangnetz/param/travelFreqMax       200 .. 16000   Default 6000
+//     Kennfrequenz der Windschicht (Low-Cut UND, ueber travelGrainRatio,
+//     Koernerdichte), OKTAVBASIERT ueber die gemeldete
+//     Geschwindigkeit (LEDs/s, fuenftes Argument von /net/impulse):
+//       freq = travelFreqBase * 2^(log2(speed/travelSpeedRef) * OctavesPerStep)
+//     Jede Verdopplung der Geschwindigkeit ist damit ein fester
+//     Intervallsprung -- bei den Defaults 200/400/800/1600/3200 Hz fuer die
+//     Speed-Klassen 0.5x/1x/2x/4x/8x. travelSnap rundet auf die Klasse,
+//     damit der Jitter die Zuordenbarkeit nicht verschmiert. Wirken erst
+//     auf NEUE Drohnen -- die Umrechnung passiert in sclang beim Anlegen
+//     des Synths.
 // =====================================================================
 
 (
@@ -313,6 +366,61 @@ s.options.numInputBusChannels = 2;
 // 25/25/25/25% auf alle vier Boxen, weil 0^x = 0 fuer jeden Exponenten.
 ~panSharpness = 1.0;
 
+// ---- Klangbias nach Netzregion ----------------------------------------
+// Ziel: ein Knoten soll nicht nur rhythmisch, sondern auch klanglich
+// verraten, aus welchem Teil des Netzes er kommt.
+//
+// ZONIERUNG: vier Quadranten, Zone = (x>=0) + 2*(y>=0). Der Grund ist die
+// Lautsprecher-Geometrie: die vier Boxen stehen auf den SEITENMITTEN
+// (0,+4) (+7,0) (0,-4) (-7,0), jeder Quadrant liegt also genau zwischen
+// zwei Boxen und hat eine eindeutige Richtung im Raum. Ortung und
+// Klangfarbe stuetzen sich damit gegenseitig -- man hoert "vorne rechts"
+// UND "die helle Farbe", und beides meint dieselbe Netzregion.
+//
+// Radiale Ringe (Zentrum/Rand) waeren die naheliegende Alternative und
+// scheiden genau daran aus: sie korrelieren mit keiner
+// Lautsprecherrichtung, und in der Mitte pannt ~toQuad ohnehin auf alle
+// vier Boxen gleich (25/25/25/25%) -- die Zone mit dem eigensten Charakter
+// laege dort, wo die Ortung am schwaechsten ist.
+~regionZone = { |px, py|
+    var xi = if (px >= 0) { 1 } { 0 };
+    var yi = if (py >= 0) { 1 } { 0 };
+    xi + (2 * yi)
+};
+
+// Bias je Zone. Der Notenoffset zaehlt in SKALENSTUFEN, nicht Halbtoenen:
+// er wird auf noteIndex addiert, bevor ~scaleSteps nachgeschlagen wird. Ein
+// Halbtonoffset erzeugte Toene ausserhalb von Phrygisch und zerstoerte den
+// vor Ort gewaehlten Modus.
+//
+// brightness und detune sind die vorhandenen Timbre-Regler (siehe
+// ~registerParam unten): brightness skaliert die oberen vier Teiltoene
+// (hell/dumpf), detune blendet zwischen unharmonischen und rein
+// harmonischen Verhaeltnissen (metallisch/orgelartig). Die in aelteren
+// Notizen genannten ~tilt/~decayScale gibt es in dieser Datei nicht.
+//
+//   Zone 0 = hinten links   tief,   dumpf,     metallisch
+//   Zone 1 = hinten rechts  mitte,  neutral,   harmonischer
+//   Zone 2 = vorn links     hoeher, heller,    metallisch
+//   Zone 3 = vorn rechts    hoch,   brillant,  fast rein harmonisch
+~regionNoteOffsets = [-2, 0, 2, 4];
+~regionBrightness  = [0.65, 1.0, 1.35, 1.7];
+~regionDetune      = [1.0, 0.7, 1.0, 0.4];
+
+// Liefert den wirksamen Bias, linear zwischen neutral und vollem Zonenwert
+// interpoliert. Bei ~regionBiasAmount = 0 ist das Ergebnis exakt neutral,
+// der Klang also bitgleich dem ohne dieses Feature.
+~regionBias = { |px, py|
+    var zone = ~regionZone.(px, py);
+    var amt = ~regionBiasAmount ? 0;
+    (
+        zone: zone,
+        noteOffset: (~regionNoteOffsets[zone] * amt).round.asInteger,
+        brightness: 1.0 + ((~regionBrightness[zone] - 1.0) * amt),
+        detune: 1.0 + ((~regionDetune[zone] - 1.0) * amt)
+    )
+};
+
 // ---- OSC-Sound-Parameter-Registry --------------------------------------
 // Kleine, für DIESE Datei gebaute Registry — kein Anspruch auf
 // Wiederverwendbarkeit in anderen Patches. Jeder Eintrag: Environment-
@@ -335,6 +443,45 @@ s.options.numInputBusChannels = 2;
 };
 
 ~registerParam.(\masterVolume, 1.0, 0.0, 1.5, nil);
+
+// ---- Zwei Layer-Fader unter dem globalen Show-Fader --------------------
+// masterVolume bleibt der GLOBALE Fader (sitzt in \masterReverb, nach dem
+// Panning, vor dem Limiter). Diese zwei sitzen davor, je Klangschicht, und
+// wirken multiplikativ: eine Glocke geht mit bellVolume * masterVolume
+// heraus, eine Drohne mit droneVolume * masterVolume. Default 1.0 --
+// unveraendertes Verhalten.
+//
+// Warum getrennt: Glocken (Node-Treffer) und Drohnen (reisende Impulse) sind
+// zwei voellig verschiedene Klangrollen mit voellig verschiedenen Pegeln
+// (~maxAmp 0.35 gegen ~droneAmpScale 0.06). Das Verhaeltnis der zwei
+// zueinander ist eine gestalterische Entscheidung, die man vor Ort trifft --
+// bisher ging das nur ueber ~maxAmp/~droneAmpScale im Code.
+//
+// bellVolume bekommt bewusst KEINEN onSet-Callback und KEIN Lag: eine Glocke
+// ist ein One-Shot mit doneAction 2, der Wert wird als Start-Argument
+// gelesen (wie brightness/detune, siehe deren Kommentar bei \glockenBell).
+// Ein Lag waere hier sogar schaedlich -- er wuerde die Lautstaerke ueber die
+// Lag-Zeit hochfahren und damit genau den Anschlag weichzeichnen, der den
+// Glockenklang ausmacht.
+~registerParam.(\bellVolume, 1.0, 0.0, 1.5, nil);
+// droneVolume dagegen MIT Callback und Lag: eine Drohne wird ueber Sekunden
+// gehalten, ein Regler daran soll sofort und ohne Knacken wirken -- dieselbe
+// Ueberlegung wie bei droneLpfMult und travelMix.
+// Default 0.0 (Birk, 2026-08-01, Live-Betrieb): der Travel-Sound-Layer
+// (granulare Windschicht, siehe travelMix/travelGrainRatio) ist ein neues,
+// noch nicht abgenommenes Klangelement -- soll beim Sketch-Start NICHT
+// automatisch hoerbar sein, sondern bewusst live zugeschaltet werden. Die
+// Drohnen-Tonschicht selbst (die bestehende, unveraenderte Tondrohne, siehe
+// \\impulseDrone tone-Variable) klingt bei droneVolume=0 komplett stumm --
+// das betrifft also die GESAMTE Drohnen-Stimme, nicht nur die Windschicht.
+// Falls die bisherige Tondrohne (travelMix=0-Verhalten) unabhaengig vom
+// neuen Wind-Feature weiter hoerbar sein soll, droneVolume separat wieder
+// hochziehen -- als Startpunkt fuer den ersten Live-Test bewusst beides aus.
+~registerParam.(\droneVolume, 0.0, 0.0, 1.5, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\droneVolume, val);
+    }) };
+});
 // Default 0.35 statt 0.15: die Laptop-Fassung hatte einen FreeVerb mit
 // mix 0.42 in jeder Glocke ("mehr Hall", Birk 2026-07-30). Der Hall sitzt
 // jetzt nach dem Decoder (Begruendung bei \masterReverb), der Default haelt
@@ -361,6 +508,328 @@ s.options.numInputBusChannels = 2;
 // (Ecke ist ohnehin schon bei jedem Wert 100% scharf, siehe ~toQuad).
 ~registerParam.(\panSharpness, 1.0, 0.1, 8.0, nil);
 
+// Staerke des Regionen-Klangbias (siehe ~regionBias oben). 0 = aus, der
+// Klang ist dann bitgleich dem ohne dieses Feature; 1 = voller Zonenwert.
+//
+// Ein eigener enabled-Schalter entfaellt bewusst: amount = 0 IST aus, und
+// ein stufenloser Regler ist live wertvoller als ein harter Schalter, weil
+// sich der Effekt einblenden laesst statt zu springen. Default 0.6 -- der
+// Bias ist rein additiv zur bestehenden Klanglogik und kann nichts stumm
+// schalten.
+//
+// Wirkt auf NEUE Toene: brightness/detune sind Start-Argumente der
+// Glocken-SynthDef (siehe dort), ein spaeteres .set kaeme nie mehr an.
+~registerParam.(\regionBiasAmount, 0.6, 0.0, 1.0, nil);
+
+// ---- Travel-Sound: Wind-/Rauschschicht der reisenden Impulse ----------
+// Setzt auf dem VORHANDENEN gedrosselten Positionsstrom /net/impulse auf
+// und wird eine zweite Klangschicht INNERHALB von \impulseDrone -- kein
+// zweiter Synth je Impuls. Begruendung: \impulseDrone ist schon ein Synth
+// pro Impuls-ID mit Position, Huellkurve, Timeout und ~droneLimit; ein
+// zweiter braeuchte ein zweites Dictionary, einen zweiten Reaper und ein
+// zweites Limit und verdoppelte die Stimmenzahl -- fuer ein Feature, dessen
+// Ziel es ist, Klangbrei zu VERMEIDEN.
+//
+// Der geforderte Lebenszyklus (neue Stimme bei jedem Split) ergibt sich
+// dadurch ohne eine Zeile Code: ein Split-Kind ist ein neuer Impuls mit
+// neuer id, bekommt also einen neuen Eintrag und einen neuen Synth, und die
+// Stimme des Elternimpulses laeuft nach ~droneTimeout aus.
+//
+// Kein eigener Throttle auf der Processing-Seite: oscMaxCount bestimmt, was
+// ueberhaupt ueber den Draht geht, und der Deckel, der wirklich gebraucht
+// wird, sitzt dort, wo die Rechenlast entsteht -- ~droneLimit, direkt
+// darunter.
+//
+// travelMix ist Schalter und Staerkeregler in einem. Default 0 = reine
+// Tondrohne wie bisher, bitgleich.
+~registerParam.(\travelMix, 0.0, 0.0, 1.0, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\travelMix, val);
+    }) };
+});
+// Koernerdauer der granularen Windschicht, als Anteil von 20 ms.
+//
+// UMGEWIDMET 2026-08-01 (Birk nach mehreren Hoerproben): hiess frueher
+// "Bandbreite/Filterguete" und war das rq-Argument eines BPF. Die
+// Windschicht ist jetzt granular (siehe \impulseDrone), einen Bandpass gibt
+// es nicht mehr -- der Regler steuert stattdessen, wie lang ein einzelnes
+// Rauschkorn klingt. Name und Registrierung bleiben, damit vorhandene
+// Presets und die Web-UI-Tabelle gueltig bleiben.
+//
+// Klein = kurze, harte Koerner (sandig, kleinteilig, einzeln hoerbar),
+// gross = lange, ineinanderlaufende Koerner (wieder eher ein Rauschteppich).
+// Wirkt wie travelMix sofort auf laufende Drohnen -- eine Drohne wird ueber
+// Sekunden gehalten, ein Live-Regler daran ergibt hoerbar Sinn.
+~registerParam.(\travelRq, 0.35, 0.02, 1.0, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\travelRq, val);
+    }) };
+});
+// Koerner je Sekunde als Vielfaches von travelFreq.
+//
+// Die Dichte haengt bewusst an travelFreq, nicht an einem eigenen absoluten
+// Wert: travelFreq traegt die Speed-Klasse (siehe unten), und damit wird die
+// Klasse ZWEIFACH hoerbar -- ein schnellerer Impuls rieselt dichter UND
+// heller. Zwei gleichgerichtete Merkmale sind deutlich leichter zuzuordnen
+// als eines.
+//
+// Default 0.125 = ein Korn je acht Schwingungen der Grenzfrequenz. Mit den
+// Klassen-Frequenzen (200/400/800/1600/3200 Hz) ergibt das
+// 25/50/100/200/400 Koerner je Sekunde: von einzeln abzaehlbaren Tropfen bis
+// zu dichtem Rieseln. Der Wert ist ein Hoer-Kompromiss und deshalb ein
+// Regler, keine Konstante im Graphen.
+~registerParam.(\travelGrainRatio, 0.125, 0.01, 2.0, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\travelGrainRatio, val);
+    }) };
+});
+// Trimm NUR der Rauschschicht. Es gibt ihn, weil Rauschen bei gleichem
+// Pegel lauter wirkt als ein Ton und der Crossfade sonst einen Sprung
+// machte.
+~registerParam.(\travelAmpScale, 1.0, 0.0, 2.0, { |val|
+    ~drones !? { |d| d.keysValuesDo({ |id, entry|
+        entry[\synth].set(\travelAmpScale, val);
+    }) };
+});
+// Speed -> Kennfrequenz der Windschicht, OKTAVBASIERT statt linear.
+//
+// Diese eine Zahl steuert BEIDE hoerbaren Merkmale der Windschicht: die
+// Grenzfrequenz des Low-Cut UND (ueber travelGrainRatio) die Koernerdichte.
+// Sie heisst weiter travelFreq, weil sie primaer eine Frequenz ist.
+//
+// Linear (die erste Fassung) lagen die Speed-Klassen 1x und 2x dicht
+// beieinander -- genau der "sanfte Gradient", der die Klassen NICHT
+// unterscheidbar macht. Oktavbasiert ist jede Verdopplung der
+// Geschwindigkeit ein fester Intervallsprung:
+//
+//   octaves = log2(speed / travelSpeedRef)
+//   freq    = travelFreqBase * 2^(octaves * travelOctavesPerStep)
+//
+// Mit den Defaults unten (Basis 400 Hz bei Speed 16):
+//   0.5x -> 200 Hz   1x -> 400   2x -> 800   4x -> 1600   8x -> 3200
+// und damit zugleich 25/50/100/200/400 Koerner je Sekunde.
+// Das ist unverwechselbar, und genau das ist der Zweck: beim Hoeren soll
+// klar sein, welcher Speed-Klasse (siehe SpeedQuantizer auf der
+// Processing-Seite) ein Impuls angehoert.
+//
+// Alle sechs wirken erst auf NEUE Drohnen: die Umrechnung passiert in
+// sclang beim Anlegen des Synths (siehe OSCdef \impulseStream), nicht im
+// SC-Graphen.
+~registerParam.(\travelFreqBase, 400.0, 50.0, 4000.0, nil);
+// Speed, die auf travelFreqBase abgebildet wird. 16 ist der Arbeitspunkt der
+// Installation (/net/impulse/speed) und damit die 1x-Klasse.
+~registerParam.(\travelSpeedRef, 16.0, 1.0, 1500.0, nil);
+// Oktaven je Verdopplung der Geschwindigkeit. 1.0 = eine Oktave, also
+// "doppelt so schnell klingt eine Oktave hoeher". Groesser = noch
+// deutlicher getrennt, kleiner = subtiler.
+~registerParam.(\travelOctavesPerStep, 1.0, 0.25, 3.0, nil);
+// Rasterung auf die Speed-KLASSE (1 = an). Rundet den Oktavabstand vor der
+// Umrechnung auf eine ganze Zahl, damit jeder Impuls derselben Klasse auf
+// exakt derselben Tonhoehe zischt.
+//
+// Ohne die Rasterung verschmieren die Klassen, sobald
+// /net/impulse/speedQuantize/jitter oder splitSpeedJitter > 0 stehen -- die
+// Zuordenbarkeit haenge dann daran, wie hoch der Jitter gerade steht.
+//
+// GRENZE, die man kennen muss: die Rundung greift auf halbe Oktaven, also
+// bis zu einem Jitter-Faktor von 2^0.5 = 1.41 nach oben und 2^-0.5 = 0.71
+// nach unten. Ein Jitter-Regler ueber etwa 0.29 laesst einzelne Impulse
+// deshalb in die NACHBARKLASSE rutschen (0.7 * 1x liegt naeher an 0.5x als
+// an 1x). Das ist kein Fehler, sondern ehrlich -- der Impuls reist dann ja
+// wirklich mit dieser Geschwindigkeit --, aber wer maximale
+// Zuordenbarkeit will, laesst /net/impulse/speedQuantize/jitter unter 0.29.
+~registerParam.(\travelSnap, 1.0, 0.0, 1.0, nil);
+// Harte Grenzen, damit ein extremer Regler nichts Unhoerbares oder
+// Schmerzhaftes erzeugt. Weit genug fuer 0.5x .. 8x bei den Defaults.
+~registerParam.(\travelFreqMin,   80.0,  20.0,  2000.0, nil);
+~registerParam.(\travelFreqMax, 6000.0, 200.0, 16000.0, nil);
+
+// ---- Einen Parameterwert anwenden --------------------------------------
+// DER einzige Ort, an dem ein Sound-Parameter seinen Wert bekommt. Sowohl
+// der OSC-Empfang (/klangnetz/param/<name>) als auch das Preset-Laden gehen
+// hier durch -- zwei Kopien dieser vier Zeilen waeren zwei Wege, die
+// auseinanderlaufen koennen (ein neuer Parameter mit onSet-Callback wuerde
+// dann per OSC wirken, per Preset aber nicht, ohne Fehlermeldung).
+//
+// Geklemmt wird auf die Range aus der REGISTRY, nicht auf eine aus einer
+// Datei -- dieselbe Regel wie PresetStore.applyPreset() auf der Java-Seite,
+// damit ein aelteres Preset nach einer Bereichsaenderung gueltig bleibt.
+//
+// Liefert den tatsaechlich gesetzten Wert, oder nil bei unbekanntem Namen.
+~applyParam = { |name, rawValue|
+    var entry = ~params[name];
+    if (entry.isNil) {
+        nil
+    } {
+        var val = rawValue.asFloat.clip(entry[\lo], entry[\hi]);
+        currentEnvironment[name] = val;
+        entry[\onSet] !? { |cb| cb.(val) };
+        // Die vier Master-/Reverb-Parameter wirken ueber den dauerhaft
+        // laufenden \masterReverb-Synth. Ein .set auf alle ist billig und
+        // robust gegen Aufrufreihenfolge -- unschaedlich, wenn ein
+        // SynthDef-Argumentname bei diesem Parameter gar nicht existiert,
+        // .set ignoriert unbekannte Keys still.
+        ~masterReverbSyn !? { |syn| syn.set(name, val) };
+        val
+    }
+};
+
+// ---- Presets fuer die Sound-Parameter ----------------------------------
+// Ein SC-Preset ist ein Satz von Werten fuer die oben registrierten
+// Parameter -- und NUR fuer die. Das Licht (Speed, Lifetime, Sequencer,
+// Farben) liegt in data/presets/<name>.txt auf der Processing-Seite und
+// bleibt dort; imPulse ist Master und schickt bei jedem Wechsel
+// /sc/preset/load <name> hierher (PresetManager.forwardToSound()).
+//
+// GLEICHER NAME, ZWEI DATEIEN: "hang_drum_slow" meint
+// data/presets/hang_drum_slow.txt fuer das Licht UND
+// supercollider/presets/hang_drum_slow.txt fuer den Klang. Ein Name, der
+// hier keine Datei hat, ist kein Fehler -- dann bleibt der Klang stehen,
+// waehrend das Licht wechselt. Das ist der haeufige Fall und wird nur
+// gemeldet, nicht beklagt.
+//
+// FORMAT: dasselbe wie remoteSettings.txt und die visuellen Presets, sechs
+// tabgetrennte Spalten, nach Adresse sortiert, Zeilenende '\n':
+//   float <TAB> /klangnetz/param/<name> <TAB> <TAB> wert <TAB> min <TAB> max
+// Die Beschreibungsspalte bleibt leer (wie in den vorhandenen SC-Presets).
+// min/max stehen zur Information in der Datei, GEKLEMMT wird auf die Range
+// aus der Registry (siehe ~applyParam).
+~presetDir = thisProcess.nowExecutingPath.notNil.if(
+    { thisProcess.nowExecutingPath.dirname +/+ "presets" },
+    // Rueckfall, wenn die Datei nicht als Datei ausgewertet wird (aus einem
+    // Scratch-Buffer heraus). Dann liegen die Presets im Arbeitsverzeichnis
+    // und die Meldung unten nennt den Pfad, damit das nicht raetselhaft ist.
+    { "presets" }
+);
+("Sound-Preset-Ordner: " ++ ~presetDir).postln;
+
+// Spiegelt PresetStore.isValidName() auf der Java-Seite: a-z, 0-9,
+// Unterstrich, Bindestrich, hoechstens 64 Zeichen. Autoritaet ist Java --
+// hier geht es um Pfad-Traversal: ohne diese Pruefung wuerde
+// /sc/preset/load "../../../etc/passwd" eine beliebige Datei oeffnen.
+~presetValidName = { |name|
+    var text = name.asString;
+    var ok = (text.size > 0) and: { text.size <= 64 };
+    text.do({ |c|
+        var allowed = c.isDecDigit
+            or: { (c >= $a) and: { c <= $z } }
+            or: { c == $_ } or: { c == $- };
+        allowed.not.if({ ok = false });
+    });
+    ok
+};
+
+~presetPath = { |name| ~presetDir +/+ (name.asString ++ ".txt") };
+
+// Alle registrierten Parameter als Preset-Zeilen, nach Adresse sortiert
+// (wie PresetStore.write()) -- so bleibt ein git diff zwischen zwei
+// Speichervorgaengen auf die wirklich geaenderten Zeilen beschraenkt.
+~presetSnapshot = {
+    var lines = ~params.keys.asArray.collect({ |name|
+        var entry = ~params[name];
+        [
+            "float",
+            "/klangnetz/param/" ++ name,
+            "",
+            currentEnvironment[name].asString,
+            entry[\lo].asString,
+            entry[\hi].asString
+        ].join("\t")
+    });
+    lines.sort({ |a, b| a < b });
+    lines
+};
+
+~presetSave = { |name|
+    var path, file, ok = false;
+    if (~presetValidName.(name).not) {
+        ("Sound-Preset speichern abgelehnt: unzulaessiger Name %"
+            .format(name.asString.quote)).postln;
+    } {
+        File.exists(~presetDir).not.if({ File.mkdir(~presetDir) });
+        path = ~presetPath.(name);
+        // Direkt geschrieben, nicht ueber Temp-Datei plus Umbenennen wie auf
+        // der Java-Seite: sclang hat kein portables rename, und hier
+        // speichert ein Mensch von Hand statt eines Schedulers im
+        // Sekundentakt. Der Preis ist eine halb geschriebene Datei, falls
+        // sclang genau dabei abstuerzt.
+        file = File(path, "w");
+        if (file.isOpen) {
+            file.write(~presetSnapshot.().join("\n") ++ "\n");
+            file.close;
+            ok = true;
+            ("Sound-Preset % gespeichert (% Parameter) -> %"
+                .format(name.asString.quote, ~params.size, path)).postln;
+        } {
+            ("Sound-Preset nicht schreibbar: %".format(path)).postln;
+        };
+    };
+    ok
+};
+
+~presetLoad = { |name|
+    var path, file, text, applied = 0, unknown = 0, broken = 0;
+    if (~presetValidName.(name).not) {
+        ("Sound-Preset laden abgelehnt: unzulaessiger Name %"
+            .format(name.asString.quote)).postln;
+    } {
+        path = ~presetPath.(name);
+        if (File.exists(path).not) {
+            // KEIN Fehler: nicht jede Lichtszene hat ein Klang-Gegenstueck.
+            // Der Klang bleibt dann einfach stehen.
+            ("Kein Sound-Preset % - Klang bleibt unveraendert"
+                .format(name.asString.quote)).postln;
+        } {
+            file = File(path, "r");
+            if (file.isOpen.not) {
+                ("Sound-Preset nicht lesbar: %".format(path)).postln;
+            } {
+                text = file.readAllString;
+                file.close;
+                // \r mit weg: eine von Hand unter Windows bearbeitete Datei
+                // haette sonst ein \r am Ende jedes Zahlenwerts und jede
+                // Zeile schluege als unlesbar fehl.
+                text.replace("\r", "").split($\n).do({ |line|
+                    var fields, address, key;
+                    if (line.stripWhiteSpace.size > 0) {
+                        fields = line.split($\t);
+                        if (fields.size < 4) {
+                            broken = broken + 1;
+                        } {
+                            address = fields[1].stripWhiteSpace;
+                            if (address.beginsWith("/klangnetz/param/").not) {
+                                unknown = unknown + 1;
+                            } {
+                                key = address.copyToEnd(
+                                    "/klangnetz/param/".size).asSymbol;
+                                if (~params[key].isNil) {
+                                    unknown = unknown + 1;
+                                } {
+                                    ~applyParam.(key, fields[3].asFloat);
+                                    applied = applied + 1;
+                                };
+                            };
+                        };
+                    };
+                });
+                ("Sound-Preset % geladen: % uebernommen, % unbekannt, % unlesbar"
+                    .format(name.asString.quote, applied, unknown, broken)).postln;
+                // Der wahrscheinlichste Grund, wenn gar nichts ankommt: die
+                // Datei stammt aus dem alten Parametersatz (/sc/amp/*,
+                // /sc/bell/*, /sc/scale/*), den es seit dem Pan4-Umbau nicht
+                // mehr gibt. Ohne diesen Hinweis sucht man den Fehler im
+                // Loader statt in der Datei.
+                if ((applied == 0) and: { unknown > 0 }) {
+                    ("  -> keine bekannte Adresse dabei. Stammt % noch aus dem"
+                        + "alten Parametersatz? Mit /sc/preset/save % neu"
+                        + "schreiben.").format(path, name.asString).postln;
+                };
+            };
+        };
+    };
+    applied
+};
+
 s.waitForBoot({
     // ---- Alten Aufbau abräumen ---------------------------------------
     // Nur beim Re-Evaluieren im Live-Coding relevant, beim ersten Lauf sind
@@ -376,6 +845,8 @@ s.waitForBoot({
     ~noiseTestOscFunc !? { |f| f.free };
     ~noiseTestHardOscFunc !? { |f| f.free };
     OSCdef(\impulseStream) !? { |d| d.free };
+    OSCdef(\scPresetLoad) !? { |d| d.free };
+    OSCdef(\scPresetSave) !? { |d| d.free };
     ~droneReaper !? { |r| r.stop };
     ~paramOscDefs !? { |defs| defs.do({ |d| d.free }) };
     ~masterReverbSyn !? { |syn| syn.free };
@@ -459,7 +930,7 @@ s.waitForBoot({
     // getriggerten Ton — bei der Anschlagsrate der Installation (Hits im
     // Sekundenbereich) praktisch sofort.
     SynthDef(\glockenBell, { |freq = 440, amp = 0.3, out = 0, x = 0, y = 0,
-            brightness = 1.0, detune = 1.0|
+            brightness = 1.0, detune = 1.0, bellVolume = 1.0|
         var sig, bellSig, grit, gritEnv, partials, partialAmps, partialDecays,
             harmonicPartials;
 
@@ -502,18 +973,33 @@ s.waitForBoot({
         grit = Saw.ar(freq) * gritEnv;
         grit = BPF.ar(grit, freq * 2, 0.7) * 0.22;
 
-        sig = (bellSig + grit) * amp;
+        // bellVolume ist der Layer-Fader der Glockenschicht, multiplikativ
+        // VOR dem globalen masterVolume (das sitzt in \masterReverb).
+        // Bewusst ohne Lag: als Start-Argument eines One-Shots wuerde ein Lag
+        // die Lautstaerke ueber die Lag-Zeit hochfahren und damit genau den
+        // Anschlag weichzeichnen, der den Glockenklang ausmacht.
+        sig = (bellSig + grit) * amp * bellVolume;
         // Position je Ton fest — eine Glocke wandert nicht. Kein Lag nötig.
         Out.ar(out, ~toQuad.(sig, x, y));
     }).add;
 
     // ---- SynthDef: Drohne eines reisenden Impulses --------------------
-    // Leiser gehaltener Ton für einen reisenden Impuls. Die Klangfarbe ist
-    // ein schlichter Startpunkt und ausdrücklich zum Ersetzen gedacht — die
-    // Mechanik drumherum ist der Teil, der stimmen muss.
+    // Zwei Schichten in EINEM Synth je Impuls: ein leiser gehaltener Ton und
+    // eine granulare Windschicht, dazwischen blendet travelMix.
+    //
+    // EIN Synth je Impuls, kein zweiter: dieser hier haengt schon an einer
+    // Impuls-ID und bekommt Position, Huellkurve, ~droneTimeout und
+    // ~droneLimit geschenkt. Ein zweiter Synth fuer den Wind braeuchte ein
+    // zweites Dictionary, einen zweiten Reaper und ein zweites Limit und
+    // verdoppelte die Stimmenzahl -- fuer ein Feature, dessen Ziel es ist,
+    // Klangbrei zu VERMEIDEN. Siehe auch den Block bei ~registerParam
+    // \travelMix.
     SynthDef(\impulseDrone, { |freq = 220, amp = 0.08, out = 0, x = 0, y = 0, gate = 1,
-            lpfMult = 6|
-        var sig, env, xl, yl, ampl, lpfMultLagged;
+            lpfMult = 6, travelMix = 0, travelFreq = 800, travelRq = 0.35,
+            travelAmpScale = 1.0, travelGrainRatio = 0.125, droneVolume = 1.0|
+        var sig, tone, wind, env, xl, yl, ampl, lpfMultLagged, mixLagged,
+            rqLagged, windAmpLagged, ratioLagged, volLagged,
+            grainTrig, grainEnv, grainDur;
         // Lag VOR der Umrechnung: ein springender Positionswert darf nicht
         // als Klick durchschlagen. Bei 10 Hz Melderate glättet 0.1 s die
         // Sprünge zwischen zwei Meldungen.
@@ -529,10 +1015,83 @@ s.waitForBoot({
         // ~registerParam-Aufruf oben) — genauso lagged, sonst knackt ein
         // Regler-Sprung mitten im Filterverlauf.
         lpfMultLagged = Lag.kr(lpfMult, 0.1);
+        // travelMix/travelRq/travelAmpScale/travelGrainRatio/droneVolume
+        // kommen ebenfalls live per .set (siehe die onSet-Callbacks bei
+        // ~registerParam) und brauchen dieselbe Glättung: ein Sprung im
+        // Crossfade, in der Koernerdauer oder in der Lautstärke knackt auf
+        // einem gehaltenen Ton genauso wie ein Positionssprung.
+        mixLagged = Lag.kr(travelMix, 0.2);
+        rqLagged = Lag.kr(travelRq, 0.1);
+        windAmpLagged = Lag.kr(travelAmpScale, 0.1);
+        ratioLagged = Lag.kr(travelGrainRatio, 0.1);
+        volLagged = Lag.kr(droneVolume, 0.1);
         env = EnvGen.kr(Env.asr(0.05, 1, 0.3, \sin), gate, doneAction: 2);
-        sig = LFTri.ar(freq) * 0.5 + SinOsc.ar(freq * 2.01, 0, 0.2);
-        sig = LPF.ar(sig, freq * lpfMultLagged);
-        sig = sig * ampl * env;
+
+        // Tonschicht -- unveraendert der bisherige Klang.
+        tone = LFTri.ar(freq) * 0.5 + SinOsc.ar(freq * 2.01, 0, 0.2);
+        tone = LPF.ar(tone, freq * lpfMultLagged);
+
+        // ---- Windschicht: GRANULAR, nicht kontinuierlich ---------------
+        // UMGEBAUT 2026-08-01 (Birk nach mehreren Hoerproben): war vorher
+        // BPF.ar(PinkNoise.ar, travelFreq, rq) -- ein durchgehender, eng
+        // gefilterter Rauschton ohne Struktur. Gewuenscht ist stattdessen
+        // eine koernige Textur: viele kurze Rauschkoerner, "wie Sand, der
+        // runterrinnt". Deshalb drei Aenderungen auf einmal:
+        //
+        //   1. WEISSES statt rosa Rauschen -- rosa faellt mit 3 dB/Oktave
+        //      ab und klingt hinter einem Low-Cut dumpf/hohl; weiss ist der
+        //      luftige, sandige Grundstoff.
+        //   2. LOW-CUT (HPF) statt Bandpass -- ein Bandpass macht einen
+        //      engen, pfeifenden Ton, genau das Gegenteil von luftig.
+        //   3. GRANULAR statt Dauerton -- Dust.ar streut die Koerner
+        //      zufaellig (Poisson), nicht periodisch: ein regelmaessiges
+        //      Impulse.ar klaenge nach Motor, nicht nach rieselndem Sand.
+        //
+        // Die Speed-Kopplung bleibt der Zweck der Uebung und wird sogar
+        // staerker: travelFreq bestimmt jetzt BEIDES -- die Grenzfrequenz
+        // des Low-Cut UND die Koernerdichte. Ein 8x-Impuls rieselt damit
+        // dichter UND heller als ein 1x-Impuls, zwei gleichgerichtete
+        // Merkmale statt einem.
+        grainDur = rqLagged * 0.02;              // 0.4 .. 20 ms je Korn
+        grainTrig = Dust.ar(travelFreq * ratioLagged);
+        // Decay2 = zwei Exponentialkurven, also ein Korn mit weichem
+        // Ausklang statt eines harten Rechtecks. Der sehr kurze Attack
+        // (0.3 ms) laesst die Kante hoerbar -- sie ist das "Kleinteilige".
+        grainEnv = Decay2.ar(grainTrig, 0.0003, grainDur);
+        wind = WhiteNoise.ar * grainEnv;
+        // Low-Cut NACH der Huelle: so schneidet der Filter auch die
+        // Korn-Kanten mit an und gibt ihnen etwas Luft, statt sie als
+        // harten Klick stehen zu lassen.
+        wind = HPF.ar(wind, travelFreq);
+        // ---- Pegel: zwei getrennte Korrekturen -------------------------
+        // 1. DICHTEAUSGLEICH. Die Koernerdichte haengt an travelFreq, also
+        //    an der Speed-Klasse -- doppelt so viele Koerner tragen doppelt
+        //    so viel Energie. OHNE diesen Ausgleich waere die 8x-Klasse
+        //    VIERMAL so laut wie die 0.5x-Klasse (NRT-gemessen: RMS 0.134
+        //    gegen 0.501). Die Klasse soll sich in Farbe und Dichte zeigen,
+        //    NICHT in der Lautstaerke -- sonst regelt der Limiter die
+        //    schnellen Impulse weg und die Zuordenbarkeit kippt.
+        //    1/sqrt(rate) ist der richtige Exponent, weil sich unkorrelierte
+        //    Koerner in der Leistung addieren, nicht in der Amplitude.
+        //    Bezugspunkt 100 Koerner/s = die 2x-Klasse. Gemessen bleibt
+        //    danach eine Streuung von Faktor 1.08 statt 4.0.
+        // 2. ANGLEICH AN DIE TONSCHICHT, damit der Crossfade kein Sprung
+        //    ist. Faktor 3 -- NRT-gemessen liegt die Windschicht damit rund
+        //    3 dB unter der Tonschicht, was bei ihrem hohen Scheitelfaktor
+        //    (10..19 gegen 2.1) etwa gleich laut WIRKT. Feinjustiert wird
+        //    mit travelAmpScale.
+        // Der max(..., 1) verhindert eine Division durch fast 0, das
+        // .clip(0, 4) eine Explosion bei sehr kleiner Dichte.
+        wind = wind
+            * ((100 / max(travelFreq * ratioLagged, 1)).sqrt.clip(0, 4))
+            * 3 * windAmpLagged;
+
+        // Crossfade: 0 = reine Tondrohne (Auslieferungszustand, bitgleich
+        // dem bisherigen Klang), 1 = reine Koernerschicht.
+        sig = XFade2.ar(tone, wind, (mixLagged * 2) - 1);
+        // droneVolume ist der Layer-Fader dieser Schicht, multiplikativ VOR
+        // dem globalen masterVolume (das sitzt in \masterReverb).
+        sig = sig * ampl * env * volLagged;
         Out.ar(out, ~toQuad.(sig, xl, yl));
     }).add;
 
@@ -598,6 +1157,9 @@ s.waitForBoot({
         // besser als hartes Clipping. Preis: Limiter schaut 0,01 s voraus und
         // verzögert damit den GESAMTEN Ausgang um 10 ms — gleichmässig über
         // alle vier Kanäle, das Klangbild bleibt also unberührt.
+        // Schwelle 0.15 (Birk, vor Ort gemessen, master-Commit b1c6e13
+        // 2026-08-01) -- von diesem Feature-Branch nachgezogen, damit
+        // beide Branches denselben abgenommenen Limiter-Wert fahren.
         sig = Limiter.ar(sig, 0.15, 0.01);
         // GEMESSEN 2026-07-31 (Show-Rechner, Birk vor Ort): die Hardware-
         // Verkabelung des ZOOM AMS-24 ist KEINE einfache Rotation der
@@ -711,11 +1273,17 @@ s.waitForBoot({
     // ist hier nicht feststellbar — deshalb der Timeout unten.
     OSCdef(\impulseStream, { |msg|
         var id = msg[1], px = msg[2], py = msg[3], energy = msg[4];
+        // Fuenftes Argument (Betrag der Geschwindigkeit in LEDs/s) kam
+        // spaeter dazu. Die Absicherung laesst die Datei auch mit einem
+        // aelteren Processing-Stand laufen -- dann klingt jeder Whoosh so,
+        // als stuende der Impuls still.
+        var speed = if (msg.size > 5) { msg[5].asFloat } { 0 };
         var entry = ~drones[id];
         // energy ist NICHT durch 1 begrenzt: an einer Kreuzung erbt jeder
         // Zweig die volle Energie des Elternimpulses, sie vervielfacht sich
         // also mit jeder Aufspaltung. Deshalb hier clampen.
         var amp = energy.clip(0, 2) * ~droneAmpScale;
+        var travelFreq, travelOct, bias;
         if (entry.notNil) {
             entry[\synth].set(\x, px, \y, py, \amp, amp);
             entry[\lastSeen] = Main.elapsedTime;
@@ -725,10 +1293,40 @@ s.waitForBoot({
             // mehr, bis wieder Platz frei ist — das ist gewollt: die Grenze
             // soll den Rechner schützen, nicht Stimmen umschichten.
             if (~drones.size < ~droneLimit) {
+                // Speed -> Mittenfrequenz des Windbands, OKTAVBASIERT (siehe
+                // die ~registerParam-Aufrufe oben fuer die Begruendung).
+                // Einmal hier gerechnet und als Start-Argument uebergeben
+                // statt im SC-Graphen: die Geschwindigkeit eines Impulses
+                // aendert sich ueber sein Leben kaum, und so bleibt der
+                // Graph schlank.
+                //
+                // max(speed, 0.001): ein alter Processing-Stand ohne das
+                // fuenfte Argument meldet 0, und log2(0) waere -inf.
+                travelOct = (max(speed, 0.001) / ~travelSpeedRef).log2;
+                // Auf die Speed-Klasse rasten, damit Jitter die
+                // Zuordenbarkeit nicht verschmiert.
+                if (~travelSnap > 0.5) { travelOct = travelOct.round };
+                travelFreq = ~travelFreqBase
+                    * (2 ** (travelOct * ~travelOctavesPerStep));
+                travelFreq = travelFreq.clip(~travelFreqMin, ~travelFreqMax);
+                // Klangbias der HERKUNFTS-Region (siehe ~regionBias): die
+                // ERSTE gemeldete Position eines Impulses kommt aus dem Takt
+                // direkt nach seiner Entstehung, liegt also nahe an seinem
+                // Spawn- bzw. Splitpunkt -- das IST die Herkunftsregion, ohne
+                // ein weiteres OSC-Feld und ohne Zustand auf der
+                // Processing-Seite. Einmal beim Anlegen gerechnet, damit der
+                // Whoosh seine Klangidentitaet ueber seine ganze Lebensdauer
+                // behaelt, auch wenn er in eine andere Region fliegt.
+                bias = ~regionBias.(px, py);
+                travelFreq = (travelFreq * bias[\brightness]).clip(20, 18000);
                 ~drones[id] = (
                     synth: Synth(\impulseDrone, [
                         \freq, ~droneFreq.(id), \x, px, \y, py,
-                        \amp, amp, \out, ~quadBus.index, \lpfMult, ~droneLpfMult
+                        \amp, amp, \out, ~quadBus.index, \lpfMult, ~droneLpfMult,
+                        \travelMix, ~travelMix, \travelFreq, travelFreq,
+                        \travelRq, ~travelRq, \travelAmpScale, ~travelAmpScale,
+                        \travelGrainRatio, ~travelGrainRatio,
+                        \droneVolume, ~droneVolume
                     ], ~voices),
                     lastSeen: Main.elapsedTime
                 );
@@ -762,7 +1360,7 @@ s.waitForBoot({
     // Abräumblock, zusammen mit allem anderen aus einem früheren Durchlauf.)
     ~netHitNodeOscFunc = OSCFunc({ |msg, time, addr|
         var nodeId, energy, px, py, noteIndex, octave, degree, semitoneOffset,
-            midiNote, freq, amp, newBell;
+            midiNote, freq, amp, newBell, bias;
 
         nodeId = msg[1].asInteger;
         energy = msg[2].asFloat;
@@ -773,8 +1371,17 @@ s.waitForBoot({
         px = if (msg.size > 3) { msg[3].asFloat } { 0 };
         py = if (msg.size > 4) { msg[4].asFloat } { 0 };
 
+        // Klangbias nach Netzregion (siehe ~regionBias oben): der Notenoffset
+        // wird auf den SKALENINDEX addiert, nicht auf die MIDI-Note -- so
+        // bleibt jeder Ton in Phrygisch.
+        bias = ~regionBias.(px, py);
+
         // Node-ID auf einen Ton der Tonleiter über mehrere Oktaven abbilden.
-        noteIndex = nodeId % ~notesPerOctaveSet;
+        noteIndex = (nodeId + bias[\noteOffset]) % ~notesPerOctaveSet;
+        // Ein negativer Offset kann noteIndex unter 0 druecken; SCs % liefert
+        // fuer negative Zahlen bereits einen nichtnegativen Rest, die
+        // Absicherung hier ist das Netz darunter.
+        noteIndex = noteIndex.abs;
         octave = noteIndex div: ~scaleSteps.size;
         degree = noteIndex mod: ~scaleSteps.size;
         semitoneOffset = ~scaleSteps[degree] + (octave * 12);
@@ -797,9 +1404,14 @@ s.waitForBoot({
 
         // Die frühere Zufalls-Panoramisierung entfällt: sie war der
         // Platzhalter für genau diese Knotenposition.
+        // brightness/detune sind die globalen Regler MAL dem Zonenfaktor --
+        // der Bias verschiebt die Klangfarbe relativ, statt den vor Ort
+        // eingestellten Grundwert zu ueberschreiben.
         newBell = Synth(\glockenBell, [
             \freq, freq, \amp, amp, \x, px, \y, py, \out, ~quadBus.index,
-            \brightness, ~brightness, \detune, ~detune
+            \brightness, (~brightness * bias[\brightness]).clip(0.0, 2.0),
+            \detune, (~detune * bias[\detune]).clip(0.0, 1.0),
+            \bellVolume, ~bellVolume
         ], ~voices);
         ~activeBells.add(newBell);
         // Natuerliches Verklingen (doneAction 2 im SynthDef) muss
@@ -809,8 +1421,9 @@ s.waitForBoot({
         // falschen).
         newBell.onFree({ ~activeBells.remove(newBell); });
 
-        ("node % -> % Hz (amp %) bei (%, %) m".format(
-            nodeId, freq.round(0.1), amp.round(0.01), px.round(0.01), py.round(0.01)
+        ("node % -> % Hz (amp %) bei (%, %) m, Zone %".format(
+            nodeId, freq.round(0.1), amp.round(0.01), px.round(0.01), py.round(0.01),
+            bias[\zone]
         )).postln;
     }, '/net/hitNode', recvPort: ~oscListenPort);
 
@@ -842,38 +1455,46 @@ s.waitForBoot({
     // ---- OSC-Empfang: Sound-Parameter-Layer ---------------------------
     // Ein OSCdef je registriertem Parameter (siehe ~registerParam oben) —
     // schlichter Loop über ~params statt sieben Kopien desselben Rumpfs.
-    // Jede Nachricht bringt EINEN Float als erstes Argument, wird auf
-    // [lo, hi] geklemmt, in die Environment-Variable geschrieben, an einen
-    // etwaigen onSet-Callback gereicht und dann an den laufenden
-    // \masterReverb-Synth weitergegeben (der einzige Sink, der die vier
-    // reinen Environment-Parameter masterVolume/reverbMix/reverbRoom/
-    // reverbDamp live braucht — brightness/detune/droneLpfMult werden
-    // anders zugestellt, siehe deren Kommentare bei den SynthDefs).
+    // Jede Nachricht bringt EINEN Float als erstes Argument.
+    //
+    // Das Anwenden selbst macht ~applyParam (oben definiert), nicht dieser
+    // Rumpf: dieselbe Funktion nutzt auch das Preset-Laden. Zwei Kopien
+    // waeren zwei Wege, die auseinanderlaufen koennen.
+    //
     // recvPort ist ~oscListenPort, derselbe wie /net/hitNode — ein OSCdef
     // pro Adresse ist die feinste Granularität, die SC anbietet, ein
-    // gemeinsamer Empfänger für alle sieben Adressen bräuchte selbst
-    // wieder eine Verzweigung nach Adresse und würde nur Code verschieben.
+    // gemeinsamer Empfänger für alle Adressen bräuchte selbst wieder eine
+    // Verzweigung nach Adresse und würde nur Code verschieben.
     ~paramOscDefs = ~params.keys.collect({ |name|
         OSCdef(
             ("klangnetzParam_" ++ name).asSymbol,
             { |msg|
-                var entry = ~params[name];
-                var val = msg[1].asFloat.clip(entry[\lo], entry[\hi]);
-                currentEnvironment[name] = val;
-                entry[\onSet] !? { |cb| cb.(val) };
-                // Die vier Master-/Reverb-Parameter wirken über den
-                // dauerhaft laufenden \masterReverb-Synth — ein .set auf
-                // alle vier ist billig und robust gegen Aufrufreihenfolge
-                // (unschädlich, wenn ein SynthDef-Argumentname bei diesem
-                // Parameter gar nicht existiert, .set ignoriert unbekannte
-                // Keys still).
-                ~masterReverbSyn !? { |syn| syn.set(name, val) };
+                var val = ~applyParam.(name, msg[1]);
                 ("klangnetz param % -> %".format(name, val.round(0.001))).postln;
             },
             ("/klangnetz/param/" ++ name).asSymbol,
             recvPort: ~oscListenPort
         );
     });
+
+    // ---- OSC-Empfang: Sound-Presets -----------------------------------
+    // /sc/preset/load <name:string>  und  /sc/preset/save <name:string>
+    //
+    // imPulse ist Master: PresetManager schickt bei JEDEM Preset-Wechsel
+    // (von Hand, per Scheduler oder beim Start) /sc/preset/load mit
+    // demselben Namen, unter dem das Licht-Preset in data/presets/ liegt.
+    // Hier hoert also niemand auf einen eigenen Zeitplan -- es gibt genau
+    // einen Scheduler, und der laeuft in imPulse.
+    //
+    // Fire-and-forget in beide Richtungen: es geht keine Antwort zurueck.
+    // Ein Name ohne Datei ist kein Fehler (siehe ~presetLoad).
+    OSCdef(\scPresetLoad, { |msg|
+        if (msg.size > 1) { ~presetLoad.(msg[1].asString) };
+    }, '/sc/preset/load', recvPort: ~oscListenPort);
+
+    OSCdef(\scPresetSave, { |msg|
+        if (msg.size > 1) { ~presetSave.(msg[1].asString) };
+    }, '/sc/preset/save', recvPort: ~oscListenPort);
 
     // =================================================================
     // Messhilfen für die zwei ungemessenen Werte

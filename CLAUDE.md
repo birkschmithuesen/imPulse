@@ -73,7 +73,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`, `SpeedQuantizer`, `StripeTreeStore`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
@@ -86,6 +86,11 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `ImpulseOscThrottleTest` — Sendetakt (inklusive `rateHz = 0` und NaN) und die Auswahl der energiereichsten Impulse samt Tie-Break
 - `TestPatternsTest` — das Sicherheitsventil der Testbilder: kein Muster gibt einen Kanal über `TestPatterns.PATTERN_LEVEL` aus (siehe „Master-Pegel")
 - `ParameterOscillatorTest` — die Sinus-Formel der Speed-/Lifetime-Randomizer: Phasenlage, Periodizität, Einhalten von min/max, entartete Perioden, Zurücksetzen der Phase beim Wiedereinschalten
+- `SplitVarianceTest` — die Jitter-Formel der Split-Kinder: neutraler Auslieferungswert, Symmetrie um den Ausgangswert, die Untergrenze gegen unsterbliche Impulse, Vorzeichenerhalt bei rückwärts laufenden Kindern
+- `MusicalClockTest` — die akkumulierende Beat-Phase: kein Sprung bei BPM-Wechsel, Notenwert-Intervalle, entartete BPM, Rücksprung der Wanduhr
+- `OriginSequencerTest` — Feuertakt je Notenwert, `repeatCount` hält den Ursprung, `originStripeOverride`, kein Sofort-Feuern beim Wiedereinschalten, kein Nachholen nach einem Hänger, Rasterung der Notenwerte
+- `StripeTreeStoreTest` — die Baum-Zuordnung: Parsen samt Kommentaren, unbekannter Baumname, Index ausserhalb des Bereichs, doppelter Stripe (letzte Zeile gewinnt), leerer Baum liefert `null`, fehlende Datei, Gegenprobe an der echten `data/stripeTrees.txt`
+- `SpeedQuantizerTest` — die gewichtete Auswahl der Speed-Klasse: die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, Normalisierung nicht-prozentualer Gewichte, entartete Gewichte (alle 0, negativ, NaN)
 - `PresetStoreTest` — Format, Datei, Snapshot und Anwenden eines Presets, inklusive der ausgeschlossenen und still übergangenen Adressen
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
 
@@ -124,7 +129,7 @@ Eingehende OSC-Adressen: `/tube/trigger` (int Stripe, 1-basiert; optional float 
 Ausgehend an Port 8002 (`oscOutput` in `imPulse.pde`, Auslieferungsziel `127.0.0.1`), beide aus `LedNetworkTransportEffect.java`:
 
 - `/net/hitNode <nodeId:int> <energy:float> <x:float> <y:float>` — ein Node hat gefeuert. `x`/`y` sind die Draufsicht-Position des Knotens in Metern (`LedNetworkNode.posX/posY`, gesetzt von `applyPositions`), rein **angehängt**: ein Empfänger, der nur die ersten zwei Argumente liest, bleibt unberührt.
-- `/net/impulse <impulseId:int> <x:float> <y:float> <energy:float>` — gedrosselter Positionsstrom der reisenden Impulse (`sendImpulseStream()`, Takt und Auswahl aus `ImpulseOscThrottle`). **Ein Datagramm je Impuls**, kein Anzahl-Feld, kein Bündel, keine Ende-Markierung — die Empfangsseite kann also nicht feststellen, wieviele Meldungen zu einem Takt gehören und braucht einen Timeout. Filler werden ausdrücklich übersprungen (sie tragen die ID ihres Elternimpulses). Es gibt **kein Todes-Signal**: ein Impuls kann aus der Auswahl der energiereichsten fallen, ohne zu sterben, deshalb deckt derselbe Timeout beides ab (`klangnetz_bells.scd`: 0,4 s, geprüft alle 0,1 s, Obergrenze 32 Drohnen).
+- `/net/impulse <impulseId:int> <x:float> <y:float> <energy:float> <speed:float>` — gedrosselter Positionsstrom der reisenden Impulse (`sendImpulseStream()`, Takt und Auswahl aus `ImpulseOscThrottle`). Das fünfte Argument ist der **Betrag** der Geschwindigkeit in LEDs/Sekunde und kam später dazu — rein angehängt, genau wie seinerzeit `x`/`y` bei `/net/hitNode`: ein Empfänger, der nur die ersten vier liest, bleibt unberührt. Die Klangseite koppelt daran die Filterfrequenz des Travel-Sounds; das Vorzeichen trägt die Richtung und ist für die Klangfarbe bedeutungslos. **Ein Datagramm je Impuls**, kein Anzahl-Feld, kein Bündel, keine Ende-Markierung — die Empfangsseite kann also nicht feststellen, wieviele Meldungen zu einem Takt gehören und braucht einen Timeout. Filler werden ausdrücklich übersprungen (sie tragen die ID ihres Elternimpulses). Es gibt **kein Todes-Signal**: ein Impuls kann aus der Auswahl der energiereichsten fallen, ohne zu sterben, deshalb deckt derselbe Timeout beides ab (`klangnetz_bells.scd`: 0,4 s, geprüft alle 0,1 s, Obergrenze 32 Drohnen).
 
 Die zwei zugehörigen Parameter, beide in `LedNetworkTransportEffect`:
 
@@ -145,6 +150,72 @@ Zwei Dinge, die man beim Ändern kennen muss:
 - **Die Liste kommt vom Dateisystem, nicht per OSC.** `server.py` läuft auf derselben Maschine wie imPulse und liest `data/presets/` direkt (`--presets`, Vorgabe `presets/` neben `--settings`). Ein OSC-Rückkanal wäre neu zu bauen — die einzige Ausgangsadresse des Sketches ist 8002. Geschrieben wird der Ordner weiterhin ausschliesslich von imPulse; deshalb gibt es im UI auch kein Löschen.
 - **Nach dem Laden zieht der Server die Regleranzeige nach**, indem er dieselbe Preset-Datei mit `parse_settings()` liest — das geht, weil Preset- und `remoteSettings.txt`-Format identisch sind. Die Werte gehen in der HTTP-Antwort zurück und werden im Browser *still* gesetzt (kein zweites OSC); geklemmt wird auf die Range aus `remoteSettings.txt`, nicht auf die aus der Preset-Datei — dieselbe Regel wie `PresetStore.applyPreset()`. Adressen, die der Dump nicht kennt, und Werte ausserhalb der verengten UI-Range (`UI_RANGE_OVERRIDES`) nennt die Statuszeile, statt sie zu verschlucken.
 - **Speichern wartet auf die Datei.** `/preset/save` ist asynchron (imPulse schreibt erst im nächsten `draw()`), also pollt der Endpoint bis zu 1 s auf eine geänderte `mtime` und antwortet sonst mit 504 statt Erfolg zu behaupten — der häufigste Fehlerfall ist „Web-UI läuft, imPulse nicht". `valid_preset_name()` in `server.py` und die Regex im JS spiegeln `PresetStore.isValidName()`; Autorität bleibt Java, dort geht es um Pfad-Traversal.
+
+**Fünf Themen-Tabs** (Mixer, Sound Design, Spawn-Verhalten, Noten-Verhalten,
+Impuls-Verhalten) statt einer langen Liste. Welche Adresse in welchen Tab
+gehört, entscheidet `TAB_RULES`/`TAB_PRIMARY` in `server.py` — dort ist es
+prüfbar, und `test_webui.py` stellt sicher, dass **jeder** Regler in genau
+einem Tab landet und keiner doppelt. Oben je Tab die kuratierten Regler,
+darunter ein eingeklapptes `<details>` mit dem Rest.
+
+Die Reihenfolge der Regeln zählt: `/net/impulse/speedQuantize/` muss **vor**
+`/net/impulse/` stehen, sonst zöge die Physik-Regel die Speed-Klassen an sich.
+
+**`buildTabs()` baut ALLE Panels und schaltet nur `hidden` um** — nicht erst
+beim Öffnen eines Tabs. Die Regler tragen sich beim Bauen in die flache
+`controls`-Map ein, und über genau die laufen Preset-Laden und der
+`applied`/`echoed`-Rücklauf. Ein Regler auf einem nie geöffneten Tab stünde
+sonst nicht in der Map und würde von einem Preset still nicht angezeigt.
+Headless mit jsdom gegengeprüft: 67 Einträge in der Map, ein Regler auf einem
+inaktiven Tab lässt sich setzen, und das Umschalten baut nichts neu.
+
+Kopfzeile, Statuszeile und Preset-Sektion stehen bewusst **über** der
+Tab-Leiste: sie gelten für alle Tabs, und ein Preset-Feld, das nur auf einem
+Tab sichtbar wäre, wäre eine Falle.
+
+**Drei Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
+flache Liste aus 38 Sequencer-Reglern unbedienbar wäre. Der Server liefert
+dafür Struktur statt einer Reglerliste (`build_sequencer`,
+`build_speed_classes`, `sc_param_groups` in `server.py`), das Aussehen macht
+`app.js`:
+
+- **Sequencer** — BPM als große Ziffer, eigener Not-Aus, sechs Track-Karten
+  mit je eigener Spurfarbe; Notenwerte als segmentierte Leiste mit **Symbol
+  und Kürzel** (nicht jede Windows-Schrift hat U+1D15D..U+1D161, ein Symbol
+  allein wäre dort ein leeres Kästchen).
+- **Speed-Klassen** — die fünf Gewichte plus ein Verteilungsbalken, der sie
+  normiert zeigt; die Gewichte selbst summieren sich bewusst nicht auf 100.
+- **Sound (SuperCollider)** — die `/klangnetz/param/*`-Adressen, die
+  **nicht** durch `remoteSettings.txt` laufen.
+
+Vier Dinge, die man beim Ändern kennen muss:
+
+- **`sequencer_addresses()` nimmt die Adressen der Spezial-Sektionen aus dem
+  generischen Rendering.** Ohne das stünde jeder Sequencer-Regler zweimal auf
+  der Seite — zwei Bedienelemente für denselben Parameter, die auseinander
+  laufen können. `test_webui.py` prüft das an einem echten Snapshot.
+- **`SC_PARAMS` ist eine handgepflegte Kopie der `~registerParam`-Registry
+  aus der `.scd`** und geht über einen **zweiten** `OscSender` auf Port
+  **8002**. Zwei Tests vergleichen die Tabelle in beide Richtungen mit der
+  Datei, damit sie nicht abdriftet. Es gibt **keinen Rückkanal**: die
+  angezeigten Werte sind die `.scd`-Defaults, nicht der Live-Zustand — die
+  Sektion sagt das selbst im Warnhinweis.
+- **Die Rasteranzeige je Track ist die Uhr des Browsers**, gerechnet aus BPM
+  und Notenwert, **nicht** eine Rückmeldung aus dem Sketch: dafür gäbe es
+  keinen Kanal, imPulse sendet nur an 8002 und dort hört SuperCollider. Sie
+  heißt deshalb im UI „Raster" und behauptet nirgends „feuert jetzt". Ihre
+  Phase kann gegenüber dem Sketch beliebig verschoben sein; was sie zeigt,
+  ist der *Abstand* — welcher Track dicht und welcher dünn läuft.
+- **Der Verteilungsbalken hängt an der `set()`-Methode der Regler, nicht am
+  `input`-Event.** Das Laden eines Presets ruft `control.set(wert, true)` und
+  löst bewusst kein `input` aus; an einem reinen Event-Listener bliebe der
+  Balken danach auf der alten Verteilung stehen.
+
+Für die UI-Schicht selbst gibt es **kein** Testgerüst im Repo — `webui/` soll
+ohne Node/npm auskommen, und ein jsdom-Test würde genau das einführen. Geprüft
+ist die Server-Seite (`webui/test_webui.py`, ohne Fremdabhängigkeiten); das
+Rendering wurde einmalig headless mit jsdom gegengeprüft, ohne den Test
+aufzunehmen.
 
 Start (Details, Windows-Scheduled-Task `WebUiRun` und Firewall-Hinweise in `webui/README.md`):
 
@@ -169,6 +240,148 @@ Zwei Mechanismen, die man beim Ändern kennen muss:
 - **nodeDeadTime**: Ein Node feuert erst wieder nach `/net/impulse/nodeDeadTime` Sekunden. Ohne diese Totzeit würde ein Impuls denselben Node in aufeinanderfolgenden Frames endlos neu triggern.
 
 Bei einem Node-Treffer erhält jeder Zweig aktuell die **volle** Energie des Elternimpulses (`childEnergy = curActivation.energy`) — ein bewusster Quick-Fix, jede Aufspaltung vervielfacht also die Gesamtenergie. Die auskommentierte Zeile darüber zeigt die energieerhaltende Variante.
+
+**Split-Varianz** (`SplitVariance.java`, angewandt in `activationEncounteredNode()`):
+jedes Kind einer Aufspaltung kann eine leicht abweichende Geschwindigkeit und
+Lebensdauer bekommen, damit Geschwister nicht synchron sterben und identisch
+wirken. Zwei unabhängige Parameter, beide Auslieferungswert **0** (= exakt das
+vorherige Verhalten):
+
+- `/net/impulse/splitSpeedJitter` (float 0..1) — `childSpeed = speed * (1 + jitter*(rand*2-1))`
+- `/net/impulse/splitLifetimeJitter` (float 0..1) — streut den `decayScale` des Kindes
+
+`decayScale` ist ein **Faktor auf** `/net/impulse/lifetime`, nicht dessen
+Ersatz. Das ist der Punkt, an dem der Entwurf bewusst vom ursprünglichen
+Auftrag abweicht: mit einem absoluten Zerfallswert je Impuls würde jeder
+Impuls den Wert seiner Geburt einfrieren, der Sinus-Randomizer
+(`/net/impulse/lifetime/randomize/*`) erreichte nur noch neu gespawnte Impulse
+und ein Operator, der den Lifetime-Regler zieht, sähe die lebenden Impulse
+unbeeindruckt weiterlaufen — beides ohne Fehlermeldung. Normale Spawns tragen
+`decayScale = 1.0`, Filler erben den ihres Elternimpulses.
+
+Gezogen wird **je Zweig und je Größe einzeln**: ein gemeinsamer Zufallswert
+für alle Zweige eines Treffers würde die Geschwister wieder gleichschalten,
+also genau das nicht lösen, worum es geht.
+
+`SplitVariance.jitter()` klemmt den Faktor nach unten auf `MIN_FACTOR = 0.05`.
+Bei voller Stärke und einem Zufallswert von 0 wäre er sonst exakt 0 — ein Kind
+mit Speed 0 stünde für immer still, eines mit `decayScale` 0 verlöre nie
+Energie und stürbe nie. Zwei unsterbliche Zustände, die das Netz über eine
+Nacht volllaufen lassen.
+
+**Origin-Sequencer** (`MusicalClock.java`, `OriginSequencer.java`, getickt aus
+`drawMe()` über `tickSequencer()`): der strukturierte Spawn-Layer neben dem
+chaotischen `randomSpawn`. Beide laufen unabhängig und sind gleichzeitig
+aktivierbar. Sechs Tracks feuern auf einem gemeinsamen BPM-Raster, jeder von
+einem Ursprungs-Stripe, auf dem er `repeatCount` Zyklen stehen bleibt, bevor er
+neu würfelt — von demselben Ursprung wiederholt spawnen erzeugt (fast) dieselbe
+Melodie, das ist der Zweck.
+
+- `/net/sequencer/enabled` (int 0/1, Default **0**), `/net/sequencer/bpm`
+  (float, 20..200, Default 60)
+- je Track N = 0..5 unter `/net/sequencer/track<N>/`: `enabled` (int 0/1,
+  Default 1 für Track 0 und 1, sonst 0), `noteValue` (int 1..16, gerastet auf
+  1/2/4/8/16), `repeatCount` (int 1..8, Default 3), `energy` (float 0..1,
+  Default 0.6), `swingJitter` (float 0..1, Default **0**),
+  `originTreeFilter` (int 0..4, Default **0**), `originStripeOverride`
+  (int, -1 = zufällig)
+
+**Baum-Origin-Filter** (`StripeTreeStore.java`, `data/stripeTrees.txt`): ein
+Track kann seinen Ursprungs-Vorrat auf einen der vier physischen Bäume
+einschränken. `originTreeFilter` 0 = alle Stripes, 1 = vorn, 2 = hinten,
+3 = rechts, 4 = links (Reihenfolge = `StripeTreeStore.TREE_NAMES`, das Web-UI
+zeigt Klartext).
+
+Die Datei hat vier Tab-Spalten `stripeIndex baum confidence distanceMeters`,
+`#` leitet einen Kommentar ein. Sie ist **automatisch erzeugter Best-Guess**
+und wird von Birk von Hand korrigiert — daraus folgen drei Regeln:
+
+- **Bei doppeltem Stripe gewinnt die LETZTE Zeile.** Die natürliche
+  Handkorrektur ist eine angehängte Zeile am Ende; „erste gewinnt" würde sie
+  still verschlucken. Die Überschreibung wird gemeldet.
+- **Index und Baum genügen**, `confidence`/`distanceMeters` sind optional —
+  beim Korrigieren soll niemand eine Distanz erfinden müssen.
+- **`confidence` wird gelesen, aber nicht ausgewertet.** „unsicher" ist eine
+  Notiz für die Handkorrektur, kein Laufzeitverhalten; die Anzahl steht im
+  Startbericht, damit sie nicht in Vergessenheit gerät.
+
+Drei Dinge, die man beim Ändern kennen muss:
+
+- **Vorrangregel:** `originStripeOverride >= 0` schlägt den Baum-Filter. Der
+  Filter wirkt nur bei `-1` und schränkt dann den Zufalls-Pool ein — auch
+  beim Nachwürfeln nach Ablauf von `repeatCount`, weil `pickStripe()` der
+  einzige Ort ist, an dem ein Ursprung entsteht.
+- **Ein leerer Pool zählt wie kein Filter.** `stripesFor()` liefert für einen
+  Baum ohne Stripes `null`, nicht ein leeres Array. Sonst verstummte der Track
+  nach dem Einschalten eines Filters — ein Fehlerzustand ohne Symptom.
+- **Der Sequencer kennt keine Bäume.** `TrackConfig.originPool` wird vom
+  Effekt gefüllt (Referenz auf das im Store gecachte Array, keine Kopie —
+  `tickSequencer()` läuft mit 40 Hz). Damit hängt die Prüfbarkeit des
+  Sequencers nicht an einer Datei.
+
+Vier Dinge, die man beim Ändern kennen muss:
+
+- **`MusicalClock` akkumuliert**, statt `(now - t0)/beatDuration` zu rechnen.
+  Naiv gerechnet springt die Phase bei jeder BPM-Änderung — die seit
+  Sketch-Start verstrichene Beat-Zahl rechnet sich rückwirkend um und alle
+  Tracks feuern schlagartig durcheinander. Akkumuliert ändert ein Tempowechsel
+  nur die Rate, nie die Position.
+- **Die Uhr läuft auch bei `enabled=0` weiter.** Sie ist die gemeinsame Phase;
+  ein Stillstand während der Aus-Phase machte das Wiedereinschalten von der
+  Dauer der Pause abhängig.
+- **Es gibt kein `/net/sequencer/activeTracks`.** Zwei Schalter für dieselbe
+  Sache erzeugen einen stillen Fehlerzustand: der Operator schaltet Track 4
+  ein, es passiert nichts, weil `activeTracks=3` ihn abschneidet — kein Fehler,
+  kein Symptom, nur Stille. `enabled` je Track ist außerdem ausdrucksstärker
+  (jede Teilmenge statt nur ein Präfix), und der grobe Not-Aus existiert schon.
+- **Keine Kopplung an den Preset-Scheduler.** Sequencer-Timing ist BPM und
+  Notenwerte, Preset-Timing bleibt Sekunden und Minuten; die zwei Zeitsysteme
+  wissen nichts voneinander.
+
+`OriginSequencer` baut ausdrücklich **keine** `TravellingActivation` — das
+bleibt im Effekt, der die Objekte, die Geschwindigkeit und die Stripe-Länge
+kennt. Zufall und Beat-Position werden hereingereicht (`RandomSource`), damit
+die Klasse ohne Sketch-Laufzeit prüfbar ist; dasselbe Muster wie
+`ImpulseOscThrottle` und `PresetScheduler`.
+
+**Quantisierte Spawn-Geschwindigkeit** (`SpeedQuantizer.java`, angewandt in
+`spawnSpeed()`): nicht nur *wann* gespawnt wird ist rhythmisch, sondern auch
+*wie schnell* der einzelne Impuls reist. Fünf Klassen im Verhältnis
+1:2:4:8:16 — **0.5x, 1x, 2x, 4x, 8x** — dieselben Abstände wie die Notenwerte
+des Sequencers, nur auf der Geschwindigkeit. Gezogen wird je Spawn nach
+Gewichten, sodass ein 8x-Ausreißer selten und dadurch besonders ist.
+
+- `/net/impulse/speedQuantize/enabled` (int 0/1, Default **0**) — bei 0
+  bekommt jeder Spawn exakt `impulseSpeed` wie bisher, ohne Ziehung
+- `/net/impulse/speedQuantize/weight/{0x5,1x,2x,4x,8x}` (float 0..100,
+  Defaults 0/85/10/4/1) — die Summe muss **nicht** 100 sein, normalisiert wird
+  in `SpeedQuantizer.pick()`
+- `/net/impulse/speedQuantize/jitter` (float 0..1, Default **0**) — Swing auf
+  der gezogenen Klasse, gleiche Formel wie überall (`SplitVariance.jitter`)
+
+Vier Dinge, die man beim Ändern kennen muss:
+
+- **Referenz der 1x-Klasse ist `/net/impulse/speed` selbst**, kein eigener
+  Parameter. Ein zweiter Referenzregler daneben hieße zwei Zahlen, die beide
+  „die Geschwindigkeit" heißen, und die Zeitbasis-Kopplung (`lifetime`,
+  `nodeDeadTime`, `randomSpawn/interval` ziehen im Web-UI an `impulseSpeed`
+  mit) hätte einen zweiten, unbeteiligten Bezugspunkt.
+- **`spawnSpeed()` ist der einzige Ort, an dem eine Spawn-Geschwindigkeit
+  entsteht.** Alle fünf Spawn-Pfade gehen hindurch: `/tube/trigger`,
+  `/net/activateStripe`, `/net/activateNode`, `spawnRandomImpulses()`,
+  `tickSequencer()`. Ein sechster Pfad, der `impulseSpeed` direkt liest, wäre
+  ein Impuls, den die Klangseite falsch einordnet.
+- **Split-Kinder ziehen nicht neu.** Sie erben die schon vervielfachte
+  Geschwindigkeit ihres Elternimpulses und bekommen obendrauf
+  `splitSpeedJitter` — ein 4x-Impuls bleibt beim Aufspalten ein 4x-Impuls.
+- **Gezogen wird je Impuls, nicht je Ereignis** — außer bei
+  `/net/activateNode`, wo die zwei Richtungen desselben Anstoßes
+  zusammengehören und deshalb eine gemeinsame Ziehung teilen.
+
+**Offen, bewusst nicht gebaut:** eine Selbstregulation, die die Spawn-Rate an
+die aktuelle Netzauslastung koppelt (viele aktive Impulse → Sequencer- und
+RandomSpawn-Rate dämpfen). Vorgeschlagen, aber nie bestätigt; bleibt ein
+Vorschlag, kein deaktivierter Stub.
 
 **Ambient/idle Random-Spawns** (`spawnRandomImpulses()`, aufgerufen aus `drawMe()`):
 unabhängig von `/tube/trigger` und Node-Kettenreaktionen spawnt der Effekt in
@@ -289,10 +502,18 @@ wird dort nur vermerkt, gelesen und angewendet wird in `draw()`.
 werden — die Suite hat nur `core.jar`.
 
 **Sound:** imPulse ist Master. Bei jedem Wechsel geht zusätzlich
-`/sc/preset/load <name>` an `127.0.0.1:8002` — derselbe Port, auf dem
-SuperCollider schon `/net/hitNode` empfängt, nur eine neue Adresse. Es gibt
-genau einen Scheduler, deshalb können Licht und Klang nicht auseinanderlaufen.
+`/sc/preset/load <name>` an `127.0.0.1:8002` und bei jedem erfolgreichen
+Speichern `/sc/preset/save <name>` — derselbe Port, auf dem SuperCollider
+schon `/net/hitNode` empfängt, nur zwei neue Adressen. Es gibt genau einen
+Scheduler, deshalb können Licht und Klang nicht auseinanderlaufen.
 Fire-and-forget: läuft sclang nicht, läuft die Visual-Show weiter.
+
+Das Speichern wird **nach** dem erfolgreichen eigenen Schreiben weitergereicht
+— sonst legte ein fehlgeschlagenes Licht-Preset trotzdem ein Klang-Preset an,
+und der Name stünde danach nur auf einer der zwei Seiten. Ohne die
+Weiterleitung erfasste „Speichern" im Web-UI still nur das Licht: die Szene
+käme später optisch zurück und klanglich nicht, ohne Fehlermeldung. Was
+SuperCollider damit tut, steht unter „Klangseite".
 
 ### Ausgabepfade
 
@@ -415,12 +636,182 @@ Fehlen beim Start Positionen, meldet `setup()` eine `WARNUNG`-Zeile mit dem Abde
 
 Vierkanal-Kette: Ambisonics 2D erster Ordnung mit Kern-UGens (`PanB2` als Encoder, **ein** `DecodeB2` am Ende), Glocken an den Knoten (`/net/hitNode`) und leise Drohnen, die den reisenden Impulsen folgen (`/net/impulse`). Lautsprecher auf den **Seitenmitten** (0,+4), (+7,0), (0,−4), (−7,0), nicht in den Ecken.
 
+**Drei Lautstärken, nicht eine.** `masterVolume` ist der globale Show-Fader
+(in `\masterReverb`, nach dem Panning, vor dem Limiter). Darunter sitzen zwei
+**Layer-Fader**, multiplikativ davor: `bellVolume` in `\glockenBell` und
+`droneVolume` in `\impulseDrone`. Damit lässt sich das Verhältnis von
+Node-Treffern zu reisenden Impulsen vor Ort einstellen, ohne `~maxAmp` bzw.
+`~droneAmpScale` im Code anzufassen. `droneVolume` wirkt sofort auf laufende
+Drohnen (`onSet`-Callback plus `Lag`); `bellVolume` erst auf den nächsten Ton
+und bewusst **ohne** `Lag` — eine Glocke ist ein One-Shot, ein Lag würde den
+Anschlag weichzeichnen, der ihren Klang ausmacht.
+
 Der Klang selbst ist der vor Ort getunte Stand: Phrygisch ab A2 (`~scaleSteps`), `~minAmp`/`~maxAmp` aus dem +6-dB-Live-Abgleich, Sägezahn-Layer für den Hang-Drum-Attack, `~maxPolyphony = 24` als Voice-Stealing-Deckel gegen „command FIFO full" (der Ausfallmodus dabei ist **Stille ohne Absturz**). Der Hall sitzt **hinter** dem Decoder (`\masterReverb`, je Hardware-Kanal getrennt) und nicht in der Glocke — vor dem Encoder würde er selbst räumlich codiert und wieder zu einer Punktquelle verschmiert; `~reverbMix` steht deshalb auf 0.35 statt auf dem früheren Wert 0.15.
+
+**Klangbias nach Netzregion** (`~regionZone`, `~regionBias`, Parameter
+`/klangnetz/param/regionBiasAmount`, Default 0.6): vier Quadranten,
+Zone = `(x>=0) + 2*(y>=0)`. Je Zone verschieben sich die Notenwahl sowie
+`brightness` und `detune`. Die Zonierung folgt der Lautsprecher-Geometrie —
+die vier Boxen stehen auf den Seitenmitten, jeder Quadrant liegt also zwischen
+zwei Boxen und hat eine eindeutige Richtung, Ortung und Klangfarbe stützen
+sich gegenseitig. Radiale Ringe (Zentrum/Rand) korrelieren mit keiner
+Lautsprecherrichtung, und in der Mitte pannt `~toQuad` ohnehin auf alle vier
+Boxen gleich — die Zone mit dem eigensten Charakter läge dort, wo die Ortung
+am schwächsten ist.
+
+Der Notenoffset zählt in **Skalenstufen**, nicht Halbtönen: er geht auf den
+Skalenindex, bevor `~scaleSteps` nachgeschlagen wird, sonst fielen Töne aus
+Phrygisch heraus. Ein eigener `enabled`-Schalter entfällt — `amount = 0` ist
+aus und klingt bitgleich wie ohne das Feature. `~tilt` und `~decayScale`, die
+in älteren Notizen als Timbre-Regler auftauchen, gibt es in dieser Datei
+nicht; die vorhandenen Äquivalente sind `brightness` und `detune`.
+
+**Travel-Sound** (`/klangnetz/param/travelMix`, Default **0**, plus
+`travelRq`, `travelGrainRatio`, `travelAmpScale`, `travelFreqBase`,
+`travelSpeedRef`, `travelOctavesPerStep`, `travelSnap`, `travelFreqMin`,
+`travelFreqMax`): eine **granulare** Wind-/Sandschicht **innerhalb** von
+`\impulseDrone`, kein zweiter Synth je Impuls. `\impulseDrone` ist bereits eine Stimme pro
+Impuls-ID mit Position, Hüllkurve, `~droneTimeout` und `~droneLimit`; ein
+zweiter Synth bräuchte ein zweites Dictionary, einen zweiten Reaper und ein
+zweites Limit und verdoppelte die Stimmenzahl — für ein Feature, dessen Ziel
+es ist, Klangbrei zu vermeiden. Als Schicht erbt der Wind Position, Lag,
+Hülle, Timeout und Deckel geschenkt.
+
+Der geforderte Lebenszyklus („neue Stimme bei jedem Split") ergibt sich
+dadurch ohne eine Zeile Code: ein Split-Kind ist eine neue
+`TravellingActivation` mit neuer `id`, bekommt also einen neuen
+Dictionary-Eintrag und einen neuen Synth, und die Stimme des Elternimpulses
+läuft nach `~droneTimeout` aus.
+
+Es gibt bewusst **keinen eigenen Throttle** für den Travel-Sound.
+`/net/impulse/oscMaxCount` bestimmt, was überhaupt über den Draht geht; ein
+zweiter, kleinerer Audio-Deckel wäre auf der Java-Seite wirkungslos (die
+Klangseite kann eine Überzahl selbst ignorieren), ein größerer unerfüllbar
+ohne mehr zu senden. Der Deckel, der wirklich gebraucht wird, sitzt dort, wo
+die Rechenlast entsteht, und existiert schon: `~droneLimit`.
+
+**Die Windschicht ist granular, nicht kontinuierlich** (umgebaut 2026-08-01
+nach mehreren Hörproben): `Dust.ar` triggert kurze Rauschkörner
+(`Decay2`-Hülle auf `WhiteNoise`), danach ein **Low-Cut** (`HPF`). Vorher war
+es `BPF.ar(PinkNoise.ar, ...)` — ein durchgehender, eng gefilterter Rauschton.
+Drei Entscheidungen dahinter:
+
+- **Weiß statt rosa**: rosa fällt mit 3 dB/Oktave ab und klingt hinter einem
+  Low-Cut dumpf; weiß ist der luftige, sandige Grundstoff.
+- **Low-Cut statt Bandpass**: ein Bandpass macht einen engen, pfeifenden Ton —
+  das Gegenteil von luftig.
+- **`Dust` statt `Impulse`**: zufällig gestreute Körner klingen nach
+  rieselndem Sand, periodische nach Motor.
+
+`travelRq` heißt weiter so, steuert aber jetzt die **Körnerdauer** (Anteil von
+20 ms) statt einer Filtergüte — den Bandpass gibt es nicht mehr. Name und
+Registrierung bleiben, damit vorhandene Presets und `SC_PARAMS` gültig bleiben.
+
+**Zwei Pegelkorrekturen, beide NRT-gemessen, keine geratenen Zahlen:**
+
+1. **Dichteausgleich** `sqrt(100 / Körnerrate)`. Die Dichte hängt an
+   `travelFreq`, also an der Speed-Klasse — ohne Ausgleich wäre die 8x-Klasse
+   **viermal** so laut wie die 0.5x-Klasse (gemessen: RMS 0.134 gegen 0.501).
+   Die Klasse soll sich in Farbe und Dichte zeigen, nicht in der Lautstärke,
+   sonst regelt der Limiter genau die schnellen Impulse weg. Nach dem
+   Ausgleich beträgt die Streuung Faktor **1.08**.
+2. **Angleich an die Tonschicht**, Faktor 3, damit der Crossfade kein Sprung
+   ist. Ein erster Versuch mit Faktor 6 **clippte** (Spitzenwert 1.0 in allen
+   fünf Klassen) — deshalb steht hier eine gemessene und keine geschätzte
+   Zahl.
+
+**Die Speed→Frequenz-Abbildung ist oktavbasiert, nicht linear** — das ist es,
+was die Speed-Klassen hörbar auseinanderhält. Sie steuert jetzt **zwei**
+Merkmale: die Grenzfrequenz des Low-Cut **und** (über `travelGrainRatio`) die
+Körnerdichte, also 25/50/100/200/400 Körner je Sekunde für 0.5x…8x. Zwei
+gleichgerichtete Merkmale sind leichter zuzuordnen als eines:
+
+```
+octaves = log2(speed / travelSpeedRef)
+freq    = travelFreqBase * 2^(octaves * travelOctavesPerStep)
+```
+
+Mit den Defaults (Basis 400 Hz bei Speed 16) ergibt das
+**200 / 400 / 800 / 1600 / 3200 Hz** für 0.5x / 1x / 2x / 4x / 8x. Linear
+gerechnet lägen 1x und 2x dicht beieinander — ein sanfter Gradient, an dem
+sich keine Klasse zuordnen lässt. Genau das war die erste, verworfene Fassung.
+
+`travelSnap` (Default **1**) rundet den Oktavabstand vor der Umrechnung auf
+eine ganze Zahl, damit jeder Impuls einer Klasse auf **exakt derselben**
+Tonhöhe zischt; ohne die Rasterung hinge die Zuordenbarkeit daran, wie hoch
+`speedQuantize/jitter` gerade steht. Die Grenze davon: die Rundung greift auf
+halbe Oktaven, ein Jitter über etwa **0,29** lässt einzelne Impulse in die
+Nachbarklasse rutschen. Das ist kein Fehler — der Impuls reist dann wirklich
+so schnell —, aber wer maximale Zuordenbarkeit will, bleibt darunter.
+
+Hörbar ist die Klasse nur über die **Wind**schicht: die Tonschicht der Drohne
+holt ihre Tonhöhe weiterhin aus der Impuls-ID (`~droneFreq`), nicht aus der
+Geschwindigkeit. Bei `travelMix = 0` gibt es also keinen Speed-Klang.
+
+Der Klangbias der **Herkunfts**-Region wird einmal beim Anlegen des Synths aus
+der **ersten** gemeldeten Position gerechnet. Die kommt aus dem Takt direkt
+nach der Entstehung des Impulses, liegt also an seinem Spawn- bzw. Splitpunkt
+— das ist die Herkunftsregion, ohne ein weiteres OSC-Feld und ohne
+Ursprungs-Buchführung auf der Processing-Seite. Der Whoosh behält seine
+Klangidentität über seine ganze Lebensdauer, auch wenn er in eine andere
+Region fliegt.
+
+**Sound-Presets** (`~presetLoad`, `~presetSave`, Adressen `/sc/preset/load`
+und `/sc/preset/save`, jeweils ein String-Argument): ein SC-Preset ist ein
+Wertesatz für **genau die per `~registerParam` registrierten Parameter** —
+aktuell 18, siehe Tabelle unten. Nichts sonst; Tonleiter, Grundton und die
+Amplituden-Grenzen sind vor Ort getunte Konstanten und bleiben es.
+
+- **Dateien:** `supercollider/presets/<name>.txt`, **gleiches Format** wie
+  `remoteSettings.txt` und die visuellen Presets (sechs Tab-Spalten, nach
+  Adresse sortiert, `\n` als Zeilenende). Die Adress-Spalte trägt die
+  Live-Adresse `/klangnetz/param/<name>`, die Beschreibungsspalte bleibt leer.
+- **Ein Name, zwei Dateien.** `hang_drum_slow` meint
+  `data/presets/hang_drum_slow.txt` für das Licht **und**
+  `supercollider/presets/hang_drum_slow.txt` für den Klang. imPulse ist
+  Master: `PresetManager.forwardToSound()` schickt bei jedem Laden **und**
+  jedem Speichern denselben Namen an 8002. Es gibt genau einen Scheduler, und
+  der läuft in imPulse — SC hat keinen eigenen Zeitplan.
+- **Ein Name ohne SC-Datei ist kein Fehler.** Dann wechselt das Licht und der
+  Klang bleibt stehen; `~presetLoad` meldet das in einer Zeile. Das ist der
+  häufige Fall, nicht der Ausnahmefall.
+- **Geklemmt wird auf die Range aus der Registry, nicht auf die aus der
+  Datei** — dieselbe Regel wie `PresetStore.applyPreset()` auf der Java-Seite,
+  damit ein älteres Preset nach einer Bereichsänderung gültig bleibt.
+- **`~applyParam` ist der einzige Ort, an dem ein Sound-Parameter seinen Wert
+  bekommt.** OSC-Empfang und Preset-Laden gehen beide hindurch. Zwei Kopien
+  dieser vier Zeilen wären zwei Wege, die auseinanderlaufen: ein neuer
+  Parameter mit `onSet`-Callback würde per OSC wirken, per Preset aber nicht —
+  ohne Fehlermeldung.
+- **`~presetValidName` spiegelt `PresetStore.isValidName()`** (a–z, 0–9, `_`,
+  `-`, höchstens 64 Zeichen). Autorität bleibt Java; hier geht es um
+  Pfad-Traversal, ohne die Prüfung würde `/sc/preset/load ../../etc/passwd`
+  eine beliebige Datei öffnen.
+- **Geschrieben wird direkt, nicht atomar über Temp-Datei plus Umbenennen**
+  wie auf der Java-Seite: sclang hat kein portables `rename`, und hier
+  speichert ein Mensch von Hand statt eines Schedulers im Sekundentakt.
+- **Die zwei Dateien, die schon in `supercollider/presets/` liegen
+  (`standby.txt`, `hang_drum_slow.txt`), stammen aus dem alten Parametersatz**
+  (`/sc/amp/*`, `/sc/bell/*`, `/sc/scale/*`) und enthalten **keine** heute
+  gültige Adresse. Sie zu laden ändert nichts und meldet „0 übernommen, 7
+  unbekannt" plus einen Hinweis auf genau diese Ursache. Ein
+  `/sc/preset/save standby` überschreibt sie mit dem aktuellen Satz.
+
+Die 21 Parameter, die ein Preset umfasst: `masterVolume`, **`bellVolume`**,
+**`droneVolume`**, `reverbMix`, `reverbRoom`, `reverbDamp`, `brightness`,
+`detune`, `droneLpfMult`, `panSharpness`, `regionBiasAmount`, `travelMix`,
+`travelRq`, **`travelGrainRatio`**, `travelAmpScale`, `travelFreqBase`,
+`travelSpeedRef`, `travelOctavesPerStep`, `travelSnap`, `travelFreqMin`,
+`travelFreqMax`. Wer einen `~registerParam`
+ergänzt, bekommt ihn ohne weiteres Zutun in die Presets — die Liste wird aus
+`~params` gelesen, nicht gepflegt. (Die handgepflegte Kopie im Web-UI,
+`SC_PARAMS` in `webui/server.py`, muss dann allerdings nachgezogen werden;
+zwei Tests halten das nach.)
 
 Zwei Dinge, die man kennen muss, bevor man dort etwas anfasst:
 
-- **`~azimuthSign` und `~azimuthOffset` sind ausdrücklich UNGEMESSEN.** Sie brauchen vier angeschlossene Boxen und ein Paar Ohren; ein falsches Vorzeichen spiegelt das Klangbild, ein falscher Offset dreht es, und beides geht ohne Fehlermeldung durch. Die Datei bringt dafür `~testChannels.()`, `~testAzimuth.()` und `~testSweep.()` mit und beschreibt den Ablauf in ihrem Kopfblock. **Die Installation darf nicht öffnen, bevor diese Messung gemacht und mit Datum eingetragen ist.** Die Messsitzung ist interaktiv (IDE oder `sclang`-REPL) — headless unter `sclang -D` gibt es nichts, woraus man die Funktionen aufruft.
-- **`DecodeB2` ignoriert sein `orientation`-Argument** auf SC 3.11.2. Gemessen am 2026-07-30 (scsynth im NRT-Modus, `DC.ar(1)`): bytegleiche Ausgabe für 0 / 0.25 / 0.5 / 1.0, als Graphkonstante wie als Synth-Control, während `PanAz` im selben Aufbau sofort reagiert. Der Decoder setzt seine Boxen damit fest auf ±45°/±135° — gegen unsere Seitenmitten also 45° daneben, und keine Umverkabelung bildet eine Drehung ab. Deshalb wird im **Encoder** gedreht, über `~azimuthOffset`. Derselbe Fall wie bei der ArtNet-Bytefolge: massgeblich ist die Messung, nicht die Herleitung. Die Messung stammt von einer anderen Maschine und ist auf dem Show-Rechner zu wiederholen (`~setOrientation.()` ist genau dafür noch da, und für nichts anderes mehr).
+- **Es gibt kein Ambisonics mehr.** `~azimuthSign`, `~azimuthOffset` und `~decoderOrientation` sind mit dem Umbau auf `Pan4` am 2026-07-31 (Commit `cbb06d7`) **komplett entfallen** — ältere Notizen, die eine ausstehende Azimut-Messung dieser drei Werte fordern, sind überholt. Ambisonics erster Ordnung ist ein Diffusionsverfahren: eine Punktquelle streut bei voller Richtwirkung immer auf alle vier Kanäle (gemessen: dominanter Kanal nur ~43 % der Gesamtenergie, siehe `docs/ambisonics-sharper-panning-optionen.md`). Das lohnt sich nur bei flexiblem Lautsprecher-Layout; unseres ist fest. `Pan4` erreicht in der Boxecke 100 % auf dieser Box und in der Netzmitte exakt 25/25/25/25 %.
+- **Die zwei Korrekturen dahinter sind gemessen, nicht hergeleitet, und gelten nur für dieses Interface.** Erstens die 45-Grad-Rotation in `~toQuad` (`xr = xn - yn`, `yr = xn + yn`, nach achsenweiser Normierung durch `~maxX`/`~maxY`): unsere Boxen stehen auf den Seitenmitten, `Pan4` erwartet sie in den Ecken. Zweitens die Kanal-Permutation in `\masterReverb` (`[sig[1], sig[2], sig[3], sig[0]]`): die Verkabelung des ZOOM AMS-24 ist eine echte Vertauschung, keine Rotation. Beide wurden nach dem Umbau per NRT neu verifiziert und **nicht** aus den alten Ambisonics-Werten übernommen — `Pan4` hat eine andere Kanalkonvention als `DecodeB2`. Bei anderem Interface oder anderer Verkabelung neu messen (`\channelTest`, `~testChannels.()`, und `/klangnetz/test/noise` für Ortungstests ohne REPL-Zugriff vor Ort). Derselbe Fall wie bei der ArtNet-Bytefolge: massgeblich ist die Messung.
 
 ## Konventionen und Fallstricke
 
@@ -430,21 +821,18 @@ Zwei Dinge, die man kennen muss, bevor man dort etwas anfasst:
 - **Fenstergrösse in `size()`**: Processing erlaubt dort nur Literale, keine Variablen. Die Höhe muss von Hand zur Stripe-Zahl passen — Vorschau braucht `numStripes*10` Pixel, darunter das mehrzeilige Kalibrier-HUD (siehe Kommentar direkt bei `size(...)` in `imPulse.pde`). Der Kommentar dort rechnet nur mit den vier Zeilen des Kalibrier-HUDs; das Positions-HUD hat fünf und sitzt unter einer 525 × 300 px grossen Draufsicht-Fläche. Wer die Fensterhöhe neu herleitet, muss beides prüfen.
 - **Farbwerte 0..1** durchgängig; Werte > 1 sind erlaubt und werden erst am Output geclampt (`LedColor.clamp()` wird im Mixer bewusst nicht aufgerufen).
 - **SuperCollider-Presets** liegen in `supercollider/presets/<name>.txt`, im
-  selben Tab-Format wie die visuellen Presets, erweitert um den Typ `ints` für
-  die Tonleiter (kommagetrennt in der Wertspalte). Vorgesehen sind
-  `/sc/scale/steps|rootMidi|octaves`, `/sc/amp/min|max` und die zwei globalen
-  Klangregler `/sc/bell/decayScale` (streckt alle Teilton-Decays) und
-  `/sc/bell/tilt` (Exponent auf die Teilton-Amps: >1 dumpfer, <1 brillanter).
-  **Der empfangende Teil fehlt derzeit in `klangnetz_bells.scd`**: er stand in
-  der Repo-Fassung (Commit `e50cd38`) und ging verloren, als am 2026-07-31 die
-  Laptop-Kopie zur kanonischen Datei wurde. `PresetManager` schickt weiterhin
-  `/sc/preset/load` an 8002, dort hört aber niemand darauf — die
-  Preset-Dateien unter `supercollider/presets/` sind also aktuell tot. Was
-  live steuerbar ist, ist stattdessen der Sound-Parameter-Layer unter
-  `/klangnetz/param/<name>` (Adressliste im Kopf der `.scd`). Wer den
-  Preset-Empfang zurückholt, holt ihn aus `e50cd38` und passt ihn an die
-  Ambisonics-Fassung an (`~scaleSteps` statt `~pentatonicSteps`,
-  `decayScale`/`tilt` gibt es in der SynthDef derzeit nicht).
+  selben Tab-Format wie die visuellen Presets. Der Empfänger
+  (`/sc/preset/load`, `/sc/preset/save`) ist **seit 2026-07-31 gebaut** und
+  steht in `klangnetz_bells.scd` — Details oben unter „Klangseite". Ein
+  Preset umfasst genau die per `~registerParam` registrierten Parameter.
+  **Nicht** zurückgeholt wurde der alte Empfänger aus Commit `e50cd38`: der
+  bediente `/sc/scale/steps|rootMidi|octaves`, `/sc/amp/min|max`,
+  `/sc/bell/decayScale` und `/sc/bell/tilt` — Adressen, die es im heutigen
+  Sound-Design **nicht mehr gibt** (die vorhandenen Timbre-Regler heissen
+  `brightness` und `detune`). Ein Merge von `feature/preset-system-v2` ist
+  aus demselben Grund der falsche Weg: die dortige `.scd` ist der
+  Ambisonics-Stand vor dem Pan4-Umbau. Der Typ `ints` für eine Tonleiter
+  wird derzeit von keiner Seite geschrieben oder gelesen.
   Die `#[...]`-Teilton-Literale in der SynthDef bleiben stehen — kein Rebuild
   beim Preset-Wechsel. Alles liegt weiter in **einem** `(...)`-Block: mehrere
   Top-Level-Blöcke hängen `sclang -D` auf. Für den SC-Teil gibt es **kein**
