@@ -32,51 +32,15 @@ class SpeedQuantizer {
   }
 
   // Index der gezogenen Klasse. weights hat ein Gewicht je Klasse; die Summe
-  // muss nicht 100 sein und wird hier normalisiert - ein Operator dreht
-  // einzelne Regler, ohne den Rest nachzurechnen.
+  // muss nicht 100 sein und wird normalisiert - ein Operator dreht einzelne
+  // Regler, ohne den Rest nachzurechnen.
   //
-  // Ein Gewicht von 0 wird NIE gewaehlt (auch nicht bei random01 genau auf
-  // seiner Grenze): ein ausgeschalteter Ausreisser darf nicht doch
-  // gelegentlich zu hoeren sein. Negative Gewichte und NaN gelten als 0 statt
-  // die Summe zu verfaelschen.
+  // Die Ziehung selbst steht in WeightedChoice, weil SplitFanout dieselbe
+  // braucht (siehe /net/impulse/split/weight/*). Alle Regeln dort:
+  // Gewicht 0 zieht nie, NaN und negative Werte gelten als 0, der entartete
+  // Fall faellt auf NEUTRAL_INDEX - ein Impuls mit der Referenzgeschwindigkeit
+  // ist immer ein gueltiger Impuls.
   static int pick(float[] weights, double random01) {
-    if (weights == null || weights.length < MULTIPLIERS.length) {
-      return NEUTRAL_INDEX;
-    }
-    if (Double.isNaN(random01)) {
-      return NEUTRAL_INDEX;
-    }
-    double total = 0.0;
-    for (int i = 0; i < MULTIPLIERS.length; i++) {
-      double w = weights[i];
-      if (w > 0.0) { // faengt NaN und negative Werte mit ab
-        total += w;
-      }
-    }
-    if (!(total > 0.0)) {
-      return NEUTRAL_INDEX;
-    }
-    double r = random01;
-    if (r < 0.0) {
-      r = 0.0;
-    }
-    if (r > 1.0) {
-      r = 1.0;
-    }
-    double target = r*total;
-    double cumulative = 0.0;
-    int last = NEUTRAL_INDEX;
-    for (int i = 0; i < MULTIPLIERS.length; i++) {
-      double w = weights[i];
-      if (!(w > 0.0)) {
-        continue;
-      }
-      last = i; // letzte Klasse MIT Gewicht, fuer r == 1.0
-      cumulative += w;
-      if (target < cumulative) {
-        return i;
-      }
-    }
-    return last;
+    return WeightedChoice.pick(weights, MULTIPLIERS.length, NEUTRAL_INDEX, random01);
   }
 }

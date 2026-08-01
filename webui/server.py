@@ -97,6 +97,7 @@ GROUP_ORDER = [
     "Master",
     "Master/opacity",
     "net/impulse",
+    "net/impulse/split",
     "net/impulse/randomize",
     "net/impulse/color",
     "net/randomSpawn",
@@ -128,6 +129,7 @@ GROUP_ORDER = [
 SPLIT_GROUP_PREFIXES: List[Tuple[str, str]] = [
     ("/net/impulse/speed/randomize/", "net/impulse/randomize"),
     ("/net/impulse/lifetime/randomize/", "net/impulse/randomize"),
+    ("/net/impulse/split/", "net/impulse/split"),
     ("/net/impulse/color/", "net/impulse/color"),
     ("/net/impulse/fadeOut/", "net/impulse/color"),
     # Je Sequencer-Track eine eigene Sektion. Ohne diese sechs Eintraege
@@ -211,6 +213,34 @@ SPEED_CLASSES: List[Tuple[str, str]] = [
 ]
 SPEED_WEIGHT_PREFIX = "/net/impulse/speedQuantize/weight/"
 
+# Split-Verhalten: wieviele Zweige eine Aufspaltung nimmt und wie weit sie
+# zeitlich auseinander starten. Adress-Suffix und Anzeigename; die Reihenfolge
+# spiegelt SplitFanout (Index 0 = alle, 1 = einer weniger, 2 = genau einer).
+SPLIT_PREFIX = "/net/impulse/split/"
+SPLIT_WEIGHT_PREFIX = SPLIT_PREFIX + "weight/"
+SPLIT_WEIGHTS: List[Tuple[str, str]] = [
+    ("all", "alle Zweige"),
+    ("oneLess", "einer weniger"),
+    ("single", "nur einer"),
+]
+
+# Notenwert-Klassen des zeitlichen Versatzes: Adress-Suffix und Notenwert.
+# Reihenfolge wie OriginSequencer.NOTE_VALUES auf der Java-Seite (Ganze ..
+# Sechzehntel). Symbol und Name kommen aus NOTE_VALUES oben, damit "Achtel"
+# im ganzen UI gleich aussieht.
+#
+# Der Versatz hatte bis 2026-08-01 einen einzigen festen Notenwert; jetzt
+# wird er je Aufspaltung aus diesen Klassen gezogen. Deshalb steht hier eine
+# Verteilung wie bei den Speed-Klassen und keine Notenwert-Leiste mehr.
+SPLIT_STAGGER_WEIGHT_PREFIX = SPLIT_PREFIX + "stagger/weight/"
+SPLIT_STAGGER_NOTES: List[Tuple[str, int]] = [
+    ("whole", 1),
+    ("half", 2),
+    ("quarter", 4),
+    ("eighth", 8),
+    ("sixteenth", 16),
+]
+
 # Kurzerklaerungen fuer Parameter, deren Adresse allein nicht verraet, was sie
 # tun. remoteSettings.txt fuehrt zwar eine Beschreibungsspalte, die steht aber
 # bei fast allen Parametern auf dem Platzhalter "space for descripiton".
@@ -227,6 +257,23 @@ DESCRIPTIONS: Dict[str, str] = {
     "/net/impulse/speedQuantize/jitter":
         "Swing auf der gezogenen Speed-Klasse. 0 = exakt das Vielfache. "
         "Ueber 0,29 rutschen einzelne Impulse im Klang in die Nachbarklasse.",
+    "/net/impulse/split/weight/all":
+        "Gewicht dafuer, dass eine Kreuzung alle moeglichen Zweige nimmt - "
+        "das bisherige Verhalten.",
+    "/net/impulse/split/weight/oneLess":
+        "Gewicht fuer einen Zweig weniger als moeglich. Welcher wegfaellt, "
+        "wird je Aufspaltung gewuerfelt.",
+    "/net/impulse/split/weight/single":
+        "Gewicht dafuer, dass der Impuls nur in EINE Richtung weiterlaeuft, "
+        "statt sich zu teilen.",
+    "/net/impulse/split/staggerEnabled":
+        "Laesst die Zweige einer Aufspaltung nacheinander statt gleichzeitig "
+        "starten. Der Abstand haengt an /net/sequencer/bpm, auch wenn der "
+        "Sequencer aus ist.",
+    "/net/impulse/split/stagger/weight/sixteenth":
+        "Gewicht fuer einen Sechzehntel-Abstand zwischen den Zweigen. "
+        "Gezogen wird je Aufspaltung, nicht je Zweig - die Kinder EINES "
+        "Splits stehen also immer auf demselben Raster.",
     "/net/sequencer/enabled":
         "Not-Aus fuer alle sechs Tracks. Die Taktuhr laeuft weiter, das "
         "Wiedereinschalten haengt also nicht an der Dauer der Pause.",
@@ -299,8 +346,53 @@ def build_speed_classes(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str
     }
 
 
+def build_split(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
+    """Struktur der Split-Sektion, oder None wenn unbekannt.
+
+    Eigene Sektion statt acht generischer Schieber aus einem Grund: die
+    Gewichte gehoeren als Verteilung zusammen (wie bei den Speed-Klassen).
+    Acht Schieber nebeneinander sagen nicht, dass drei davon eine Verteilung
+    und fuenf davon eine zweite sind -- der Operator rechnete sich im Kopf
+    aus, was 40/25/10 bedeutet.
+
+    Zwei Verteilungen also: WIEVIELE Zweige eine Kreuzung nimmt, und mit
+    WELCHEM Notenwert sie auseinander starten. Der Notenwert wird je
+    Aufspaltung gezogen; einen festen Regler dafuer gibt es seit 2026-08-01
+    nicht mehr.
+    """
+    stagger_enabled = by_address.get(SPLIT_PREFIX + "staggerEnabled")
+    weights: List[Dict[str, Any]] = []
+    for suffix, label in SPLIT_WEIGHTS:
+        param = by_address.get(SPLIT_WEIGHT_PREFIX + suffix)
+        if param is None:
+            continue
+        entry = param.as_dict()
+        entry["label"] = label
+        weights.append(entry)
+    note_labels = {value: (symbol, name) for value, symbol, name in NOTE_VALUES}
+    stagger_weights: List[Dict[str, Any]] = []
+    for suffix, note_value in SPLIT_STAGGER_NOTES:
+        param = by_address.get(SPLIT_STAGGER_WEIGHT_PREFIX + suffix)
+        if param is None:
+            continue
+        symbol, name = note_labels[note_value]
+        entry = param.as_dict()
+        entry["noteValue"] = note_value
+        entry["symbol"] = symbol
+        entry["label"] = name
+        stagger_weights.append(entry)
+    if not weights and not stagger_weights and stagger_enabled is None:
+        return None
+    return {
+        "weights": weights,
+        "staggerEnabled": stagger_enabled.as_dict() if stagger_enabled is not None else None,
+        "staggerWeights": stagger_weights,
+    }
+
+
 def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
-                        speed: Optional[Dict[str, Any]]) -> Set[str]:
+                        speed: Optional[Dict[str, Any]],
+                        split: Optional[Dict[str, Any]] = None) -> Set[str]:
     """Adressen, die eine Spezial-Sektion selbst rendert."""
     taken: Set[str] = set()
     if sequencer:
@@ -315,6 +407,14 @@ def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
         if speed.get("jitter"):
             taken.add(speed["jitter"]["address"])
         for weight in speed["weights"]:
+            taken.add(weight["address"])
+    if split:
+        entry = split.get("staggerEnabled")
+        if entry:
+            taken.add(entry["address"])
+        for weight in split["weights"]:
+            taken.add(weight["address"])
+        for weight in split.get("staggerWeights", []):
             taken.add(weight["address"])
     return taken
 
@@ -358,6 +458,17 @@ TAB_RULES: List[Tuple[str, str]] = [
     ("Master/", TAB_MIXER),
     # speedQuantize VOR /net/impulse/, sonst faengt die Physik-Regel es ab.
     ("/net/impulse/speedQuantize/", TAB_NOTES),
+    # Das Split-Verhalten aus demselben Grund, und in denselben Tab: der
+    # zeitliche Versatz der Zweige haengt am BPM-Raster, genau wie die
+    # Speed-Klassen. Die zwei Haelften eines Features (wieviele Zweige, wie
+    # weit auseinander) gehoeren ausserdem auf denselben Tab -- die
+    # Zweig-Gewichte allein unter "Impuls-Verhalten" waeren ein Regler ohne
+    # seinen Partner.
+    #
+    # Der Schraegstrich am Ende ist nicht Kosmetik: ohne ihn zoege die Regel
+    # auch /net/impulse/splitSpeedJitter und /net/impulse/splitLifetimeJitter
+    # hierher, die zur Physik gehoeren und dort schon kuratiert sind.
+    ("/net/impulse/split/", TAB_NOTES),
     # Dieselbe Falle bei den Farben: /net/impulse/color/* wuerde sonst von
     # der Physik-Regel eingesammelt, /nodes/colors/* von der Node-Regel.
     # fadeOut steht bewusst dabei -- es ist der Nachleucht-Farbfaktor des
@@ -505,7 +616,8 @@ def tab_for_address(address: str) -> str:
 
 def build_tabs(groups: List[Dict[str, Any]],
                sequencer: Optional[Dict[str, Any]],
-               speed: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+               speed: Optional[Dict[str, Any]],
+               split: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Verteilt Gruppen, Spezial-Sektionen und SC-Parameter auf die Tabs.
 
     Eine Gruppe geht als GANZES in einen Tab (bestimmt von ihrem ersten
@@ -536,6 +648,8 @@ def build_tabs(groups: List[Dict[str, Any]],
     # deshalb bedingungslos da -- anders als Sequencer und Speed-Klassen, die
     # ohne ihre Parameter nicht gebaut werden koennen.
     by_tab[TAB_COLORS]["sections"].append("palette")
+    if split:
+        by_tab[TAB_NOTES]["sections"].append("split")
 
     # SC-Parameter je Eintrag, nicht je Gruppe: masterVolume gehoert in den
     # Mixer, brightness ins Sound Design, obwohl beide "Master"/"Glocke"
@@ -1357,7 +1471,8 @@ class ParameterStore:
             # einmal als generischer Schieber.
             sequencer = build_sequencer(self.by_address)
             speed = build_speed_classes(self.by_address)
-            taken = sequencer_addresses(sequencer, speed)
+            split = build_split(self.by_address)
+            taken = sequencer_addresses(sequencer, speed, split)
             generic = [p for p in self.parameters if p.address not in taken]
             groups = build_groups(generic)
             return {
@@ -1365,7 +1480,8 @@ class ParameterStore:
                 "values": dict(self.values),
                 "sequencer": sequencer,
                 "speedClasses": speed,
-                "tabs": build_tabs(groups, sequencer, speed),
+                "split": split,
+                "tabs": build_tabs(groups, sequencer, speed, split),
                 "scParams": {
                     "port": SC_OSC_PORT,
                     "groups": sc_param_groups(),

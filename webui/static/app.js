@@ -976,6 +976,80 @@ function miniSlider(labelText, param, initial, format, onChange) {
   return handle;
 }
 
+/* Ein Satz Gewichte als Verteilung: ein Balken mit den normierten Anteilen,
+ * darunter ein Schieber je Klasse.
+ *
+ * Dreimal gebraucht (Speed-Klassen, Zweigzahl einer Aufspaltung, Notenwert
+ * des Split-Versatzes) und deshalb hier statt dreimal abgeschrieben - die
+ * Java-Seite teilt sich fuer dieselbe Rechnung ja auch WeightedChoice.
+ *
+ * Der Balken haengt an der set()-METHODE der Regler, nicht nur am
+ * input-Event: das Laden eines Presets ruft control.set(wert, true) und loest
+ * bewusst kein input aus - an einem reinen Event-Listener bliebe der Balken
+ * danach auf der alten Verteilung stehen.
+ *
+ * emptyText ist der Rueckfall, wenn alle Gewichte auf 0 stehen. Er muss
+ * nennen, was der Sketch dann WIRKLICH tut (WeightedChoice faellt auf den
+ * neutralen Index zurueck) - "nichts" waere die naheliegende und falsche
+ * Vermutung.
+ */
+function weightBank(weights, values, emptyText, options) {
+  const opts = options || {};
+  const colorOffset = opts.colorOffset || 0;
+  const labelOf = opts.labelOf || ((w) => w.label);
+
+  const bar = document.createElement('div');
+  bar.className = 'dist';
+  const group = document.createElement('div');
+  group.className = 'mini';
+  const handles = [];
+
+  function redraw() {
+    const amounts = handles.map((h) => Math.max(0, h.get()));
+    const total = amounts.reduce((a, b) => a + b, 0);
+    bar.innerHTML = '';
+    if (total <= 0) {
+      const empty = document.createElement('span');
+      empty.className = 'dist-empty';
+      empty.textContent = emptyText;
+      bar.appendChild(empty);
+      return;
+    }
+    weights.forEach((weight, i) => {
+      if (amounts[i] <= 0) { return; }
+      const share = amounts[i]/total;
+      const seg = document.createElement('span');
+      seg.className = 'dist-seg';
+      seg.style.flexGrow = String(share);
+      seg.style.flexBasis = '0';
+      seg.style.background = trackColor(i + colorOffset);
+      seg.title = labelOf(weight) + ': ' + (share*100).toFixed(1) + ' %';
+      seg.textContent = share >= 0.08
+        ? labelOf(weight) + ' ' + Math.round(share*100) + '%' : '';
+      bar.appendChild(seg);
+    });
+  }
+
+  weights.forEach((weight, i) => {
+    const handle = miniSlider(labelOf(weight), weight, values[weight.address],
+      (v) => v.toFixed(0));
+    handle.element.style.setProperty('--tc', trackColor(i + colorOffset));
+    const innerSet = handle.set;
+    handle.set = (value, silent) => {
+      innerSet(value, silent);
+      redraw();
+    };
+    controls.set(weight.address, handle);
+    handle.element.querySelector('input[type=range]')
+      .addEventListener('input', redraw);
+    handles.push(handle);
+    group.appendChild(handle.element);
+  });
+
+  redraw();
+  return { bar: bar, sliders: group, redraw: redraw };
+}
+
 /* Notenwert-Leiste: Symbol UND Kuerzel nebeneinander. Nicht jede
  * Windows-Schrift hat U+1D15D..U+1D161 -- ein Symbol allein waere dort ein
  * leeres Kaestchen und der Track unbeschriftet. */
@@ -1412,10 +1486,10 @@ function buildSpeedClasses(data, host) {
   });
   body.appendChild(power);
 
-  const bar = document.createElement('div');
-  bar.className = 'dist';
-  const segments = [];
-  body.appendChild(bar);
+  // Rueckfalltext: genau das macht SpeedQuantizer.pick() bei lauter Nullen.
+  const bank = weightBank(speed.weights, data.values,
+    'alle Gewichte 0 – es gilt 1×');
+  body.appendChild(bank.bar);
 
   const help = document.createElement('p');
   help.className = 'help';
@@ -1424,63 +1498,7 @@ function buildSpeedClasses(data, host) {
     + 'seltenen Ausreisser. Die Gewichte werden normalisiert, sie muessen '
     + 'sich nicht zu 100 summieren.';
   body.appendChild(help);
-
-  const weightHandles = [];
-
-  function redraw() {
-    const values = weightHandles.map((h) => Math.max(0, h.get()));
-    const total = values.reduce((a, b) => a + b, 0);
-    bar.innerHTML = '';
-    segments.length = 0;
-    if (total <= 0) {
-      const empty = document.createElement('span');
-      empty.className = 'dist-empty';
-      // Genau das macht SpeedQuantizer.pick() bei lauter Nullen.
-      empty.textContent = 'alle Gewichte 0 – es gilt 1×';
-      bar.appendChild(empty);
-      return;
-    }
-    speed.weights.forEach((weight, i) => {
-      if (values[i] <= 0) { return; }
-      const share = values[i]/total;
-      const seg = document.createElement('span');
-      seg.className = 'dist-seg';
-      seg.style.flexGrow = String(share);
-      seg.style.flexBasis = '0';
-      seg.style.background = trackColor(i);
-      seg.title = weight.label + ': ' + (share*100).toFixed(1) + ' %';
-      seg.textContent = share >= 0.08
-        ? weight.label + ' ' + Math.round(share*100) + '%' : '';
-      bar.appendChild(seg);
-      segments.push(seg);
-    });
-  }
-
-  const weights = document.createElement('div');
-  weights.className = 'mini';
-  speed.weights.forEach((weight, i) => {
-    const handle = miniSlider(weight.label, weight, data.values[weight.address],
-      (v) => v.toFixed(0));
-    handle.element.style.setProperty('--tc', trackColor(i));
-
-    // Der Balken haengt an allen fuenf Reglern, also hier statt in
-    // miniSlider. Umgehaengt wird die set()-METHODE, nicht nur das
-    // input-Event: das Laden eines Presets ruft control.set(wert, true) und
-    // loest dabei bewusst kein input aus - an einem reinen Event-Listener
-    // bliebe der Balken danach auf der alten Verteilung stehen.
-    const innerSet = handle.set;
-    handle.set = (value, silent) => {
-      innerSet(value, silent);
-      redraw();
-    };
-    controls.set(weight.address, handle);
-    handle.element.querySelector('input[type=range]')
-      .addEventListener('input', redraw);
-
-    weightHandles.push(handle);
-    weights.appendChild(handle.element);
-  });
-  body.appendChild(weights);
+  body.appendChild(bank.sliders);
 
   if (speed.jitter) {
     const jitter = miniSlider('Swing', speed.jitter,
@@ -1492,7 +1510,118 @@ function buildSpeedClasses(data, host) {
     body.appendChild(note);
   }
 
-  redraw();
+  section.appendChild(body);
+  host.appendChild(section);
+}
+
+/* Split-Verhalten: wieviele Zweige eine Kreuzung nimmt, und wie weit sie
+ * zeitlich auseinander starten.
+ *
+ * ZWEI Verteilungen, beide ueber weightBank() wie die Speed-Klassen daneben:
+ * wieviele Zweige eine Kreuzung nimmt, und mit welchem Notenwert sie
+ * auseinander starten. Gewichte sind eine Verteilung, kein Satz unabhaengiger
+ * Zahlen -- ohne den Balken rechnet der Operator im Kopf, was 40/25/10
+ * eigentlich bedeutet.
+ *
+ * Der Notenwert hatte bis 2026-08-01 eine Notenwert-Leiste (noteBar), weil er
+ * ein einzelner fester Wert war. Er wird jetzt je Aufspaltung gezogen -- eine
+ * Leiste zeigte eine Auswahl, die es nicht mehr gibt. */
+function buildSplit(data, host) {
+  const split = data.split;
+  if (!split) { return; }
+
+  const section = document.createElement('section');
+  section.className = 'seq';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Split-Verhalten';
+  section.appendChild(title);
+
+  const body = document.createElement('div');
+  body.style.padding = '0.7rem 0.8rem';
+  body.style.display = 'grid';
+  body.style.gap = '0.6rem';
+
+  if (split.weights && split.weights.length) {
+    // Rueckfalltext: genau das macht SplitFanout.branchCount() bei lauter
+    // Nullen - der Ausfallmodus ist das bisherige Verhalten, nicht Stille.
+    const fanout = weightBank(split.weights, data.values,
+      'alle Gewichte 0 – es gilt "alle Zweige"');
+    body.appendChild(fanout.bar);
+
+    const help = document.createElement('p');
+    help.className = 'help';
+    help.textContent = 'Wieviele der moeglichen Zweige eine Kreuzung nimmt. '
+      + 'Welche wegfallen, wird je Aufspaltung gewuerfelt. Die Gewichte werden '
+      + 'normalisiert, sie muessen sich nicht zu 100 summieren.';
+    body.appendChild(help);
+    body.appendChild(fanout.sliders);
+  }
+
+  // Zeitlicher Versatz
+  if (split.staggerEnabled) {
+    const power = document.createElement('label');
+    power.className = 'seq-power';
+    power.style.justifySelf = 'start';
+    power.title = split.staggerEnabled.address
+      + (split.staggerEnabled.help ? ' – ' + split.staggerEnabled.help : '');
+    const powerBox = document.createElement('input');
+    powerBox.type = 'checkbox';
+    const powerDot = document.createElement('span');
+    powerDot.className = 'dot';
+    const powerText = document.createElement('span');
+    power.appendChild(powerBox);
+    power.appendChild(powerDot);
+    power.appendChild(powerText);
+
+    function applyPower(value, silent) {
+      const on = Number(value) >= 1;
+      powerBox.checked = on;
+      power.classList.toggle('on', on);
+      powerText.textContent = on ? 'Zweige versetzt' : 'Zweige gleichzeitig';
+      if (!silent) { queueSend(split.staggerEnabled.address, on ? 1 : 0); }
+    }
+    powerBox.addEventListener('change',
+      () => applyPower(powerBox.checked ? 1 : 0, false));
+    applyPower(data.values[split.staggerEnabled.address], true);
+    controls.set(split.staggerEnabled.address, {
+      element: power,
+      set: (v, silent) => applyPower(v, silent !== false),
+      get: () => (powerBox.checked ? 1 : 0),
+      flash: () => {},
+    });
+    body.appendChild(power);
+  }
+
+  if (split.staggerWeights && split.staggerWeights.length) {
+    // Farbversatz, damit die zweite Verteilung nicht in denselben drei Farben
+    // erscheint wie die erste darueber - zwei gleich eingefaerbte Balken
+    // untereinander liest man als Fortsetzung, nicht als zweite Sache.
+    //
+    // Rueckfalltext: SplitStagger.pickNoteValue() faellt bei lauter Nullen auf
+    // Sechzehntel zurueck, nicht auf "kein Versatz".
+    const stagger = weightBank(split.staggerWeights, data.values,
+      'alle Gewichte 0 – es gilt Sechzehntel',
+      { colorOffset: split.weights ? split.weights.length : 0,
+        labelOf: (w) => w.symbol + ' ' + w.label });
+    body.appendChild(stagger.bar);
+
+    const caption = document.createElement('p');
+    caption.className = 'help';
+    // Zwei Dinge, die man nicht erraten kann: der Takt kommt aus
+    // /net/sequencer/bpm, auch wenn der Sequencer aus ist (die Uhr laeuft
+    // dort unabhaengig weiter, siehe tickSequencer), und der Notenwert wird
+    // je AUFSPALTUNG gezogen, nicht je Zweig - die Kinder eines Splits
+    // stehen also immer auf demselben Raster.
+    caption.textContent = 'Abstand zwischen dem 1., 2. und 3. Zweig einer '
+      + 'Aufspaltung. Der Notenwert wird je Aufspaltung gezogen, nicht je '
+      + 'Zweig – die Kinder eines Splits stehen immer auf demselben Raster. '
+      + 'Das Raster kommt von /net/sequencer/bpm – auch dann, wenn der '
+      + 'Sequencer selbst aus ist.';
+    body.appendChild(caption);
+    body.appendChild(stagger.sliders);
+  }
+
   section.appendChild(body);
   host.appendChild(section);
 }
@@ -1669,11 +1798,12 @@ function buildTabs(data) {
     panel.className = 'tab-panel';
     panel.setAttribute('role', 'tabpanel');
 
-    // 1. Spezial-Sektionen (Sequencer-Panel, Speed-Klassen)
+    // 1. Spezial-Sektionen (Sequencer-Panel, Speed-Klassen, Split-Verhalten)
     (tab.sections || []).forEach((name) => {
       if (name === 'sequencer') { buildSequencer(data, panel); }
       if (name === 'speedClasses') { buildSpeedClasses(data, panel); }
       if (name === 'palette') { buildPaletteSection(panel); }
+      if (name === 'split') { buildSplit(data, panel); }
     });
 
     // 2. Kuratierte Regler direkt sichtbar

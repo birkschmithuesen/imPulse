@@ -65,6 +65,36 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledFloatParameter splitSpeedJitter;
   RemoteControlledFloatParameter splitLifetimeJitter;
 
+  // Wieviele der moeglichen Zweige eine Aufspaltung tatsaechlich nimmt, und
+  // wie weit die gewaehlten zeitlich auseinander starten.
+  //
+  // Ein Gewicht je Kategorie aus SplitFanout, gleiche Reihenfolge:
+  // alle / einer weniger / genau einer. Auslieferungswerte 100/0/0 - das ist
+  // bitgleich das Verhalten von vor diesem Feature, und der Split-Layer laeuft
+  // gerade live.
+  RemoteControlledFloatParameter[] splitFanoutWeights =
+      new RemoteControlledFloatParameter[SplitFanout.CATEGORY_COUNT];
+  // Eigener Schalter statt "alle Gewichte 0 heisst aus": lauter Nullen sind
+  // der entartete Fall der Ziehung und fallen auf Sechzehntel zurueck (siehe
+  // SplitStagger.NEUTRAL_NOTE_INDEX), sind also gerade kein Aus. Ausserdem
+  // behaelt ein Operator so seine eingestellte Verteilung, waehrend er den
+  // Versatz zum Vergleich ab- und wieder anschaltet.
+  RemoteControlledIntParameter splitStaggerEnabled;
+  // Ein Gewicht je Notenwert-Klasse, Reihenfolge wie
+  // OriginSequencer.NOTE_VALUES (Ganze .. Sechzehntel). Bis 2026-08-01 stand
+  // hier ein einzelner fester Notenwert - er machte jeden Versatz im ganzen
+  // Betrieb gleich lang. Gezogen wird je Aufspaltung, nicht je Zweig, damit
+  // die Kinder eines Splits auf demselben Raster stehen (siehe
+  // SplitStagger.pickNoteValue).
+  RemoteControlledFloatParameter[] splitStaggerNoteWeights =
+      new RemoteControlledFloatParameter[SplitStagger.NOTE_COUNT];
+  // Wiederverwendet statt je Treffer neu angelegt - bei dichtem Betrieb
+  // spalten mehrere Impulse je Frame auf.
+  private final float[] fanoutScratch = new float[SplitFanout.CATEGORY_COUNT];
+  private final float[] staggerScratch = new float[SplitStagger.NOTE_COUNT];
+  private final ArrayList<PendingSpawn> splitCandidates = new ArrayList<PendingSpawn>();
+  final SplitStagger splitStagger = new SplitStagger();
+
   // Rhythmisch quantisierte Spawn-Geschwindigkeit: die Geschwindigkeit eines
   // neuen Impulses ist ein Vielfaches von impulseSpeed (der 1x-Klasse), nach
   // Gewichten gezogen. Referenz ist impulseSpeed SELBST, kein eigener
@@ -191,6 +221,42 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     impulseEnergyExponent = new RemoteControlledIntParameter("/net/impulse/energyExponent", 2, 1, 10);
     splitSpeedJitter= new RemoteControlledFloatParameter("/net/impulse/splitSpeedJitter", 0f, 0f, 1f);
     splitLifetimeJitter= new RemoteControlledFloatParameter("/net/impulse/splitLifetimeJitter", 0f, 0f, 1f);
+
+    // Auslieferungswerte: alles auf "alle Zweige", Versatz aus. Zusammen ist
+    // das exakt das Verhalten von vor diesem Feature - ein Neustart mit
+    // diesem Stand darf das Klangbild der laufenden Installation nicht
+    // ungefragt aendern (Birk, 2026-08-01).
+    //
+    // Adressnamen: "oneLess" statt "n-1". Ein Minus in einer OSC-Adresse ist
+    // erlaubt, liest sich in remoteSettings.txt und im Web-UI aber wie ein
+    // Rechenzeichen statt wie ein Name.
+    String[] fanoutNames = { "all", "oneLess", "single" };
+    float[] fanoutDefaults = { 100f, 0f, 0f };
+    for (int i=0; i<SplitFanout.CATEGORY_COUNT; i++) {
+      splitFanoutWeights[i]= new RemoteControlledFloatParameter(
+          "/net/impulse/split/weight/"+fanoutNames[i], fanoutDefaults[i], 0f, 100f);
+    }
+    splitStaggerEnabled= new RemoteControlledIntParameter("/net/impulse/split/staggerEnabled", 0, 0, 1);
+    // Gewichte der Notenwert-Klassen, Schwerpunkt auf den kurzen: Sechzehntel
+    // 60, Achtel 30, Viertel 10. Der Versatz soll knapp bleiben - ein halber
+    // Takt zwischen zwei Zweigen liest sich nicht mehr als eine Aufspaltung,
+    // sondern als zwei unabhaengige Impulse. Halbe und Ganze stehen deshalb
+    // auf 0 und sind da, wenn jemand sie haben will.
+    //
+    // Bereich 0..100 wie bei den Fanout-Gewichten und den Speed-Klassen: eine
+    // dritte Skala fuer dieselbe Sache waere ein Regler, dessen Zahl in der
+    // Nachbarsektion etwas anderes bedeutet. Normalisiert wird ohnehin
+    // (WeightedChoice), die Summe muss nicht 100 sein.
+    //
+    // Adressnamen ausgeschrieben statt "16": eine Zahl in der Adresse liest
+    // sich in remoteSettings.txt wie eine Anzahl, nicht wie ein Notenwert.
+    String[] staggerNoteNames = { "whole", "half", "quarter", "eighth", "sixteenth" };
+    float[] staggerNoteDefaults = { 0f, 0f, 10f, 30f, 60f };
+    for (int i=0; i<SplitStagger.NOTE_COUNT; i++) {
+      splitStaggerNoteWeights[i]= new RemoteControlledFloatParameter(
+          "/net/impulse/split/stagger/weight/"+staggerNoteNames[i],
+          staggerNoteDefaults[i], 0f, 100f);
+    }
 
     // Randomizer: Auslieferungszustand aus (0), ein Operator schaltet ihn live
     // per OSC/Web-UI ein. Die Defaults spannen einen Bereich um den jeweiligen
@@ -423,7 +489,11 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     applyRandomizers(currentTime);
 
     spawnRandomImpulses(currentTime);
+    // schreibt auch die MusicalClock fort, auf der der Split-Versatz laeuft -
+    // deshalb muss releasePendingSplits() DAHINTER stehen, sonst arbeitete es
+    // mit der Beat-Position des vorigen Frames.
     tickSequencer(currentTime);
+    releasePendingSplits();
 
     //iterate through activations and build a new list of activations in the meanwhile.
     LinkedList<TravellingActivation> newActivations=new LinkedList<TravellingActivation>();
@@ -521,10 +591,16 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         // gleichschalten, also genau das nicht loesen, worum es geht.
         float speedJitter=splitSpeedJitter.getValue();
         float lifetimeJitter=splitLifetimeJitter.getValue();
+
+        // Erst SAMMELN, dann auswaehlen. Bis zu diesem Feature spawnte jeder
+        // moegliche Zweig sofort; jetzt entscheidet erst die Gewichtstabelle,
+        // wieviele es werden. Die Bedingungen darunter - Bounds und "nicht
+        // denselben Stripe zurueck" - sind unveraendert: sie sagen, welcher
+        // Zweig ueberhaupt MOEGLICH ist, und das ist eine andere Frage als
+        // welcher genommen wird.
+        splitCandidates.clear();
         for (Integer nodeLedIdx : hitNode.ledIndices) {
           LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
-
-
 
           int jump; // jump one led to avoid activating the same node over and over again
           if (curActivation.speed>0) {
@@ -535,7 +611,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           //  activation spreads in boths directions
           int forwPos=nodeLedIdx +jump;
           if (forwPos>0&&forwPos<nLeds) {
-            newActivations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex,
+            splitCandidates.add(candidate(forwPos, curLedInfo.stripeIndex,
                 SplitVariance.jitter(curActivation.speed, speedJitter, Math.random()),
                 childEnergy,
                 SplitVariance.jitter(1f, lifetimeJitter, Math.random())));
@@ -544,19 +620,100 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex || activationLedIdx < nodeLedIdx) {//ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
             int backwPos=nodeLedIdx -jump;
             if (backwPos>0&&backwPos<nLeds) {
-              newActivations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex,
+              splitCandidates.add(candidate(backwPos, curLedInfo.stripeIndex,
                   SplitVariance.jitter(-curActivation.speed, speedJitter, Math.random()),
                   childEnergy,
                   SplitVariance.jitter(1f, lifetimeJitter, Math.random())));
             }
           }
         }
+        spawnSplitChildren(newActivations);
         return true;
       }
     }
     return false;
   }
 
+
+  // Ein moeglicher Zweig, noch ohne Entscheidung darueber, ob und wann er
+  // laeuft. PendingSpawn statt TravellingActivation, weil ein Kandidat, der
+  // nicht genommen wird, keine Impuls-ID verbrauchen soll: die IDs sind der
+  // Schluessel des Positionsstroms /net/impulse, und eine Luecke darin waere
+  // auf der Klangseite eine Drohne, die nie kommt.
+  private PendingSpawn candidate(float ledPos, int stripeIdx, float speed,
+      float energy, float decayScale) {
+    PendingSpawn p = new PendingSpawn();
+    p.ledPos=ledPos;
+    p.stripeIdx=stripeIdx;
+    p.speed=speed;
+    p.energy=energy;
+    p.decayScale=decayScale;
+    return p;
+  }
+
+  // Zieht aus den gesammelten Kandidaten die Zahl der Zweige und startet sie -
+  // den ersten sofort, die weiteren um je einen Notenwert versetzt.
+  //
+  // Der Versatz zaehlt in Beats derselben MusicalClock, auf der auch der
+  // Origin-Sequencer laeuft. Die Uhr laeuft unabhaengig von
+  // /net/sequencer/enabled weiter (siehe tickSequencer), der Versatz braucht
+  // den Sequencer also nicht - er teilt nur seine Phase.
+  private void spawnSplitChildren(LinkedList<TravellingActivation> newActivations) {
+    int candidates=splitCandidates.size();
+    if (candidates == 0) {
+      return;
+    }
+    for (int i=0; i<splitFanoutWeights.length; i++) {
+      fanoutScratch[i]=splitFanoutWeights[i].getValue();
+    }
+    int take=SplitFanout.branchCount(fanoutScratch, candidates, Math.random());
+    // Die Reihenfolge ist gemischt: sie bestimmt, welcher Zweig sofort
+    // startet. Der erste Kandidat waere sonst immer der mit dem kleinsten
+    // LED-Index - ein Vorrang, den kein Regler zeigt.
+    int[] order=SplitFanout.chooseOrder(candidates, take, mathRandom);
+    boolean stagger=splitStaggerEnabled.getValue() == 1;
+    // EINE Ziehung fuer die ganze Aufspaltung, nicht eine je Kind: alle
+    // Zweige stehen damit auf demselben Raster. Je Kind gezogen waeren schon
+    // die Abstaende innerhalb eines Splits ungleich - genau die
+    // Gleichmaessigkeit, an der ein Rhythmus zu erkennen ist. Was von
+    // Aufspaltung zu Aufspaltung wechseln soll, ist die Klasse selbst.
+    // Bei ausgeschaltetem Versatz wird gar nicht gezogen: der Wert geht dann
+    // in keine Rechnung ein (delay bleibt 0), und ein Math.random() je
+    // Aufspaltung waere Arbeit fuer nichts. 16 steht hier als gueltiger
+    // Notenwert, nicht als Bedeutung.
+    int noteValue=16;
+    if (stagger) {
+      for (int i=0; i<splitStaggerNoteWeights.length; i++) {
+        staggerScratch[i]=splitStaggerNoteWeights[i].getValue();
+      }
+      noteValue=SplitStagger.pickNoteValue(staggerScratch, Math.random());
+    }
+    double beats=musicalClock.beats();
+    for (int slot=0; slot<order.length; slot++) {
+      PendingSpawn p=splitCandidates.get(order[slot]);
+      double delay=stagger ? SplitStagger.delayBeats(noteValue, slot) : 0.0;
+      if (delay <= 0.0) {
+        newActivations.add(new TravellingActivation(p.ledPos, p.stripeIdx, p.speed,
+            p.energy, p.decayScale));
+      } else {
+        p.dueBeats=beats + delay;
+        splitStagger.schedule(p);
+      }
+    }
+  }
+
+  // Die faelligen Kinder aus der Warteschlange starten lassen. Laeuft
+  // unabhaengig von splitStaggerEnabled: schaltet ein Operator den Versatz
+  // mitten in der Show ab, sollen die schon geplanten Kinder trotzdem noch
+  // kommen statt in der Schlange zu verhungern.
+  private void releasePendingSplits() {
+    List<PendingSpawn> due=splitStagger.due(musicalClock.beats());
+    for (int i=0; i<due.size(); i++) {
+      PendingSpawn p=due.get(i);
+      activations.add(new TravellingActivation(p.ledPos, p.stripeIdx, p.speed,
+          p.energy, p.decayScale));
+    }
+  }
 
   private void sendOscMessage(LedNetworkNode hitNode, TravellingActivation curActivation) {
     OscMessage myMessage = new OscMessage("/net/hitNode");

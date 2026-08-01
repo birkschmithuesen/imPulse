@@ -45,7 +45,24 @@ class OriginSequencer {
 
   // Die erlaubten Notenwerte. RemoteControlledIntParameter kann keine
   // Aufzaehlung, deshalb rastet quantizeNoteValue() beim Lesen.
-  private static final int[] NOTE_VALUES = { 1, 2, 4, 8, 16 };
+  //
+  // Package-privat statt private, weil SplitStagger dieselbe Liste braucht:
+  // der Notenwert des Split-Versatzes wird aus denselben Klassen gezogen.
+  // Eine zweite Kopie waeren zwei Aufzaehlungen fuer dieselbe Sache - eine
+  // sechste Klasse hier ergaenzt und dort vergessen, und "Sechzehntel" hiesse
+  // im Sketch an zwei Stellen etwas anderes.
+  static final int[] NOTE_VALUES = { 1, 2, 4, 8, 16 };
+
+  // Notenwert an einer Index-Position, wie SpeedQuantizer.multiplierAt().
+  // Ein Index ausserhalb liefert Viertel - denselben neutralen Notenwert,
+  // mit dem MusicalClock.beatsPerNote() schon einen unbrauchbaren Wert
+  // beantwortet.
+  static int noteValueAt(int index) {
+    if (index < 0 || index >= NOTE_VALUES.length) {
+      return 4;
+    }
+    return NOTE_VALUES[index];
+  }
 
   // Kuerzestes Intervall, das ein Track haben kann. Bei swingJitter = 1 und
   // einem Zufallswert von 0 waere der Faktor exakt 0 - der Track wuerde in

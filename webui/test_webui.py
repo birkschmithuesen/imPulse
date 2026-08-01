@@ -645,6 +645,15 @@ class SequencerSectionTest(unittest.TestCase):
         for suffix, _label in server.SPEED_CLASSES:
             lines.append("float\t%s%s\tx\t0\t0\t100"
                          % (server.SPEED_WEIGHT_PREFIX, suffix))
+        lines += [
+            "int\t%sstaggerEnabled\tx\t0\t0\t1" % server.SPLIT_PREFIX,
+        ]
+        for suffix, _note in server.SPLIT_STAGGER_NOTES:
+            lines.append("float\t%s%s\tx\t0\t0\t100"
+                         % (server.SPLIT_STAGGER_WEIGHT_PREFIX, suffix))
+        for suffix, _label in server.SPLIT_WEIGHTS:
+            lines.append("float\t%s%s\tx\t0\t0\t100"
+                         % (server.SPLIT_WEIGHT_PREFIX, suffix))
         return {p.address: p for p in parse_settings("\n".join(lines))}
 
     def test_sequencer_has_all_six_tracks(self):
@@ -711,6 +720,7 @@ class SequencerSectionTest(unittest.TestCase):
                       parse_settings("float\t/net/impulse/speed\tx\t16\t1\t1500")}
         self.assertIsNone(server.build_sequencer(by_address))
         self.assertIsNone(server.build_speed_classes(by_address))
+        self.assertIsNone(server.build_split(by_address))
 
     def test_speed_classes_keep_the_java_order(self):
         speed = server.build_speed_classes(self._params())
@@ -721,18 +731,58 @@ class SequencerSectionTest(unittest.TestCase):
         by_address = self._params()
         seq = server.build_sequencer(by_address)
         speed = server.build_speed_classes(by_address)
-        taken = server.sequencer_addresses(seq, speed)
+        split = server.build_split(by_address)
+        taken = server.sequencer_addresses(seq, speed, split)
         self.assertIn("/net/sequencer/bpm", taken)
         self.assertIn("/net/sequencer/track5/energy", taken)
         self.assertIn("/net/impulse/speedQuantize/weight/8x", taken)
+        self.assertIn("/net/impulse/split/weight/single", taken)
+        self.assertIn("/net/impulse/split/stagger/weight/sixteenth", taken)
         # bpm + enabled, sechs Tracks a sechs Felder, quantize enabled+jitter,
-        # ein Gewicht je Klasse. Aus den Konstanten gerechnet, nicht als
-        # Literal - die Trackzahl steht im Server.
+        # ein Gewicht je Klasse, dazu die Split-Sektion (der Stagger-Schalter,
+        # ein Gewicht je Fanout-Kategorie und eines je Notenwert-Klasse). Aus
+        # den Konstanten gerechnet, nicht als Literal - die Trackzahl steht im
+        # Server.
         expected = (2
                     + server.SEQUENCER_TRACK_COUNT
                     * (1 + len(server.SEQUENCER_TRACK_FIELDS))
-                    + 2 + len(server.SPEED_CLASSES))
+                    + 2 + len(server.SPEED_CLASSES)
+                    + 1 + len(server.SPLIT_WEIGHTS)
+                    + len(server.SPLIT_STAGGER_NOTES))
         self.assertEqual(len(taken), expected)
+
+    def test_split_keeps_the_java_order(self):
+        split = server.build_split(self._params())
+        self.assertEqual([w["label"] for w in split["weights"]],
+                         [label for _s, label in server.SPLIT_WEIGHTS])
+        # Dieselbe Reihenfolge wie SplitFanout: Index 0 = alle Zweige.
+        self.assertTrue(split["weights"][0]["address"].endswith("/all"))
+
+    def test_split_stagger_weights_follow_the_java_note_values(self):
+        """Ein Gewicht je Notenwert-Klasse, in der Reihenfolge der Java-Seite
+        (OriginSequencer.NOTE_VALUES: Ganze .. Sechzehntel). Der Notenwert des
+        Versatzes wird je Aufspaltung gezogen, es gibt also keinen festen
+        Regler mehr, den eine Notenwert-Leiste zeigen koennte."""
+        split = server.build_split(self._params())
+        self.assertEqual([w["noteValue"] for w in split["staggerWeights"]],
+                         [1, 2, 4, 8, 16])
+        for weight in split["staggerWeights"]:
+            # Das Symbol allein reicht nicht: nicht jede Windows-Schrift hat
+            # U+1D15D..U+1D161, der Name ist der Rueckfall.
+            self.assertTrue(weight["symbol"])
+            self.assertTrue(weight["label"])
+        self.assertIsNotNone(split["staggerEnabled"])
+        self.assertNotIn("staggerNoteValue", split)
+
+    def test_split_without_stagger_weights_still_renders(self):
+        """Aelterer imPulse-Stand ohne die Gewichte: die Sektion soll die
+        Fanout-Gewichte trotzdem zeigen, statt ganz zu verschwinden."""
+        by_address = {a: p for a, p in self._params().items()
+                      if not a.startswith(server.SPLIT_STAGGER_WEIGHT_PREFIX)}
+        split = server.build_split(by_address)
+        self.assertIsNotNone(split)
+        self.assertEqual(split["staggerWeights"], [])
+        self.assertEqual(len(split["weights"]), len(server.SPLIT_WEIGHTS))
 
     def test_snapshot_does_not_render_a_parameter_twice(self):
         """Der eigentliche Zweck der Entnahme: kein doppeltes Bedienelement."""
@@ -754,10 +804,11 @@ class SequencerSectionTest(unittest.TestCase):
                 if control.get("address"):
                     rendered.add(control["address"])
         overlap = rendered & server.sequencer_addresses(
-            snapshot["sequencer"], snapshot["speedClasses"])
+            snapshot["sequencer"], snapshot["speedClasses"], snapshot["split"])
         self.assertEqual(overlap, set())
         self.assertIsNotNone(snapshot["sequencer"])
         self.assertIsNotNone(snapshot["speedClasses"])
+        self.assertIsNotNone(snapshot["split"])
 
 
 class TabLayoutTest(unittest.TestCase):
@@ -808,6 +859,15 @@ class TabLayoutTest(unittest.TestCase):
         for suffix, _label in server.SPEED_CLASSES:
             lines.append("float\t%s%s\tx\t0\t0\t100"
                          % (server.SPEED_WEIGHT_PREFIX, suffix))
+        lines += [
+            "int\t%sstaggerEnabled\tx\t0\t0\t1" % server.SPLIT_PREFIX,
+        ]
+        for suffix, _note in server.SPLIT_STAGGER_NOTES:
+            lines.append("float\t%s%s\tx\t0\t0\t100"
+                         % (server.SPLIT_STAGGER_WEIGHT_PREFIX, suffix))
+        for suffix, _label in server.SPLIT_WEIGHTS:
+            lines.append("float\t%s%s\tx\t100\t0\t100"
+                         % (server.SPLIT_WEIGHT_PREFIX, suffix))
         with open(path, "w", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
         store = ParameterStore(path=path)
@@ -895,6 +955,7 @@ class TabLayoutTest(unittest.TestCase):
         tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
         self.assertIn("sequencer", tabs["spawn"]["sections"])
         self.assertIn("speedClasses", tabs["noten"]["sections"])
+        self.assertIn("split", tabs["noten"]["sections"])
         self.assertEqual(tabs["mixer"]["sections"], [])
 
     def test_addresses_go_where_the_brief_says(self):
@@ -909,6 +970,20 @@ class TabLayoutTest(unittest.TestCase):
             server.tab_for_address("/net/impulse/speedQuantize/enabled"), "noten")
         self.assertEqual(
             server.tab_for_address("/net/impulse/speedQuantize/weight/8x"), "noten")
+        # Das Split-Verhalten gehoert zu den Noten: der Versatz haengt am
+        # BPM-Raster. Die beiden aelteren splitJitter-Adressen bleiben aber
+        # in der Physik - der Schraegstrich in der Regel trennt sie.
+        self.assertEqual(
+            server.tab_for_address("/net/impulse/split/weight/all"), "noten")
+        self.assertEqual(
+            server.tab_for_address("/net/impulse/split/staggerEnabled"), "noten")
+        self.assertEqual(
+            server.tab_for_address("/net/impulse/split/stagger/weight/eighth"),
+            "noten")
+        self.assertEqual(
+            server.tab_for_address("/net/impulse/splitSpeedJitter"), "physik")
+        self.assertEqual(
+            server.tab_for_address("/net/impulse/splitLifetimeJitter"), "physik")
         self.assertEqual(server.tab_for_address("/net/impulse/speed"), "physik")
         # Farbe gehoert zu den Farben, NICHT zur Physik - dieselbe
         # Reihenfolge-Falle wie bei speedQuantize.
@@ -979,7 +1054,8 @@ class TabLayoutTest(unittest.TestCase):
                 if control.get("address"):
                     known.add(control["address"])
         taken = server.sequencer_addresses(snapshot["sequencer"],
-                                           snapshot["speedClasses"])
+                                           snapshot["speedClasses"],
+                                           snapshot["split"])
         for tab_id, addresses in server.TAB_PRIMARY.items():
             for address in addresses:
                 self.assertTrue(address in known or address in taken,
