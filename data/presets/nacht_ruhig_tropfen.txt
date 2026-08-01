@@ -3,7 +3,7 @@ float	/net/impulse/color/b	space for descripiton	0.75	0.0	1.0
 float	/net/impulse/color/g	space for descripiton	0.95	0.0	1.0
 float	/net/impulse/color/gamma	space for descripiton	0.8	0.1	5.0
 float	/net/impulse/color/r	space for descripiton	0.15	0.0	1.0
-int	/net/impulse/color/useRemoteCol	space for descripiton	1	0	1
+int	/net/impulse/color/useSpecificColor	space for descripiton	1	0	1
 int	/net/impulse/energyExponent	space for descripiton	2	1	10
 float	/net/impulse/fadeOut/b	space for descripiton	0.92	0.0	1.0
 float	/net/impulse/fadeOut/g	space for descripiton	0.95	0.0	1.0
