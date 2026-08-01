@@ -156,7 +156,12 @@ class GroupingTest(unittest.TestCase):
         ])
         groups = {g["key"]: g for g in build_groups(parse_settings(text))}
         self.assertIn("net/impulse/color", groups)
-        self.assertEqual(groups["net/impulse/color"]["title"], "Impuls-Farbe")
+        # "Impuls-Farbe: Feinheiten", nicht "Impuls-Farbe": so heisst seit
+        # dem Farbwaehler-Umbau die Sektion, die den Waehler und den
+        # Moduswahlschalter traegt. Zwei Ueberschriften desselben Namens
+        # versprechen dasselbe und halten Verschiedenes.
+        self.assertEqual(groups["net/impulse/color"]["title"],
+                         "Impuls-Farbe: Feinheiten")
         color_addrs = {c["address"] for c in groups["net/impulse/color"]["controls"]}
         self.assertEqual(color_addrs, {"/net/impulse/color/r", "/net/impulse/fadeOut/r"})
         # speed bleibt in der Bewegungs-Gruppe, nicht in Impuls-Farbe

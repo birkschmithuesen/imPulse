@@ -170,6 +170,7 @@ async function postUpdates(updates) {
     }
   });
   colorCards.forEach(syncColorCard);
+  rgbCards.forEach(syncRgbCard);
 
   const sentText = data.applied
     .filter((entry) => origin.has(entry.address))
@@ -443,6 +444,41 @@ function buildTrigger(param) {
   return wrap;
 }
 
+/* Ein Regler-Handle OHNE eigenes Bedienelement.
+ *
+ * Gebraucht, seit Farben nur noch ueber den Farbwaehler eingestellt werden
+ * (Birk, 2026-08-01): die einzelnen Kanalregler sind aus dem UI verschwunden,
+ * ihre Adressen muessen aber in der controls-Map bleiben. Ueber genau diese
+ * Map laufen das Preset-Laden und der applied/echoed-Ruecklauf aus /api/set --
+ * eine Adresse, die dort fehlt, wird von einem Preset still nicht angezeigt,
+ * und die Karte zeigte danach eine andere Farbe als die Installation.
+ *
+ * Das Handle haelt also den Wert und meldet Aenderungen an die Karte, die ihn
+ * anzeigt; ein DOM-Element hat es nicht. */
+function headlessControl(param, initial, onChange) {
+  let current = Number(initial);
+  if (!isFinite(current)) { current = Number(param.min) || 0; }
+
+  function apply(value, silent) {
+    let next = Number(value);
+    if (!isFinite(next)) { return; }
+    next = Math.min(param.max, Math.max(param.min, next));
+    if (param.type === 'int') { next = Math.round(next); }
+    current = next;
+    if (!silent) { queueSend(param.address, next); }
+    if (onChange) { onChange(next); }
+  }
+
+  const handle = {
+    element: null,
+    set: (value, silent) => apply(value, silent !== false),
+    get: () => current,
+    flash: () => {},
+  };
+  controls.set(param.address, handle);
+  return handle;
+}
+
 function syncColorCard(card) {
   const h = controls.get(card.components.hue.address).get();
   const s = controls.get(card.components.sat.address).get();
@@ -487,13 +523,14 @@ function buildColorCard(control, values) {
   row.appendChild(hint);
   wrap.appendChild(row);
 
-  const components = document.createElement('div');
-  components.className = 'components';
+  // Die drei Kanalregler sind seit 2026-08-01 weg -- eine Farbe stellt man am
+  // Waehler ein, nicht an drei Zahlen. Ihre Adressen bleiben trotzdem in der
+  // controls-Map (headlessControl), sonst zoege ein Preset die Karte nicht
+  // mehr nach.
   ['hue', 'sat', 'bright'].forEach((key) => {
     const param = control.components[key];
-    components.appendChild(buildParam(param, values[param.address]));
+    headlessControl(param, values[param.address]);
   });
-  wrap.appendChild(components);
   wrap.appendChild(paletteRowFor(control));
 
   // Merkt sich die zuletzt angefasste Karte -- die Quelle fuer "Farbe
@@ -525,6 +562,350 @@ function buildColorCard(control, values) {
   return wrap;
 }
 
+/* ---------------------------------------------------------------------------
+ * RGB-Farbkarten (Impulsfarbe, die acht Stripe-Slots)
+ *
+ * Dieselbe Bauform wie die HSB-Karten oben, nur ein anderer Farbraum: die
+ * Java-Seite haelt diese Farben als /net/impulse/color/{r,g,b} bzw.
+ * /net/impulse/stripeColor/<n>/{r,g,b}, also als drei
+ * RemoteControlledFloatParameter in 0..1. Umgerechnet wird hier, gesendet
+ * werden weiter die Einzelkanaele -- an dem, was bei imPulse ankommt, aendert
+ * sich nichts.
+ * ------------------------------------------------------------------------- */
+
+const rgbCards = [];           // { base, input, components }
+
+function syncRgbCard(card) {
+  const r = controls.get(card.components.r.address).get();
+  const g = controls.get(card.components.g.address).get();
+  const b = controls.get(card.components.b.address).get();
+  card.input.value = rgbToHex(r, g, b);
+}
+
+function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map((c) => {
+    const byte = Math.round(Math.min(1, Math.max(0, Number(c) || 0))*255);
+    return byte.toString(16).padStart(2, '0');
+  }).join('');
+}
+
+function hexToRgb(hex) {
+  const value = parseInt(hex.slice(1), 16);
+  return [((value >> 16) & 255)/255, ((value >> 8) & 255)/255, (value & 255)/255];
+}
+
+function buildRgbCard(control, values, extraClass) {
+  const wrap = document.createElement('div');
+  wrap.className = 'param color rgb' + (extraClass ? ' ' + extraClass : '');
+
+  const head = document.createElement('div');
+  head.className = 'param-head';
+  const name = document.createElement('span');
+  name.className = 'param-name';
+  name.title = control.base + '/{r,g,b}';
+  name.textContent = control.label || splitAddress(control.base).leaf;
+  const kind = document.createElement('span');
+  kind.className = 'param-range';
+  kind.textContent = 'Farbe (RGB)';
+  head.appendChild(name);
+  head.appendChild(kind);
+  wrap.appendChild(head);
+  if (control.help) {
+    const help = document.createElement('p');
+    help.className = 'help';
+    help.textContent = control.help;
+    wrap.appendChild(help);
+  }
+
+  const row = document.createElement('div');
+  row.className = 'swatch-row';
+  const picker = document.createElement('input');
+  picker.type = 'color';
+  picker.setAttribute('aria-label', control.label || control.base);
+  row.appendChild(picker);
+  wrap.appendChild(row);
+
+  // Kein einziger sichtbarer Kanalregler, aber alle drei Adressen in der
+  // controls-Map -- siehe headlessControl().
+  const card = { base: control.base, input: picker,
+                 components: control.components, kind: 'rgb' };
+  ['r', 'g', 'b'].forEach((key) => {
+    headlessControl(control.components[key], values[control.components[key].address]);
+  });
+  rgbCards.push(card);
+  syncRgbCard(card);
+
+  wrap.appendChild(paletteRowFor(control));
+  wrap.addEventListener('pointerdown', () => { activeColorCard = control; });
+  wrap.addEventListener('focusin', () => { activeColorCard = control; });
+
+  picker.addEventListener('input', () => {
+    const rgb = hexToRgb(picker.value);
+    // auf das Raster der Parameter runden, damit angezeigter und gesendeter
+    // Wert nicht auseinanderlaufen -- dieselbe Regel wie bei den HSB-Karten
+    const updates = ['r', 'g', 'b'].map((key, i) => ({
+      address: control.components[key].address,
+      value: roundToStep(rgb[i], control.components[key]),
+    }));
+    updates.forEach((u) => controls.get(u.address).set(u.value, true));
+    queueSendMany('rgb:' + control.base, updates);
+  });
+
+  return wrap;
+}
+
+/* Impuls-Farbe: der Moduswahlschalter und die zwei Farbquellen, zwischen denen
+ * er umschaltet.
+ *
+ * Beide Quellen bleiben SICHTBAR, die gerade unwirksame wird nur gedimmt. Sie
+ * auszublenden waere kuerzer, liesse den Operator aber im Zweifel, ob das
+ * Feature fehlt oder nur gerade nicht dran ist -- und wer die acht Slots
+ * einstellen will, bevor er umschaltet, kaeme gar nicht an sie heran. */
+function buildImpulseColor(data, host) {
+  const colors = data.colors;
+  if (!colors || (!colors.impulse && !(colors.stripes || []).length)) { return; }
+
+  const section = document.createElement('section');
+  section.className = 'seq';
+  const title = document.createElement('h2');
+  title.textContent = 'Impuls-Farbe';
+  section.appendChild(title);
+
+  const body = document.createElement('div');
+  body.className = 'color-body';
+
+  const specific = document.createElement('div');
+  const stripes = document.createElement('div');
+
+  function applyMode(value, silent) {
+    const on = Number(value) >= 1;
+    specific.classList.toggle('inactive', !on);
+    stripes.classList.toggle('inactive', on);
+    if (bar) { bar.mark(on ? 1 : 0); }
+    if (!silent && colors.mode) { queueSend(colors.mode.address, on ? 1 : 0); }
+  }
+
+  // Zwei gleichrangige Zustaende, also ein Auswahlbalken und kein
+  // an/aus-Haekchen: "aus" waere fuer "Stripe-Farben" die falsche Beschreibung
+  // -- es ist ein eigener Modus, nicht die Abwesenheit eines anderen.
+  let bar = null;
+  if (colors.mode) {
+    bar = modeBar([colors.modeLabels['0'], colors.modeLabels['1']],
+                  (index) => applyMode(index, false));
+    body.appendChild(bar.element);
+    controls.set(colors.mode.address, {
+      element: bar.element,
+      set: (v, silent) => applyMode(v, silent !== false),
+      get: () => (specific.classList.contains('inactive') ? 0 : 1),
+      flash: () => {},
+    });
+  }
+
+  if (colors.impulse) {
+    specific.className = 'color-cards';
+    specific.appendChild(buildRgbCard(colors.impulse, data.values));
+    body.appendChild(specific);
+  }
+
+  if ((colors.stripes || []).length) {
+    const sub = document.createElement('h3');
+    sub.className = 'song-sub';
+    sub.textContent = 'Stripe-Farben';
+    stripes.appendChild(sub);
+    const note = document.createElement('p');
+    note.className = 'help';
+    // Die Modulo-Regel ist von aussen nicht zu erraten und erklaert, warum
+    // acht Farben fuer 30 Stripes reichen.
+    note.textContent = 'Acht Slots fuer 30 Stripes: Stripe 0 nimmt Slot 0, '
+      + 'Stripe 8 wieder Slot 0. Wirkt nur im Modus „Stripe-Farben“.';
+    stripes.appendChild(note);
+    const grid = document.createElement('div');
+    grid.className = 'stripe-colors';
+    colors.stripes.forEach((card) => {
+      grid.appendChild(buildRgbCard(card, data.values, 'slot'));
+    });
+    stripes.appendChild(grid);
+    body.appendChild(stripes);
+  }
+
+  applyMode(colors.mode ? data.values[colors.mode.address] : 1, true);
+  section.appendChild(body);
+  host.appendChild(section);
+}
+
+/* Auswahlbalken aus zwei oder mehr gleichrangigen Zustaenden. Gleiche Bauform
+ * wie treeBar() und die Notenwert-Leiste, aber ohne eigene OSC-Anbindung --
+ * der Aufrufer entscheidet, was ein Klick bedeutet. */
+function modeBar(labels, onPick) {
+  const bar = document.createElement('div');
+  bar.className = 'tree-bar mode-bar';
+  const buttons = [];
+  labels.forEach((label, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', () => onPick(index));
+    buttons.push(button);
+    bar.appendChild(button);
+  });
+  return {
+    element: bar,
+    mark: (index) => buttons.forEach((b, i) => {
+      b.setAttribute('aria-pressed', i === index ? 'true' : 'false');
+    }),
+  };
+}
+
+/* Nachleuchten: Zielfarbe und Tempo statt drei Zerfallsraten.
+ *
+ * /net/impulse/fadeOut/{r,g,b} sind KEINE Farbe -- der Effekt multipliziert
+ * den ganzen LED-Puffer je Frame damit. Ein Waehler direkt darauf waere
+ * irrefuehrend: "heller im Waehler" hiesse dort "zerfaellt langsamer".
+ *
+ * Gerechnet wird deshalb auf dem Server (POST /api/fadeout). Hier steht
+ * bewusst KEINE Umrechnung: eine zweite Kopie der Formel waere eine zweite
+ * Wahrheit, und geprueft ist nur die auf der Server-Seite. */
+function buildFade(data, host) {
+  const fade = data.fade;
+  if (!fade) { return; }
+
+  const section = document.createElement('section');
+  section.className = 'seq';
+  const title = document.createElement('h2');
+  // Nicht nur "Nachleuchten": Master/trace im Mixer-Tab heisst auch so und
+  // ist etwas anderes (das ganze Bild statt nur der Impuls-Spur).
+  title.textContent = 'Nachleuchten der Impulse';
+  section.appendChild(title);
+
+  const body = document.createElement('div');
+  body.className = 'color-body';
+
+  const intro = document.createElement('p');
+  intro.className = 'help';
+  intro.textContent = 'Jeder Impuls zieht eine Spur, die langsam verlischt. '
+    + 'Der Waehler bestimmt, in welche Farbe sie dabei hinein verblasst, der '
+    + 'Regler darunter, wie schnell das geht.';
+  body.appendChild(intro);
+
+  const row = document.createElement('div');
+  row.className = 'swatch-row';
+  const picker = document.createElement('input');
+  picker.type = 'color';
+  picker.setAttribute('aria-label', 'Zielfarbe des Nachleuchtens');
+  row.appendChild(picker);
+  const hint = document.createElement('span');
+  hint.className = 'param-range';
+  hint.textContent = 'Farbe am Ende der Spur';
+  row.appendChild(hint);
+  body.appendChild(row);
+
+  const speedRow = document.createElement('label');
+  speedRow.className = 'mini-row';
+  const caption = document.createElement('span');
+  caption.textContent = 'Tempo';
+  const range = document.createElement('input');
+  range.type = 'range';
+  range.min = 0;
+  range.max = 1;
+  range.step = 0.001;
+  const out = document.createElement('output');
+  speedRow.appendChild(caption);
+  speedRow.appendChild(range);
+  speedRow.appendChild(out);
+  body.appendChild(speedRow);
+
+  const note = document.createElement('p');
+  note.className = 'help';
+  note.textContent = 'Ganz rechts steht die Spur fuer immer, ganz links ist '
+    + 'sie im naechsten Bild weg. Die drei Zerfallsraten, die imPulse '
+    + 'tatsaechlich bekommt, werden daraus gerechnet.';
+  body.appendChild(note);
+
+  const addr = document.createElement('code');
+  addr.className = 'param-addr';
+  addr.textContent = fade.addresses.join('  ');
+  body.appendChild(addr);
+
+  let target = { r: fade.target.r, g: fade.target.g, b: fade.target.b };
+  let decay = fade.decay;
+  let timer = null;
+
+  function redraw() {
+    picker.value = rgbToHex(target.r, target.g, target.b);
+    range.value = decay;
+    // Zwei Nachkommastellen reichen fuer die Anzeige; gesendet wird der volle
+    // Wert. Bei 40 Bildern je Sekunde ist der Unterschied zwischen 0,970 und
+    // 0,971 gut sichtbar, deshalb drei Stellen.
+    out.textContent = Number(decay).toFixed(3);
+  }
+
+  function send() {
+    if (timer) { clearTimeout(timer); }
+    timer = setTimeout(async () => {
+      timer = null;
+      try {
+        const response = await fetch('/api/fadeout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ r: target.r, g: target.g, b: target.b,
+                                 decay: decay }),
+        });
+        const payload = await response.json();
+        if (!payload.ok) {
+          setStatus('Nachleuchten: ' + (payload.error || 'unbekannter Fehler'), 'err');
+          return;
+        }
+        // Die drei Handles still nachziehen, damit ein spaeteres Preset-Laden
+        // und der applied-Ruecklauf auf demselben Stand aufsetzen.
+        payload.applied.forEach((entry) => {
+          const control = controls.get(entry.address);
+          if (control) { control.set(entry.value, true); }
+        });
+        setStatus(payload.applied
+          .map((e) => `${e.address} = ${Number(e.value).toFixed(4)}`)
+          .join(', '), 'ok');
+      } catch (err) {
+        setStatus('Nachleuchten nicht gesendet: ' + err, 'err');
+      }
+    }, DEBOUNCE_MS);
+  }
+
+  picker.addEventListener('input', () => {
+    const rgb = hexToRgb(picker.value);
+    target = { r: rgb[0], g: rgb[1], b: rgb[2] };
+    send();
+  });
+  range.addEventListener('input', () => {
+    decay = Number(range.value);
+    out.textContent = decay.toFixed(3);
+    send();
+  });
+
+  // Die drei rohen Adressen bleiben in der controls-Map: ohne sie liefe der
+  // applied/echoed-Ruecklauf aus /api/set ins Leere, und das Preset-Laden
+  // meldete drei Regler weniger als es nachgezogen hat.
+  fade.addresses.forEach((address) => {
+    const param = { address: address, type: 'float', min: 0, max: 1 };
+    headlessControl(param, fade.raw[address]);
+  });
+
+  // Nach einem Preset-Wechsel kommt die neue Zielfarbe fertig gerechnet vom
+  // Server -- hier wird nur angezeigt. Siehe api_preset_load().
+  fadeSections.push((next) => {
+    if (!next) { return; }
+    target = { r: next.target.r, g: next.target.g, b: next.target.b };
+    decay = next.decay;
+    redraw();
+  });
+
+  redraw();
+  section.appendChild(body);
+  host.appendChild(section);
+}
+
+// Rueckruf je Nachleucht-Sektion, aufgerufen nach einem Preset-Wechsel.
+const fadeSections = [];
+
 // ---------------------------------------------------------------------------
 // Farbpalette
 //
@@ -552,20 +933,35 @@ function paletteSwatchColor(entry) {
  * der Regler, genau wie im Farbwaehler -- sonst laufen angezeigter und
  * gesendeter Wert auseinander. */
 function applyPaletteEntry(control, entry) {
-  const updates = [
-    { address: control.components.hue.address,
-      value: roundToStep(entry.hue, control.components.hue) },
-    { address: control.components.sat.address,
-      value: roundToStep(entry.sat, control.components.sat) },
-    { address: control.components.bright.address,
-      value: roundToStep(entry.bright, control.components.bright) },
-  ];
+  // Die Palette haelt Hue/Sat/Bright. Eine RGB-Karte (Impulsfarbe, die acht
+  // Stripe-Slots) braucht dieselbe Farbe in ihrem eigenen Farbraum -- sonst
+  // waere die "Palette, die von allen gewaehlt werden kann" genau an den
+  // Karten nicht verfuegbar, die es seit 2026-08-01 dazugibt.
+  let updates;
+  if (control.kind === 'rgb') {
+    const rgb = hsbToRgb(entry.hue, entry.sat, entry.bright);
+    updates = ['r', 'g', 'b'].map((key, i) => ({
+      address: control.components[key].address,
+      value: roundToStep(rgb[i], control.components[key]),
+    }));
+  } else {
+    updates = [
+      { address: control.components.hue.address,
+        value: roundToStep(entry.hue, control.components.hue) },
+      { address: control.components.sat.address,
+        value: roundToStep(entry.sat, control.components.sat) },
+      { address: control.components.bright.address,
+        value: roundToStep(entry.bright, control.components.bright) },
+    ];
+  }
   updates.forEach((u) => controls.get(u.address).set(u.value, true));
   // Das Farbfeld der Karte zieht nicht von selbst nach: es haengt am
   // input-Ereignis seines eigenen Waehlers, und set(..., true) loest keins
   // aus (dieselbe Regel wie beim Preset-Laden).
   const card = colorCards.find((c) => c.base === control.base);
   if (card) { syncColorCard(card); }
+  const rgbCard = rgbCards.find((c) => c.base === control.base);
+  if (rgbCard) { syncRgbCard(rgbCard); }
   queueSendMany('color:' + control.base, updates);
   setStatus('Palette „' + entry.name + '“ auf ' + control.base
     + ' angewendet', 'ok');
@@ -726,12 +1122,20 @@ function buildPaletteSection(host) {
       nameInput.focus();
       return;
     }
-    const entry = {
-      name: name,
-      hue: controls.get(activeColorCard.components.hue.address).get(),
-      sat: controls.get(activeColorCard.components.sat.address).get(),
-      bright: controls.get(activeColorCard.components.bright.address).get(),
-    };
+    // Die Palette speichert Hue/Sat/Bright. Kommt die Farbe von einer
+    // RGB-Karte, wird sie hier umgerechnet -- die Palette soll denselben
+    // Eintrag liefern, egal von welcher Karte er stammt.
+    let hsb;
+    if (activeColorCard.kind === 'rgb') {
+      hsb = rgbToHsb(controls.get(activeColorCard.components.r.address).get(),
+                     controls.get(activeColorCard.components.g.address).get(),
+                     controls.get(activeColorCard.components.b.address).get());
+    } else {
+      hsb = [controls.get(activeColorCard.components.hue.address).get(),
+             controls.get(activeColorCard.components.sat.address).get(),
+             controls.get(activeColorCard.components.bright.address).get()];
+    }
+    const entry = { name: name, hue: hsb[0], sat: hsb[1], bright: hsb[2] };
     // Gleicher Name ersetzt -- dieselbe Regel wie in der Datei, wo die
     // letzte Zeile gewinnt. Der Server lehnt einen doppelten Namen ab, ein
     // blindes concat() liefe also in einen Fehler.
@@ -760,6 +1164,8 @@ function buildPaletteSection(host) {
 function render(data) {
   controls.clear();
   colorCards.length = 0;
+  rgbCards.length = 0;
+  fadeSections.length = 0;
   // Die Palette-Registrierungen zeigen nach einem Neuaufbau auf Elemente,
   // die nicht mehr im Dokument stehen -- ohne das Zuruecksetzen wuechsen
   // paletteRows bei jedem "Neu laden" an.
@@ -876,6 +1282,11 @@ async function loadPreset() {
       touched += 1;
     });
     colorCards.forEach(syncColorCard);
+    rgbCards.forEach(syncRgbCard);
+    // Die Nachleucht-Sektion zeigt Zielfarbe und Tempo, nicht die drei rohen
+    // Raten -- sie kann sich aus data.values nicht nachziehen. Der Server
+    // legt den fertig gerechneten Block der Antwort bei.
+    fadeSections.forEach((update) => update(data.fade));
 
     let text = `Preset "${name}" geladen – ${touched} Regler nachgezogen`;
     let level = 'ok';
@@ -2197,6 +2608,8 @@ function buildTabs(data) {
     (tab.sections || []).forEach((name) => {
       if (name === 'sequencer') { buildSequencer(data, panel); }
       if (name === 'speedClasses') { buildSpeedClasses(data, panel); }
+      if (name === 'impulseColor') { buildImpulseColor(data, panel); }
+      if (name === 'fade') { buildFade(data, panel); }
       if (name === 'palette') { buildPaletteSection(panel); }
       if (name === 'split') { buildSplit(data, panel); }
       if (name === 'songStructure') { buildSongStructure(data, panel); }

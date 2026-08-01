@@ -657,10 +657,11 @@ ADDRESS_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
         "Show-Fader ueber alle 18 000 LEDs. Wirkt auf die Hardware; die "
         "Vorschau im Sketch-Fenster zeigt weiter volle Helligkeit."),
     "Master/trace": (
-        "Nachleuchten",
+        "Nachleuchten (Gesamtbild)",
         "Wieviel vom vorigen Bild stehen bleibt, bevor das neue darauf "
         "gemischt wird. 0 = harte Punkte, hoch = lange Schweife durch das "
-        "ganze Netz."),
+        "ganze Netz. Wirkt auf ALLE Ebenen; die Spur der Impulse allein "
+        "regelt der Farben-Tab."),
     "Master/0/opacity/0.Impulse": (
         "Ebene: Impulse",
         "Deckkraft der wandernden Impulse in der Mischung."),
@@ -2142,7 +2143,11 @@ GROUP_TITLE_OVERRIDES = {
     "Master": "Ebenen und Nachleuchten",
     "master": "Gesamt-Helligkeit",
     "net/impulse": "Impuls-Physik",
-    "net/impulse/color": "Impuls-Farbe",
+    # Nach dem Farbwaehler-Umbau steht hier nur noch die Farbkurve: die drei
+    # Kanaele und der Moduswahlschalter gehoeren der Sektion "Impuls-Farbe".
+    # Derselbe Titel fuer beides waeren zwei Ueberschriften, die dasselbe
+    # versprechen und Verschiedenes halten.
+    "net/impulse/color": "Impuls-Farbe: Feinheiten",
     "net/impulse/randomize": "Impuls-Randomizer (Sinus)",
     "net/impulse/split": "Split-Verhalten",
     "net/randomSpawn": "Zufalls-Spawns",
