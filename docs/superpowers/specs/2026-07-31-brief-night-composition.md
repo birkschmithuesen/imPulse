@@ -347,6 +347,105 @@ tunbar machen: Wahrscheinlichkeits-Gewichte pro Speed-Stufe als eigene kleine
 Sektion, gerne mit visueller Verteilungs-Vorschau falls das ohne großen
 Aufwand machbar ist (nice-to-have, nicht Kernanforderung).
 
+## Feature 7: Baum-Origin-Filter für Sequencer-Tracks (nachgeliefert, Birk 2026-08-01)
+
+**Ziel:** Bisher kann ein Sequencer-Track per `originStripeOverride` auf einen
+festen Stripe eingeschränkt werden (-1 = zufällig unter allen 30 Stripes).
+Birk will zusätzlich auf Baum-Ebene filtern können: "nur von diesem einen
+Baum" oder "nur vom nächsten Baum" — es gibt 4 physische Bäume, an denen
+Gruppen von Stripes beginnen.
+
+**Datengrundlage (bereits vorbereitet):** `data/stripeTrees.txt` — neue Datei,
+Format `stripeIndex<TAB>baum<TAB>confidence<TAB>distanceMeters`, `baum` einer
+von `vorn|hinten|rechts|links`. Automatisch per Nächster-Nachbar aus
+`data/ledPositions.txt` generiert (erster LED-Anker jedes Stripes ↔ vier
+berechnete Baumpositionen). **Enthält bewusst Best-Guess-Zuordnungen** — 8 von
+30 Stripes sind mit `confidence=unsicher` markiert (Distanz > 1.5m zum
+zugeordneten Baum). Birk korrigiert diese Datei später von Hand — das Feature
+MUSS die Datei zur Laufzeit lesbar/austauschbar halten, keine Zuordnung fest
+im Java-Code verdrahten.
+
+**Gewünschtes Verhalten:**
+1. Neuer Parameter je Sequencer-Track: `/net/sequencer/track<N>/originTreeFilter`
+   — Werte: 0 = kein Filter (aktuelles Verhalten, alle Stripes bzw.
+   `originStripeOverride` greift wie bisher), 1..4 = nur Stripes zulassen,
+   die in `stripeTrees.txt` dem jeweiligen Baum zugeordnet sind (feste
+   Reihenfolge z.B. 1=vorn, 2=hinten, 3=rechts, 4=links — im Code klar
+   benannt, nicht nur nummeriert, Web-UI zeigt Klartext-Labels).
+2. Zusammenspiel mit dem bestehenden `originStripeOverride`: wenn
+   `originStripeOverride >= 0` gesetzt ist, hat das Vorrang (expliziter
+   Stripe schlägt Baum-Filter) — `originTreeFilter` wirkt nur, wenn
+   `originStripeOverride == -1` UND schränkt dann den Pool der zufällig
+   wählbaren Stripes auf die des gewählten Baums ein, statt aus allen 30 zu
+   ziehen. Wenn ein Baum-Filter aktiv ist UND der Track laut
+   "rotierend mit Gedächtnis"-Logik (siehe `OriginSequencer`, Modus 2 aus
+   Feature 2) einen neuen Ursprung zieht, muss die Ziehung aus dem gefilterten
+   Pool erfolgen.
+3. `stripeTrees.txt` einmalig beim Sketch-Start einlesen (analog
+   `LedAnchorStore`/`data/ledPositions.txt` Muster), Zeilen mit
+   `confidence=unsicher` genauso behandeln wie sichere — die Unsicherheit ist
+   nur eine Doku-Markierung für Birk, kein Laufzeitverhalten-Unterschied.
+   Kommentarzeilen (`#`) überspringen.
+4. Testbarkeit: eine reine Java-Klasse (analog `LedAnchorStore`,
+   `NodeCrossingStore`) für das Parsen von `stripeTrees.txt` + die
+   Filter-Logik ("gib mir alle Stripe-Indizes für Baum X"), mit eigener
+   Testsuite nach demselben Muster wie die bestehenden (`test/run.sh`
+   erweitern, siehe CLAUDE.md „Tests"-Abschnitt für das exakte Muster).
+
+## Feature 8: Web-UI — kompletter Tab-Umbau (nachgeliefert, Birk 2026-08-01)
+
+**Ist-Zustand:** Der Sequencer-Bereich ist bereits gut designt (Feature 5),
+aber der Rest der Oberfläche ist eine unstrukturierte, generische Liste aller
+`remoteSettings.txt`- und SC-Parameter — für einen Live-Operator zu
+unübersichtlich, "zu viel auf einmal".
+
+**Gewünschte Struktur — 5 Tabs, in dieser Reihenfolge:**
+
+1. **Mixer** — der Schnellzugriff-Tab. Gesamthelligkeit (Master/opacity-
+   Parameter), Gesamtlautstärke (`/master/level` bzw. das SC-Äquivalent
+   `masterVolume`), Bell-Volume, Drone-Volume, Reverb (Mix/Room/Damp). Alles,
+   was ein Operator während einer laufenden Show am häufigsten anfasst.
+2. **Sound Design** — Klangcharakteristik, NICHT Lautstärke (die ist im
+   Mixer). Unter-Struktur (Tabs oder klar getrennte Abschnitte) pro Synth:
+   - Glocken (Bell): brightness, detune, regionBiasAmount
+   - Drohne/Travel: droneLpfMult, travelFreqBase/Rq/GrainRatio/AmpScale,
+     travelSpeedRef, travelOctavesPerStep, travelSnap, travelFreqMin/Max
+3. **Spawn-Verhalten** — wo/wann ein Impuls entsteht: der bestehende
+   Sequencer-Bereich (BPM, 6 Tracks mit Enabled/NoteValue/RepeatCount/Energy/
+   SwingJitter/OriginStripeOverride, plus NEU: originTreeFilter aus Feature 7)
+   sowie RandomSpawn (enabled/count/interval/jitter/energy/directionBias) —
+   beide Spawn-Mechanismen gehören konzeptionell zusammen (Birk: "wie
+   gespawnt wird, also Sequencer oder Randomizer").
+4. **Noten-Verhalten** — die musikalisch-diskrete Schicht: SpeedQuantize
+   komplett (enabled, jitter, die 5 Gewichte 0.5x/1x/2x/4x/8x) — bewusst
+   getrennt von Tab 5, weil das quantisierte, "notenartige" Geschwindigkeits-
+   klassen sind, kein kontinuierlicher Physik-Parameter.
+5. **Impuls-Verhalten (Physik)** — die kontinuierliche Simulation NACH dem
+   Spawn: impulseSpeed (Grundwert), impulseLifetime + dessen Sinus-Randomizer
+   (enabled/min/max/period), nodeDeadTime, splitSpeedJitter,
+   splitLifetimeJitter, speed/randomize/* (falls vom Speed-Grundwert
+   getrennt, siehe bestehende Parameterliste in `remoteSettings.txt`).
+
+**Innerhalb jedes Tabs:** oben eine kuratierte Auswahl der wichtigsten/
+meistgenutzten Regler direkt sichtbar, darunter ein eingeklappter
+"Erweitert"-Bereich (wie das bestehende Muster bei der `Advanced`-Gruppe,
+`<details>`/`<summary>`) für alle übrigen Parameter desselben Themenbereichs.
+Eigenes Urteil, welche Parameter je Tab "wichtig" sind — Faustregel: alles,
+was Birk in dieser Session tatsächlich live per OSC verändert hat (siehe
+Session-Historie: bellVolume, droneVolume, masterVolume, travelMix,
+brightness, detune, sequencer/bpm, sequencer/trackN/energy, randomSpawn/*)
+gehört oben hin.
+
+**Technische Vorgabe:** Vanilla JS wie bisher (kein Framework/Build-Schritt,
+siehe bestehende `app.js`-Kommentare), Tab-Umschaltung rein clientseitig
+(keine Route/Reload nötig), bestehendes Preset-Laden/-Speichern und die
+Live-Werte-Synchronisation (`applied`/`echoed`-Mechanismus) MÜSSEN über alle
+Tabs hinweg weiter funktionieren — ein Preset kann Werte auf mehreren Tabs
+gleichzeitig setzen, die Regler auf inaktiven Tabs müssen trotzdem im
+Hintergrund aktualisiert werden (nicht erst beim Tab-Wechsel neu rendern).
+Bestehende Farbwähler/Trigger/Toggle-Widgets aus `app.js` wiederverwenden,
+nicht neu erfinden.
+
 ## Deliverables
 
 1. Alle vier Features (1, 2, 3, 4) implementiert nach obigem Muster.
