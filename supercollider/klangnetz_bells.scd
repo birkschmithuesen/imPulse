@@ -742,6 +742,62 @@ s.options.numInputBusChannels = 2;
 ~registerParam.(\tailSubglowRelease,  4.2,  0.2,  12.0,  nil);
 ~registerParam.(\tailSubglowAmp,      1.0,  0.0,   2.0,  nil);
 
+// ---- Tail-Orbit: Kreisbewegung um den Ausloeseort ----------------------
+// Jeder Tail wandert nach dem Trigger im Kreis um die Position des Knotens,
+// der ihn ausgeloest hat -- zufaellig rechts oder links herum, schnell am
+// Anfang, langsamer zum Ausklingen hin. Entwurf und Herleitung:
+// docs/superpowers/specs/2026-08-01-tail-synth-orbit-design.md (Branch
+// docs/tail-orbit-concept). Die Mathe steht in ~tailOrbitOut, hier stehen
+// nur die Regler.
+//
+// FUENF GLOBALE PARAMETER, nicht fuenf mal fuenf (Entscheidung 2026-08-01):
+// bei fuenf Tail-Synths waeren pro-Tail-Regler 25 Adressen fuer ein Feature,
+// von dem noch niemand gehoert hat, wie es sich im Raum anfuehlt. Der
+// Vertrag aendert sich nicht, wenn spaeter doch pro Tail differenziert wird
+// -- ~tailOrbitOut bekommt die Werte ohnehin als Argumente, nur die
+// Trigger-Stelle liest sie dann aus fuenf Adressen statt aus einer.
+//
+// Radius NORMIERT, nicht in Metern: 1.0 = Boxabstand. Die Grundflaeche ist
+// 14 x 8 m, ~toQuad normiert je Achse getrennt -- ein Kreis in Metern waere
+// im Lautsprecherraum eine Ellipse und klaenge nach einer schwankenden statt
+// nach einer runden Bewegung. Nebenwirkung, die man kennen muss:
+// tailOrbitRadius = 0.5 sind auf dem Grundriss 3.5 m in x, aber nur 2 m in y.
+// Auf dem Papier eine Ellipse, im Klangbild ein Kreis. Das ist gewollt.
+//
+// radius = 0 IST der Aus-Schalter und klingt bitgleich wie ein Tail ohne
+// dieses Feature -- dieselbe Idiomatik wie travelMix = 0 und
+// regionBiasAmount = 0, deshalb gibt es keinen enabled-Schalter.
+~registerParam.(\tailOrbitRadius, 0.25, 0.0, 2.0, nil);
+
+// Umdrehungen pro Sekunde BEI VOLLER HUELLKURVE (env = 1). Der insgesamt
+// ueberstrichene Winkel haengt deshalb nicht an diesem Wert allein, sondern
+// am Flaecheninhalt unter der Huellkurve:
+//   Umdrehungen gesamt = tailOrbitSpeed * Integral(env dt)
+// Fuer eine Perc-artige Huelle mit curve -4 und Ausklingzeit T ist dieses
+// Integral 0.2313 * T. Eine VOLLE Umdrehung ueber einen 4-Sekunden-Tail
+// braucht also tailOrbitSpeed ~ 1.08. Mit dem Default 0.5 kommt weniger als
+// eine halbe Umdrehung heraus -- kein Fehler, sondern die Folge davon, dass
+// die Bewegung mit dem Klang ausklingt. Die Zahl steht hier, weil sie sonst
+// beim Einstellen ueberrascht.
+~registerParam.(\tailOrbitSpeed, 0.5, 0.0, 4.0, nil);
+
+// Exponent auf die Huellkurve in der Ratenformel. < 1 = die Rotation haelt
+// laenger in den Ausklang hinein, > 1 = sie bremst frueher ab.
+~registerParam.(\tailOrbitEnvExp, 1.0, 0.25, 4.0, nil);
+
+// 0 = Richtung je Tail zufaellig (Betrieb), +-1 = Richtung erzwungen (zum
+// Pruefen, etwa in einer NRT-Messung). Gewuerfelt wird JE TAIL-SYNTH, nicht
+// je Treffer: bei einer gemeinsamen Ziehung rotierten alle fuenf Schichten
+// synchron und die additive Schichtung klaenge wieder wie eine Quelle.
+~registerParam.(\tailOrbitDirLock, 0.0, -1.0, 1.0, nil);
+
+// Untergrenze des wirksamen Radius, 0 = aus. Falls sich beim Hoeren zeigt,
+// dass kleine Radien nur verschmieren statt zu bewegen, ist die Untergrenze
+// damit eine Zahl und keine Codeaenderung. ACHTUNG, die eine Nebenwirkung:
+// steht dieser Wert ueber 0, ist tailOrbitRadius = 0 nicht mehr der
+// Aus-Schalter -- dann klemmt die Untergrenze den Radius wieder hoch.
+~registerParam.(\tailOrbitMinRadius, 0.0, 0.0, 0.5, nil);
+
 // ---- Einen Parameterwert anwenden --------------------------------------
 // DER einzige Ort, an dem ein Sound-Parameter seinen Wert bekommt. Sowohl
 // der OSC-Empfang (/klangnetz/param/<name>) als auch das Preset-Laden gehen
@@ -1035,6 +1091,83 @@ s.waitForBoot({
         )
     };
 
+    // ---- Tail-Orbit: Position + Encoder in einem -----------------------
+    // Sechs Zeilen Bahnrechnung, danach der VORHANDENE Encoder. Entwurf:
+    // docs/superpowers/specs/2026-08-01-tail-synth-orbit-design.md, Abschnitt
+    // 4-6. Ein Lambda statt fuenf Kopien -- dieselbe Ueberlegung wie bei
+    // ~toQuad und ~tailEnv.
+    //
+    // WINKEL ALS INTEGRAL DER HUELLKURVE, nicht als Funktion der Zeit mal
+    // Zerfall: Sweep.kr akkumuliert eine Rate, eine Aenderung der Rate
+    // verschiebt also nie die Position, nur die Steigung (dieselbe
+    // Eigenschaft, aus der MusicalClock auf der Java-Seite akkumuliert statt
+    // neu zu rechnen). Der naive Weg "Winkel = Grundtempo * t * decay(t)"
+    // liesse den Winkel bei starkem Zerfall gegen Ende ZURUECKLAUFEN -- die
+    // Bewegung kehrte um. Das Integral einer Rate kann das strukturell nicht.
+    //
+    // Sweep nimmt die Rate in EINHEITEN PRO SEKUNDE, deshalb steht
+    // tailOrbitSpeed hier direkt in Umdrehungen/s. Die naheliegende
+    // Alternative Phasor.kr erwartet den Zuwachs pro CONTROL-SAMPLE; wer dort
+    // ControlDur.ir vergisst, bekommt eine um Faktor ~689 zu schnelle
+    // Rotation -- hoerbar als Zirpen, nicht als Bewegung.
+    //
+    // env ist die AMPLITUDENhuellkurve, keine zweite Kurve: laut = schnell,
+    // leise = langsam, stumm = steht. Die Rotation hoert damit von selbst
+    // auf, wenn nichts mehr zu hoeren ist -- ohne Sonderfall, ohne
+    // Verzweigung. Zwei getrennte Kurven koennten auseinanderlaufen (dieselbe
+    // Ueberlegung wie bei splitLifetimeJitter auf der Java-Seite, das bewusst
+    // ein Faktor auf lifetime ist und kein Ersatzwert).
+    //
+    // RADIUS WAECHST VON 0 AN (entschieden, Abschnitt 2 des Entwurfs): der
+    // Tail startet exakt am Ausloeseort und schraubt sich nach aussen. Bei
+    // festem Radius saesse er zum Zeitpunkt 0 schon einen Radius daneben --
+    // ein Sprung im Einsatz. Als Rampe dient die ATTACK-FLANKE desselben
+    // Tails, kein eigener Parameter. Was man davon erwarten darf: bei den
+    // kurzen Attacks (Shimmer/Whoosh/Sub-Glow, 20-30 ms) entfernt die Rampe
+    // nur den Sprung, sie ist keine hoerbare Spiralbewegung; bei FM-Glide und
+    // Granular (0.7 s) ist sie eine.
+    //
+    // RAUTEN-CLAMPING |xn| + |yn| <= 1 (entschieden, Abschnitt 5), NICHT
+    // Kreis-Clamping: ~toQuad uebergibt Pan4 nicht xn/yn, sondern die
+    // 45-Grad-Rotation (xw - yw, xw + yw). Beide Argumente bleiben genau dann
+    // in +-1, wenn die Summe der Betraege <= 1 ist -- also innerhalb der
+    // RAUTE mit den Ecken (+-1, 0), (0, +-1), und das ist genau die konvexe
+    // Huelle der vier Boxen. Der Einheitskreis ist groesser: auf der
+    // Diagonale (xn = yn = 0.707, r = 1) ist die Summe 1.41, ein
+    // Pan4-Argument also 41 % ueber dem Bereich. Klemmt Pan4 intern, STEHT
+    // die Quelle dort still, waehrend der Winkel weiterlaeuft -- viermal pro
+    // Umdrehung, jeweils zwischen zwei Lautsprechern. Bei einer feststehenden
+    // Glocke faellt das nicht auf, bei einem Feature, dessen ganzer Zweck die
+    // Bewegung ist, schon.
+    //
+    // Das Clamping erfasst den AUSLOESEORT mit: eine Ecke der Grundflaeche
+    // liegt normiert bei |7/7| + |4/4| = 2.0, also weit ausserhalb. Ein
+    // Knoten dort erzeugt einen Orbit, der komplett draussen laege; die
+    // Formel projiziert ihn geschlossen auf den Rand, statt einen Sonderfall
+    // zu brauchen. Kein Kollaps, keine Stille, kein if. max(k, 1) >= 1, also
+    // nie eine Division durch 0, und bei k <= 1 ist scale exakt 1 -- dann ist
+    // das Ergebnis bitgleich der ungeklemmten Bahn.
+    ~tailOrbitOut = { |sig, env, x0, y0, attack, orbitRadius, orbitSpeed,
+            orbitEnvExp, orbitDir, orbitMinRadius|
+        var angle, radiusRamp, rEff, xn, yn, k, scale;
+        angle = Sweep.kr(0, orbitDir * orbitSpeed * env.pow(orbitEnvExp)) * 2pi;
+        radiusRamp = EnvGen.kr(Env([0, 1], [attack], \sin));
+        rEff = orbitRadius.max(orbitMinRadius) * radiusRamp;
+        // Konvention wie ~testSweep: x = sin, y = cos. Winkel 0 zeigt nach
+        // VORN (+y), wachsender Winkel laeuft vorn -> rechts -> hinten ->
+        // links, orbitDir = +1 ist also "rechts herum".
+        xn = (x0 / ~maxX) + (rEff * angle.sin);
+        yn = (y0 / ~maxY) + (rEff * angle.cos);
+        k = xn.abs + yn.abs;
+        scale = 1 / k.max(1);   // Betrag gekappt, der Winkel laeuft weiter
+        // Zurueck in Meter und durch den EINZIGEN Encoder: dort sitzen die
+        // 45-Grad-Rotation, die Kanalkonvention und ~panSharpness. Ein
+        // zweiter Encoder-Pfad, der normierte Koordinaten direkt naehme,
+        // spaerte zwei Multiplikationen und kostete eine zweite Stelle, an
+        // der all das gepflegt werden muss.
+        ~toQuad.(sig, xn * scale * ~maxX, yn * scale * ~maxY)
+    };
+
     // ---- SynthDef: Glockenspiel-Ton ----------------------------------
     // Mehrere Sinus-Partialtöne mit leicht unharmonischen Frequenzverhältnissen
     // (typisch für Glocken-/Metallophon-Klänge) und je eigener Decay-Zeit:
@@ -1132,7 +1265,8 @@ s.waitForBoot({
     // abgenommene Klang.
     SynthDef(\tail1_shimmer, { |freq = 440, amp = 0.22, out = 0, x0 = 0, y0 = 0,
             attack = 0.02, decay = 0.0, sustain = 1.0, release = 4.5,
-            tailVolume = 1.0|
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
         var sig, env, n = 6;
         env = ~tailEnv.(attack, decay, sustain, release, -2);
         sig = Mix.fill(n, { |i|
@@ -1141,24 +1275,28 @@ s.waitForBoot({
         });
         sig = sig * amp * tailVolume * env;
         sig = FreeVerb.ar(sig, 0.5, 0.9, 0.3);
-        Out.ar(out, ~toQuad.(sig, x0, y0));
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
     }).add;
 
     SynthDef(\tail2_whoosh, { |freq = 440, amp = 0.28, out = 0, x0 = 0, y0 = 0,
             attack = 0.02, decay = 0.0, sustain = 1.0, release = 3.2,
-            tailVolume = 1.0|
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
         var sig, env, sweepFreq;
         env = ~tailEnv.(attack, decay, sustain, release, -3);
         sweepFreq = XLine.kr(freq * 6, freq * 0.8, release);
         sig = BPF.ar(WhiteNoise.ar(1), sweepFreq, 0.15);
         sig = sig + (BPF.ar(WhiteNoise.ar(1), sweepFreq * 2, 0.1) * 0.4);
         sig = sig * amp * tailVolume * env;
-        Out.ar(out, ~toQuad.(sig, x0, y0));
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
     }).add;
 
     SynthDef(\tail3_fmglide, { |freq = 440, amp = 0.24, out = 0, x0 = 0, y0 = 0,
             attack = 0.7, decay = 0.0, sustain = 1.0, release = 3.8,
-            tailVolume = 1.0|
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
         var sig, env, car, modIdx, glideFreq;
         env = ~tailEnv.(attack, decay, sustain, release, -4);
         glideFreq = XLine.kr(freq * 1.5, freq * 0.5, release);
@@ -1166,12 +1304,14 @@ s.waitForBoot({
         car = SinOsc.ar(glideFreq + (SinOsc.ar(glideFreq * 2.756) * glideFreq * modIdx * 0.1));
         sig = car * amp * tailVolume * env;
         sig = FreeVerb.ar(sig, 0.4, 0.85, 0.25);
-        Out.ar(out, ~toQuad.(sig, x0, y0));
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
     }).add;
 
     SynthDef(\tail4_granular, { |freq = 440, amp = 0.26, out = 0, x0 = 0, y0 = 0,
             attack = 0.7, decay = 0.0, sustain = 1.0, release = 3.5,
-            tailVolume = 1.0|
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
         var sig, env, trig, grainFreq, grainDur;
         env = ~tailEnv.(attack, decay, sustain, release, -2);
         trig = Dust.kr(XLine.kr(35, 5, release));
@@ -1180,19 +1320,22 @@ s.waitForBoot({
         // numChannels 1, kein pan: siehe Block oben.
         sig = GrainSin.ar(1, trig, grainDur, grainFreq, envbufnum: -1);
         sig = sig * amp * tailVolume * env;
-        Out.ar(out, ~toQuad.(sig, x0, y0));
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
     }).add;
 
     SynthDef(\tail5_subglow, { |freq = 440, amp = 0.3, out = 0, x0 = 0, y0 = 0,
             attack = 0.03, decay = 0.0, sustain = 1.0, release = 4.2,
-            tailVolume = 1.0|
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
         var sig, env, sub, trem;
         env = ~tailEnv.(attack, decay, sustain, release, -2);
         trem = SinOsc.kr(4.5).range(0.6, 1.0);
         sub = (SinOsc.ar(freq / 2) * 0.7) + (SinOsc.ar(freq / 4) * 0.3);
         sig = sub * trem * amp * tailVolume * env;
         sig = FreeVerb.ar(sig, 0.3, 0.7, 0.2);
-        Out.ar(out, ~toQuad.(sig, x0, y0));
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
     }).add;
 
     // ---- SynthDef: Drohne eines reisenden Impulses --------------------
