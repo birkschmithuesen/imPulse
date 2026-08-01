@@ -2140,8 +2140,12 @@ s.waitForBoot({
 
     "KlangNetz Hang-Drum-Bells (Phrygisch ab A2, Pan4 auf % Kanaele, Limiter): hoere auf /net/hitNode und /net/impulse, Port % - bereit.".format(
         s.options.numOutputBusChannels, ~oscListenPort).postln;
-    ("Polyphonie: hoechstens % Glocken und % Drohnen gleichzeitig.".format(
-        ~maxPolyphony, ~droneLimit)).postln;
+    // "Stimmen", nicht "Glocken": ein Eintrag ist die Glocke PLUS ihre fuenf
+    // Tails (siehe ~maxPolyphony). Die Synth-Zahl dahinter ist die, die den
+    // Server beschaeftigt, und die soll im Startbericht stehen.
+    (("Polyphonie: hoechstens % Stimmen (je bis zu % Synths: Glocke +"
+        + "% Tails) und % Drohnen gleichzeitig.").format(
+        ~maxPolyphony, ~tailDefs.size + 1, ~tailDefs.size, ~droneLimit)).postln;
     ("Sound-Parameter-Layer aktiv: % Parameter unter /klangnetz/param/<name>, Port % - siehe Adressliste im Kopf der Datei.".format(
         ~params.size, ~oscListenPort)).postln;
     "KlangNetz: Panning auf Pan4 umgebaut (2026-07-31), Rotation+Hardware-Kanal-Permutation per NRT-Messung verifiziert - alle vier Boxpositionen 100% scharf, Netzmitte 25/25/25/25%.".postln;
