@@ -74,16 +74,24 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   // gerade live.
   RemoteControlledFloatParameter[] splitFanoutWeights =
       new RemoteControlledFloatParameter[SplitFanout.CATEGORY_COUNT];
-  // Eigener Schalter statt "Notenwert 0 heisst aus": die Range 1..16 ist die
-  // Notenwert-Konvention des Sequencers, eine 0 darin waere ein Sonderwert in
-  // einer Skala, die sonst rastet. Ausserdem behaelt ein Operator so seinen
-  // eingestellten Notenwert, waehrend er den Versatz zum Vergleich ab- und
-  // wieder anschaltet.
+  // Eigener Schalter statt "alle Gewichte 0 heisst aus": lauter Nullen sind
+  // der entartete Fall der Ziehung und fallen auf Sechzehntel zurueck (siehe
+  // SplitStagger.NEUTRAL_NOTE_INDEX), sind also gerade kein Aus. Ausserdem
+  // behaelt ein Operator so seine eingestellte Verteilung, waehrend er den
+  // Versatz zum Vergleich ab- und wieder anschaltet.
   RemoteControlledIntParameter splitStaggerEnabled;
-  RemoteControlledIntParameter splitStaggerNoteValue;
+  // Ein Gewicht je Notenwert-Klasse, Reihenfolge wie
+  // OriginSequencer.NOTE_VALUES (Ganze .. Sechzehntel). Bis 2026-08-01 stand
+  // hier ein einzelner fester Notenwert - er machte jeden Versatz im ganzen
+  // Betrieb gleich lang. Gezogen wird je Aufspaltung, nicht je Zweig, damit
+  // die Kinder eines Splits auf demselben Raster stehen (siehe
+  // SplitStagger.pickNoteValue).
+  RemoteControlledFloatParameter[] splitStaggerNoteWeights =
+      new RemoteControlledFloatParameter[SplitStagger.NOTE_COUNT];
   // Wiederverwendet statt je Treffer neu angelegt - bei dichtem Betrieb
   // spalten mehrere Impulse je Frame auf.
   private final float[] fanoutScratch = new float[SplitFanout.CATEGORY_COUNT];
+  private final float[] staggerScratch = new float[SplitStagger.NOTE_COUNT];
   private final ArrayList<PendingSpawn> splitCandidates = new ArrayList<PendingSpawn>();
   final SplitStagger splitStagger = new SplitStagger();
 
@@ -229,10 +237,26 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           "/net/impulse/split/weight/"+fanoutNames[i], fanoutDefaults[i], 0f, 100f);
     }
     splitStaggerEnabled= new RemoteControlledIntParameter("/net/impulse/split/staggerEnabled", 0, 0, 1);
-    // Range 1..16 wie beim Sequencer-Notenwert, SplitStagger.delayBeats()
-    // rastet beim Lesen auf 1/2/4/8/16. Default 16 = Sechzehntel, der
-    // kuerzeste und damit unauffaelligste Versatz.
-    splitStaggerNoteValue= new RemoteControlledIntParameter("/net/impulse/split/staggerNoteValue", 16, 1, 16);
+    // Gewichte der Notenwert-Klassen, Schwerpunkt auf den kurzen: Sechzehntel
+    // 60, Achtel 30, Viertel 10. Der Versatz soll knapp bleiben - ein halber
+    // Takt zwischen zwei Zweigen liest sich nicht mehr als eine Aufspaltung,
+    // sondern als zwei unabhaengige Impulse. Halbe und Ganze stehen deshalb
+    // auf 0 und sind da, wenn jemand sie haben will.
+    //
+    // Bereich 0..100 wie bei den Fanout-Gewichten und den Speed-Klassen: eine
+    // dritte Skala fuer dieselbe Sache waere ein Regler, dessen Zahl in der
+    // Nachbarsektion etwas anderes bedeutet. Normalisiert wird ohnehin
+    // (WeightedChoice), die Summe muss nicht 100 sein.
+    //
+    // Adressnamen ausgeschrieben statt "16": eine Zahl in der Adresse liest
+    // sich in remoteSettings.txt wie eine Anzahl, nicht wie ein Notenwert.
+    String[] staggerNoteNames = { "whole", "half", "quarter", "eighth", "sixteenth" };
+    float[] staggerNoteDefaults = { 0f, 0f, 10f, 30f, 60f };
+    for (int i=0; i<SplitStagger.NOTE_COUNT; i++) {
+      splitStaggerNoteWeights[i]= new RemoteControlledFloatParameter(
+          "/net/impulse/split/stagger/weight/"+staggerNoteNames[i],
+          staggerNoteDefaults[i], 0f, 100f);
+    }
 
     // Randomizer: Auslieferungszustand aus (0), ein Operator schaltet ihn live
     // per OSC/Web-UI ein. Die Defaults spannen einen Bereich um den jeweiligen
@@ -648,7 +672,22 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // LED-Index - ein Vorrang, den kein Regler zeigt.
     int[] order=SplitFanout.chooseOrder(candidates, take, mathRandom);
     boolean stagger=splitStaggerEnabled.getValue() == 1;
-    int noteValue=splitStaggerNoteValue.getValue();
+    // EINE Ziehung fuer die ganze Aufspaltung, nicht eine je Kind: alle
+    // Zweige stehen damit auf demselben Raster. Je Kind gezogen waeren schon
+    // die Abstaende innerhalb eines Splits ungleich - genau die
+    // Gleichmaessigkeit, an der ein Rhythmus zu erkennen ist. Was von
+    // Aufspaltung zu Aufspaltung wechseln soll, ist die Klasse selbst.
+    // Bei ausgeschaltetem Versatz wird gar nicht gezogen: der Wert geht dann
+    // in keine Rechnung ein (delay bleibt 0), und ein Math.random() je
+    // Aufspaltung waere Arbeit fuer nichts. 16 steht hier als gueltiger
+    // Notenwert, nicht als Bedeutung.
+    int noteValue=16;
+    if (stagger) {
+      for (int i=0; i<splitStaggerNoteWeights.length; i++) {
+        staggerScratch[i]=splitStaggerNoteWeights[i].getValue();
+      }
+      noteValue=SplitStagger.pickNoteValue(staggerScratch, Math.random());
+    }
     double beats=musicalClock.beats();
     for (int slot=0; slot<order.length; slot++) {
       PendingSpawn p=splitCandidates.get(order[slot]);
