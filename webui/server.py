@@ -1307,8 +1307,10 @@ TAB_EXPANDED = {TAB_COLORS}
 # Kuratierte SC-Parameter je Tab (Namen, nicht Adressen). Der Rest desselben
 # Tabs landet im Erweitert-Bereich.
 SC_PRIMARY: Dict[str, List[str]] = {
-    TAB_MIXER: ["masterVolume", "bellVolume", "droneVolume", "reverbMix"],
+    TAB_MIXER: ["masterVolume", "bellVolume", "droneVolume", "tailVolume",
+                "reverbMix"],
     TAB_SOUND: ["travelMix", "brightness", "detune", "regionBiasAmount",
+                "tailOrbitRadius", "tailOrbitSpeed",
                 "travelRq", "travelGrainRatio"],
 }
 
@@ -1377,10 +1379,18 @@ SC_PARAMS: List[Dict[str, Any]] = [
      "group": "Master", "label": "Lautstaerke der Glocken", "description":
      "Nur die Toene, die an den Kreuzungen anschlagen. Wirkt erst auf den "
      "naechsten Ton - eine Glocke wird nicht mittendrin leiser."},
-    {"name": "droneVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
+    # Default 0.0 wie in der .scd (~registerParam \droneVolume): die Tondrohne
+    # ist ab Werk stumm, sie wird vor Ort hochgezogen. Die 1.0, die hier bis
+    # zum Merge der Bell-Tails stand, war eine Abweichung von der Registry.
+    {"name": "droneVolume", "tab": TAB_MIXER, "default": 0.0, "min": 0.0, "max": 1.5,
      "group": "Master", "label": "Lautstaerke der Impuls-Drohnen", "description":
      "Nur die liegenden Klaenge, die den reisenden Impulsen folgen. Wirkt "
      "sofort, auch auf schon klingende Stimmen."},
+    {"name": "tailVolume", "tab": TAB_MIXER, "default": 0.5, "min": 0.0, "max": 1.5,
+     "group": "Master", "label": "Lautstaerke der Schweife", "description":
+     "Nur die fuenf Schweife, die bei jedem Knotentreffer zusaetzlich zur "
+     "Glocke klingen. 0 spart auch Stimmen - der Synth entsteht dann gar "
+     "nicht erst."},
     {"name": "reverbMix", "tab": TAB_MIXER, "default": 0.35, "min": 0.0, "max": 1.0,
      "group": "Master", "label": "Hallanteil", "description":
      "Trocken zu nass. Der Hall sitzt hinter der Ortung, verwischt sie also "
@@ -1458,6 +1468,114 @@ SC_PARAMS: List[Dict[str, Any]] = [
      "group": "Travel-Sound", "label": "Wind: hoechste Tonlage", "description":
      "Harte Obergrenze - darueber steigt der Wind nie, egal wie schnell ein "
      "Impuls reist."},
+    # ---- Bell-Tails: Orbit (fuenf globale Regler fuer alle fuenf Tails) ----
+    {"name": "tailOrbitRadius", "tab": TAB_SOUND, "default": 0.25, "min": 0.0, "max": 2.0,
+     "group": "Tail-Orbit", "label": "Radius der Kreisbahn", "description":
+     "Wie weit ein Schweif um den Knoten kreist, der ihn ausgeloest hat. "
+     "Normiert: 1.0 = Abstand zur Box, 0 = keine Rotation."},
+    {"name": "tailOrbitSpeed", "tab": TAB_SOUND, "default": 0.5, "min": 0.0, "max": 4.0,
+     "group": "Tail-Orbit", "label": "Tempo der Kreisbahn", "description":
+     "Umdrehungen je Sekunde bei voller Lautstaerke. Die Bewegung klingt mit "
+     "dem Schweif aus, eine ganze Umdrehung ueber 4 s braucht rund 1.08."},
+    {"name": "tailOrbitEnvExp", "tab": TAB_SOUND, "default": 1.0, "min": 0.25, "max": 4.0,
+     "group": "Tail-Orbit", "label": "Nachlauf der Kreisbahn", "description":
+     "Wie eng die Rotation am Lautstaerkeverlauf haengt. Unter 1 dreht der "
+     "Schweif bis in den Ausklang hinein weiter, ueber 1 steht er frueher."},
+    {"name": "tailOrbitDirLock", "tab": TAB_SOUND, "default": 0.0, "min": -1.0, "max": 1.0,
+     "group": "Tail-Orbit", "label": "Drehrichtung festhalten", "description":
+     "0 = jeder Schweif wuerfelt links oder rechts herum, so laeuft der "
+     "Betrieb. +1 oder -1 erzwingen eine Richtung, zum Pruefen der Bewegung."},
+    {"name": "tailOrbitMinRadius", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 0.5,
+     "group": "Tail-Orbit", "label": "Kleinster Radius", "description":
+     "Untergrenze der Kreisbahn. Ueber 0 ist der Radius kein Aus-Schalter "
+     "mehr - es kreist dann immer etwas."},
+    # ---- Bell-Tails: Huellkurve und Pegel je Schicht ----------------------
+    # Alle fuenf nach demselben Muster: Attack/Decay/Sustain/Release/Amp.
+    # Sustain ist ein PLATEAU-PEGEL, kein gehaltenes Segment -- die Tails sind
+    # One-Shots wie die Glocke (Begruendung in der .scd).
+    #
+    # Die Titel tragen den Namen ihrer Schicht ("Schimmer: Einschwingen"),
+    # obwohl er auch in der Gruppenueberschrift steht: die Titel muessen ueber
+    # die ganze Tabelle eindeutig sein, sonst stuenden fuenfmal "Einschwingen"
+    # nebeneinander (test_labels_are_unique).
+    {"name": "tailShimmerAttack", "tab": TAB_SOUND, "default": 0.02, "min": 0.001, "max": 2.0,
+     "group": "Tail 1 Glass Shimmer", "label": "Schimmer: Einschwingen",
+     "description": "Einschwingzeit in s."},
+    {"name": "tailShimmerDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 1 Glass Shimmer", "label": "Schimmer: Abfall",
+     "description": "Abfall zum Halteplateau. 0 = kein Knick."},
+    {"name": "tailShimmerSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 1 Glass Shimmer", "label": "Schimmer: Halteplateau",
+     "description": "Pegel nach dem Abfall, gehalten bis zum Ausklang."},
+    {"name": "tailShimmerRelease", "tab": TAB_SOUND, "default": 4.5, "min": 0.2, "max": 12.0,
+     "group": "Tail 1 Glass Shimmer", "label": "Schimmer: Ausklingen",
+     "description": "Ausklingzeit in s."},
+    {"name": "tailShimmerAmp", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 1 Glass Shimmer", "label": "Schimmer: Pegel",
+     "description": "Pegel dieser Schicht. 0 = der Synth entsteht gar nicht erst."},
+    {"name": "tailWhooshAttack", "tab": TAB_SOUND, "default": 0.02, "min": 0.001, "max": 2.0,
+     "group": "Tail 2 Digital Whoosh", "label": "Whoosh: Einschwingen",
+     "description": "Einschwingzeit in s."},
+    {"name": "tailWhooshDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 2 Digital Whoosh", "label": "Whoosh: Abfall",
+     "description": "Abfall zum Halteplateau. 0 = kein Knick."},
+    {"name": "tailWhooshSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 2 Digital Whoosh", "label": "Whoosh: Halteplateau",
+     "description": "Pegel nach dem Abfall, gehalten bis zum Ausklang."},
+    {"name": "tailWhooshRelease", "tab": TAB_SOUND, "default": 3.2, "min": 0.2, "max": 12.0,
+     "group": "Tail 2 Digital Whoosh", "label": "Whoosh: Ausklingen",
+     "description": "Ausklingzeit UND Laufzeit des Bandpass-Sweeps in s."},
+    {"name": "tailWhooshAmp", "tab": TAB_SOUND, "default": 3.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 2 Digital Whoosh", "label": "Whoosh: Pegel", "description":
+     "Pegel dieser Schicht. Default 3.0, weil gefiltertes Rauschen gemessen "
+     "rund 10 dB leiser ist als die anderen vier."},
+    {"name": "tailFmglideAttack", "tab": TAB_SOUND, "default": 0.7, "min": 0.001, "max": 2.0,
+     "group": "Tail 3 FM-Glide", "label": "FM-Glide: Einschwingen", "description":
+     "Einschwingzeit in s. Bewusst lang -- Teil des abgenommenen Klangs."},
+    {"name": "tailFmglideDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 3 FM-Glide", "label": "FM-Glide: Abfall",
+     "description": "Abfall zum Halteplateau. 0 = kein Knick."},
+    {"name": "tailFmglideSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 3 FM-Glide", "label": "FM-Glide: Halteplateau",
+     "description": "Pegel nach dem Abfall, gehalten bis zum Ausklang."},
+    {"name": "tailFmglideRelease", "tab": TAB_SOUND, "default": 3.8, "min": 0.2, "max": 12.0,
+     "group": "Tail 3 FM-Glide", "label": "FM-Glide: Ausklingen", "description":
+     "Ausklingzeit UND Laufzeit von Tonhoehen-Glide und FM-Index in s."},
+    {"name": "tailFmglideAmp", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 3 FM-Glide", "label": "FM-Glide: Pegel",
+     "description": "Pegel dieser Schicht. 0 = der Synth entsteht gar nicht erst."},
+    {"name": "tailGranularAttack", "tab": TAB_SOUND, "default": 0.7, "min": 0.001, "max": 2.0,
+     "group": "Tail 4 Granularer Zerfall", "label": "Granular: Einschwingen",
+     "description":
+     "Einschwingzeit in s. Bewusst lang -- Teil des abgenommenen Klangs."},
+    {"name": "tailGranularDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 4 Granularer Zerfall", "label": "Granular: Abfall",
+     "description": "Abfall zum Halteplateau. 0 = kein Knick."},
+    {"name": "tailGranularSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 4 Granularer Zerfall", "label": "Granular: Halteplateau",
+     "description": "Pegel nach dem Abfall, gehalten bis zum Ausklang."},
+    {"name": "tailGranularRelease", "tab": TAB_SOUND, "default": 3.5, "min": 0.2, "max": 12.0,
+     "group": "Tail 4 Granularer Zerfall", "label": "Granular: Ausklingen",
+     "description":
+     "Ausklingzeit UND Zeit, in der die Koernerdichte von 35 auf 5 je s faellt."},
+    {"name": "tailGranularAmp", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 4 Granularer Zerfall", "label": "Granular: Pegel",
+     "description": "Pegel dieser Schicht. 0 = der Synth entsteht gar nicht erst."},
+    {"name": "tailSubglowAttack", "tab": TAB_SOUND, "default": 0.03, "min": 0.001, "max": 2.0,
+     "group": "Tail 5 Sub-Glow", "label": "Sub-Glow: Einschwingen",
+     "description": "Einschwingzeit in s."},
+    {"name": "tailSubglowDecay", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 5 Sub-Glow", "label": "Sub-Glow: Abfall",
+     "description": "Abfall zum Halteplateau. 0 = kein Knick."},
+    {"name": "tailSubglowSustain", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
+     "group": "Tail 5 Sub-Glow", "label": "Sub-Glow: Halteplateau",
+     "description": "Pegel nach dem Abfall, gehalten bis zum Ausklang."},
+    {"name": "tailSubglowRelease", "tab": TAB_SOUND, "default": 4.2, "min": 0.2, "max": 12.0,
+     "group": "Tail 5 Sub-Glow", "label": "Sub-Glow: Ausklingen",
+     "description": "Ausklingzeit in s."},
+    {"name": "tailSubglowAmp", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 4.0,
+     "group": "Tail 5 Sub-Glow", "label": "Sub-Glow: Pegel",
+     "description": "Pegel dieser Schicht. 0 = der Synth entsteht gar nicht erst."},
 ]
 
 

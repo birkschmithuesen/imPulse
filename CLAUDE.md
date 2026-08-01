@@ -1163,17 +1163,18 @@ Fehlen beim Start Positionen, meldet `setup()` eine `WARNUNG`-Zeile mit dem Abde
 
 Vierkanal-Kette: Ambisonics 2D erster Ordnung mit Kern-UGens (`PanB2` als Encoder, **ein** `DecodeB2` am Ende), Glocken an den Knoten (`/net/hitNode`) und leise Drohnen, die den reisenden Impulsen folgen (`/net/impulse`). Lautsprecher auf den **Seitenmitten** (0,+4), (+7,0), (0,−4), (−7,0), nicht in den Ecken.
 
-**Drei Lautstärken, nicht eine.** `masterVolume` ist der globale Show-Fader
-(in `\masterReverb`, nach dem Panning, vor dem Limiter). Darunter sitzen zwei
-**Layer-Fader**, multiplikativ davor: `bellVolume` in `\glockenBell` und
-`droneVolume` in `\impulseDrone`. Damit lässt sich das Verhältnis von
-Node-Treffern zu reisenden Impulsen vor Ort einstellen, ohne `~maxAmp` bzw.
-`~droneAmpScale` im Code anzufassen. `droneVolume` wirkt sofort auf laufende
-Drohnen (`onSet`-Callback plus `Lag`); `bellVolume` erst auf den nächsten Ton
-und bewusst **ohne** `Lag` — eine Glocke ist ein One-Shot, ein Lag würde den
-Anschlag weichzeichnen, der ihren Klang ausmacht.
+**Vier Lautstärken, nicht eine.** `masterVolume` ist der globale Show-Fader
+(in `\masterReverb`, nach dem Panning, vor dem Limiter). Darunter sitzen drei
+**Layer-Fader**, multiplikativ davor: `bellVolume` in `\glockenBell`,
+`droneVolume` in `\impulseDrone` und `tailVolume` in den fünf Bell-Tails
+(siehe unten). Damit lässt sich das Verhältnis von Node-Treffern zu reisenden
+Impulsen zu Schweifen vor Ort einstellen, ohne `~maxAmp`, `~droneAmpScale`
+bzw. `~tailAmpScale` im Code anzufassen. `droneVolume` wirkt sofort auf
+laufende Drohnen (`onSet`-Callback plus `Lag`); `bellVolume` und `tailVolume`
+erst auf den nächsten Ton und bewusst **ohne** `Lag` — Glocke und Tail sind
+One-Shots, ein Lag würde den Anschlag weichzeichnen, der ihren Klang ausmacht.
 
-Der Klang selbst ist der vor Ort getunte Stand: Phrygisch ab A2 (`~scaleSteps`), `~minAmp`/`~maxAmp` aus dem +6-dB-Live-Abgleich, Sägezahn-Layer für den Hang-Drum-Attack, `~maxPolyphony = 24` als Voice-Stealing-Deckel gegen „command FIFO full" (der Ausfallmodus dabei ist **Stille ohne Absturz**). Der Hall sitzt **hinter** dem Decoder (`\masterReverb`, je Hardware-Kanal getrennt) und nicht in der Glocke — vor dem Encoder würde er selbst räumlich codiert und wieder zu einer Punktquelle verschmiert; `~reverbMix` steht deshalb auf 0.35 statt auf dem früheren Wert 0.15.
+Der Klang selbst ist der vor Ort getunte Stand: Phrygisch ab A2 (`~scaleSteps`), `~minAmp`/`~maxAmp` aus dem +6-dB-Live-Abgleich, Sägezahn-Layer für den Hang-Drum-Attack, `~maxPolyphony = 16` als Voice-Stealing-Deckel gegen „command FIFO full" (der Ausfallmodus dabei ist **Stille ohne Absturz**). Der Hall sitzt **hinter** dem Decoder (`\masterReverb`, je Hardware-Kanal getrennt) und nicht in der Glocke — vor dem Encoder würde er selbst räumlich codiert und wieder zu einer Punktquelle verschmiert; `~reverbMix` steht deshalb auf 0.35 statt auf dem früheren Wert 0.15.
 
 **Klangbias nach Netzregion** (`~regionZone`, `~regionBias`, Parameter
 `/klangnetz/param/regionBiasAmount`, Default 0.6): vier Quadranten,
@@ -1192,6 +1193,98 @@ Phrygisch heraus. Ein eigener `enabled`-Schalter entfällt — `amount = 0` ist
 aus und klingt bitgleich wie ohne das Feature. `~tilt` und `~decayScale`, die
 in älteren Notizen als Timbre-Regler auftauchen, gibt es in dieser Datei
 nicht; die vorhandenen Äquivalente sind `brightness` und `detune`.
+
+**Bell-Tails: fünf additive Schweife je Node-Treffer** (`\tail1_shimmer`,
+`\tail2_whoosh`, `\tail3_fmglide`, `\tail4_granular`, `\tail5_subglow`,
+integriert 2026-08-01 aus einer eigenen Sound-Design-Session): der
+Glockenanschlag bleibt unverändert, **zusätzlich** klingt bei jedem Treffer
+ein digitaler Schweif — und zwar **alle fünf gleichzeitig**, nicht einer nach
+Auswahl. Ein Treffer kostet damit sechs Synths statt einem.
+
+Fünf Dinge, die man beim Ändern kennen muss:
+
+- **One-Shot, kein Gate.** `/net/hitNode` ist ein Impuls ohne Ende-Ereignis;
+  ein gehaltener Tail liefe entweder ewig oder an einem erfundenen Timeout.
+  Die Freigabelogik, die `\impulseDrone` dafür hat, existiert nur, weil
+  `/net/impulse` das *Ausbleiben* eines Impulses meldet. „Sustain" ist deshalb
+  ein **Plateau-Pegel** im festen Envelope (`Env([0, 1, sustain, 0], [attack,
+  decay, release])`), kein gehaltenes Segment. Defaults `decay = 0` und
+  `sustain = 1` halten die Kurve formgleich mit dem abgenommenen Klang.
+- **`~activeBells` hält seither je Treffer ein Array** `[glocke,
+  tail1..tail5]`, nicht einen Synth. Beim Voice-Stealing wird der ganze
+  Eintrag freigegeben — sonst überlebte ein Tail seine gestohlene Glocke und
+  rotierte weiter, ohne dass ihn jemand zählt oder abräumt. `~maxPolyphony`
+  steht deshalb auf **16** statt 24 (konservativ, die reale Last des
+  Tail-Klangs ist noch nicht am Gerät gemessen).
+- **Amp 0 heisst: der Synth entsteht gar nicht erst.** Die fünf `*Amp`-Regler
+  und `tailVolume` sparen Stimmen, nicht nur Pegel — das ist der Grund, warum
+  es keinen Auswahl-Parameter gibt.
+- **Die fünf wurden einzeln abgenommen, nie gegeneinander.** `tailWhooshAmp`
+  hat deshalb Default **3.0**: bandbegrenztes Rauschen trägt wenig Energie und
+  liegt in der Mischung gemessen rund 10 dB unter den anderen vier (NRT
+  2026-08-01, RMS 0.0006 gegen 0.0061). Die Zahl ist eine Messung, keine
+  Schätzung.
+- **Die Tails laufen trocken — der `FreeVerb` in Shimmer, FM-Glide und
+  Sub-Glow ist beim Merge nach `master` entfernt** (Birk, 2026-08-01). Er kam
+  aus der Hörprobe, stand quer zur Regel „Hall nach dem Panning" und kostete
+  **gemessen zwei Drittel der Last dieser Schicht**: bei 10 Treffern/s 65 %
+  Server-CPU mit, 23 % ohne die drei FreeVerbs — zum Vergleich 5 % ohne Tails
+  (Linux-vServer ohne Echtzeitpriorität, die absoluten Zahlen gelten nicht für
+  den Windows-Laptop, das Verhältnis schon). Dazu zwei Argumente aus dem
+  Klang: bei einer *rotierenden* Quelle kreist der Eigenhall mit, statt stehen
+  zu bleiben, und `\masterReverb` liefert ohnehin schon Hall je Hardware-Kanal.
+  Es gibt **keinen Schalter** dafür — die drei Zeilen sind weg, ihre Werte
+  stehen im Kommentar über den Tail-SynthDefs, falls der trockene Schweif am
+  Netz zu dünn klingt. Der erste Versuch ist dann `~reverbMix`, nicht ein
+  zweiter Hall.
+
+**Tail-Orbit: Kreisbewegung um den Auslöseort** (`~tailOrbitOut`, Parameter
+`tailOrbitRadius` 0.25, `tailOrbitSpeed` 0.5, `tailOrbitEnvExp` 1.0,
+`tailOrbitDirLock` 0, `tailOrbitMinRadius` 0; Entwurf und Herleitung in
+`docs/superpowers/specs/2026-08-01-tail-synth-orbit-design.md`): jeder Tail
+wandert nach dem Trigger im Kreis um die Position seines Knotens, zufällig
+rechts oder links herum, schnell am Anfang und langsamer zum Ausklingen hin.
+Fünf **globale** Regler für alle fünf Tails — 5 × 5 wären 25 Adressen für ein
+Feature, von dem noch niemand gehört hat, wie es sich im Raum anfühlt; eine
+Pro-Tail-Variante bliebe möglich, ohne dass sich der Vertrag ändert.
+
+Fünf Dinge, die man beim Ändern kennen muss:
+
+- **Der Winkel ist das Integral der Hüllkurve** (`Sweep.kr`), nicht Zeit mal
+  Zerfall. Ein Zerfall auf dem *Winkel* liesse die Bewegung gegen Ende
+  zurücklaufen; das Integral einer Rate kann das strukturell nicht. `Sweep`
+  nimmt die Rate pro **Sekunde** — die naheliegende Alternative `Phasor.kr`
+  erwartet den Zuwachs pro Control-Sample, wer dort `ControlDur.ir` vergisst,
+  bekommt eine um Faktor ~689 zu schnelle Rotation.
+- **Es ist die Amplitudenhüllkurve, keine zweite Kurve.** Laut = schnell,
+  leise = langsam, stumm = steht: die Rotation hört von selbst auf, wenn
+  nichts mehr zu hören ist, ohne Sonderfall. Zwei Kurven könnten
+  auseinanderlaufen — dieselbe Überlegung wie bei `splitLifetimeJitter`.
+- **`tailOrbitSpeed` sind Umdrehungen/s bei voller Hüllkurve**, der
+  Gesamtwinkel hängt am Flächeninhalt unter ihr. Eine volle Umdrehung über
+  einen 4-Sekunden-Tail braucht rund **1.08**, mit dem Default 0.5 kommt
+  weniger als eine halbe heraus. Das überrascht beim Einstellen, ist aber die
+  Folge davon, dass die Bewegung mit dem Klang ausklingt.
+- **Rauten-Clamping `|xn| + |yn| ≤ 1`, nicht Kreis.** `~toQuad` übergibt Pan4
+  die 45-Grad-Rotation `(xw − yw, xw + yw)`; beide Argumente bleiben nur
+  innerhalb der Raute in ±1. Beim Kreis stünde die Quelle viermal pro
+  Umdrehung in einer Ecke still — genau da, wo Bewegung der Zweck ist. Das
+  Clamping erfasst den Auslöseort mit: eine Ecke der Grundfläche liegt
+  normiert bei 2.0, wird also geschlossen auf den Rand projiziert statt einen
+  Sonderfall zu brauchen.
+- **Der Radius wächst von 0 an**, der Tail startet exakt am Auslöseort. Als
+  Rampe dient die **Attack-Flanke desselben Tails**, kein eigener Parameter —
+  bei 20 ms Attack entfernt sie nur den Sprung im Einsatz, bei FM-Glide und
+  Granular (0.7 s) ist sie eine hörbare Spiralbewegung. Der Radius ist
+  **normiert** (1.0 = Boxabstand), nicht in Metern: ein Meter-Kreis wäre im
+  Lautsprecherraum eine Ellipse und klänge nach einer schwankenden statt einer
+  runden Bewegung.
+
+Verifiziert per NRT/Jack-Dummy an der echten Datei (2026-08-01): ein Tail in
+der Netzmitte überstreicht bei `dirLock = +1` einen **monoton** wachsenden
+Winkel (30-ms-Fenster, kein Rücksprung), bei `tailOrbitRadius = 0` liegen alle
+vier Kanäle exakt gleich und der Winkel steht — die Bewegung kommt also aus
+dem Orbit und nicht aus dem Klang.
 
 **Travel-Sound** (`/klangnetz/param/travelMix`, Default **0**, plus
 `travelRq`, `travelGrainRatio`, `travelAmpScale`, `travelFreqBase`,
@@ -1286,7 +1379,7 @@ Region fliegt.
 **Sound-Presets** (`~presetLoad`, `~presetSave`, Adressen `/sc/preset/load`
 und `/sc/preset/save`, jeweils ein String-Argument): ein SC-Preset ist ein
 Wertesatz für **genau die per `~registerParam` registrierten Parameter** —
-aktuell 18, siehe Tabelle unten. Nichts sonst; Tonleiter, Grundton und die
+aktuell 52, siehe Liste unten. Nichts sonst; Tonleiter, Grundton und die
 Amplituden-Grenzen sind vor Ort getunte Konstanten und bleiben es.
 
 - **Dateien:** `supercollider/presets/<name>.txt`, **gleiches Format** wie
@@ -1324,12 +1417,16 @@ Amplituden-Grenzen sind vor Ort getunte Konstanten und bleiben es.
   unbekannt" plus einen Hinweis auf genau diese Ursache. Ein
   `/sc/preset/save standby` überschreibt sie mit dem aktuellen Satz.
 
-Die 21 Parameter, die ein Preset umfasst: `masterVolume`, **`bellVolume`**,
-**`droneVolume`**, `reverbMix`, `reverbRoom`, `reverbDamp`, `brightness`,
-`detune`, `droneLpfMult`, `panSharpness`, `regionBiasAmount`, `travelMix`,
-`travelRq`, **`travelGrainRatio`**, `travelAmpScale`, `travelFreqBase`,
-`travelSpeedRef`, `travelOctavesPerStep`, `travelSnap`, `travelFreqMin`,
-`travelFreqMax`. Wer einen `~registerParam`
+Die 52 Parameter, die ein Preset umfasst: `masterVolume`, **`bellVolume`**,
+**`droneVolume`**, **`tailVolume`**, `reverbMix`, `reverbRoom`, `reverbDamp`,
+`brightness`, `detune`, `droneLpfMult`, `panSharpness`, `regionBiasAmount`,
+`travelMix`, `travelRq`, `travelGrainRatio`, `travelAmpScale`,
+`travelFreqBase`, `travelSpeedRef`, `travelOctavesPerStep`, `travelSnap`,
+`travelFreqMin`, `travelFreqMax`, dazu die **fünf Orbit-Regler**
+(`tailOrbitRadius`, `tailOrbitSpeed`, `tailOrbitEnvExp`, `tailOrbitDirLock`,
+`tailOrbitMinRadius`) und **je Tail fünf** Hüllkurven-/Pegelregler
+(`tail<Shimmer|Whoosh|Fmglide|Granular|Subglow><Attack|Decay|Sustain|Release|Amp>`).
+Wer einen `~registerParam`
 ergänzt, bekommt ihn ohne weiteres Zutun in die Presets — die Liste wird aus
 `~params` gelesen, nicht gepflegt. (Die handgepflegte Kopie im Web-UI,
 `SC_PARAMS` in `webui/server.py`, muss dann allerdings nachgezogen werden;

@@ -122,17 +122,24 @@
 // OSC-STEUERBARER SOUND-PARAMETER-LAYER  (Stand 2026-07-30)
 // =====================================================================
 //
-// Sieben Klangparameter sind zur Laufzeit per OSC einstellbar, unabhängig
+// Die Klangparameter sind zur Laufzeit per OSC einstellbar, unabhängig
 // vom imPulse-Netz-Traffic (eigener Port, eigenes Adress-Präfix). Jeder
 // Parameter klemmt eingehende Werte auf einen festen Bereich (siehe unten)
 // und quittiert den Empfang mit einer postln-Zeile — das ist bewusst KEIN
 // generisches Framework wie `AbstractParameter.java`/`remoteSettings.txt`
 // auf der imPulse-Seite, sondern eine kleine, für genau diese Datei
 // gebaute Registry (~params, ~registerParam), siehe deren Definition
-// weiter unten. Die Liste hier ist die Referenz für eine spätere
-// WebUI-Anbindung (siehe `webui/server.py`, das aktuell nur an Port 8001
-// sendet, also an imPulse — für diese Klangparameter bräuchte es einen
-// zweiten Sender an Port 8002 mit dieser Adressliste).
+// weiter unten.
+//
+// WEBUI: die Anbindung EXISTIERT seit dem Umbau auf die fünf Themen-Tabs —
+// `webui/server.py` hält in `SC_PARAMS` eine handgepflegte Kopie dieser
+// Registry und schickt sie über einen ZWEITEN OscSender an Port 8002 (der
+// erste geht an imPulse auf 8001). Zwei Tests in `webui/test_webui.py`
+// vergleichen Tabelle und Datei in BEIDE Richtungen, damit sie nicht
+// abdriften; wer hier einen ~registerParam ergänzt, bekommt dort eine rote
+// Prüfung, bis die Kopie nachgezogen ist. Das ist Absicht. Was es weiterhin
+// nicht gibt, ist ein RÜCKKANAL: die im Browser angezeigten Werte sind diese
+// Defaults, nicht der Live-Zustand.
 //
 // Alle Adressen empfangen EINEN Float als erstes Argument, Port 8002
 // (~oscListenPort, derselbe wie /net/hitNode und /net/impulse):
@@ -145,13 +152,15 @@
 //     dahinter fängt das ab, bevor es hart clippt.
 //
 //   /klangnetz/param/bellVolume     0.0 .. 1.5   Default 1.0
-//   /klangnetz/param/droneVolume    0.0 .. 1.5   Default 1.0
+//   /klangnetz/param/droneVolume    0.0 .. 1.5   Default 0.0
+//   /klangnetz/param/tailVolume     0.0 .. 1.5   Default 0.5
 //     Layer-Fader je Klangschicht, multiplikativ VOR masterVolume:
 //     bellVolume in \glockenBell (Node-Treffer), droneVolume in
-//     \impulseDrone (reisende Impulse). Damit laesst sich das Verhaeltnis
-//     der zwei Schichten vor Ort einstellen, ohne ~maxAmp/~droneAmpScale
-//     im Code anzufassen. droneVolume wirkt SOFORT auf laufende Drohnen,
-//     bellVolume erst auf den naechsten Ton (One-Shot, wie brightness).
+//     \impulseDrone (reisende Impulse), tailVolume in den fuenf Bell-Tails
+//     (siehe unten). Damit laesst sich das Verhaeltnis der Schichten vor Ort
+//     einstellen, ohne ~maxAmp/~droneAmpScale/~tailAmpScale im Code
+//     anzufassen. droneVolume wirkt SOFORT auf laufende Drohnen, bellVolume
+//     und tailVolume erst auf den naechsten Ton (One-Shots, wie brightness).
 //
 //   /klangnetz/param/reverbMix      0.0 .. 1.0   Default 0.15
 //   /klangnetz/param/reverbRoom     0.0 .. 1.0   Default 0.5
@@ -243,6 +252,64 @@
 //     damit der Jitter die Zuordenbarkeit nicht verschmiert. Wirken erst
 //     auf NEUE Drohnen -- die Umrechnung passiert in sclang beim Anlegen
 //     des Synths.
+//
+//   ---- Bell-Tails: fuenf additive Schweife je Node-Treffer ----------
+//   Der Glockenanschlag bleibt unveraendert; ZUSAETZLICH klingen bei jedem
+//   Treffer fuenf digitale Schweife mit (Glass Shimmer, Digital Whoosh,
+//   FM-Glide, Granularer Zerfall, Sub-Glow -- akustisch abgenommen am
+//   2026-08-01). ALLE FUENF gleichzeitig, nicht einer nach Auswahl. Ein
+//   Treffer kostet damit sechs Synths statt einem; ~maxPolyphony steht
+//   deshalb auf 16 statt 24.
+//
+//   ONE-SHOT, KEIN GATE: /net/hitNode ist ein Impuls ohne Ende-Ereignis.
+//   "Sustain" ist folglich ein PLATEAU-PEGEL im festen Envelope
+//   (Env([0, 1, sustain, 0], [attack, decay, release])), kein gehaltenes
+//   Segment. Die Defaults decay = 0 und sustain = 1 halten die Kurve
+//   formgleich mit dem abgenommenen Stand.
+//
+//   Je Tail fuenf Adressen, <Tail> = Shimmer | Whoosh | Fmglide |
+//   Granular | Subglow:
+//
+//   /klangnetz/param/tail<Tail>Attack    0.001 .. 2.0
+//     Einschwingzeit in s. Defaults 0.02 (Shimmer), 0.02 (Whoosh),
+//     0.03 (Sub-Glow) -- diese drei starten auf Birks Wunsch sofort mit
+//     voller Kraft. FM-Glide und Granular behalten ihre 0.7 s, der lange
+//     Einschwinger ist dort Teil des abgenommenen Klangs.
+//     NEBENWIRKUNG: dieselbe Zeit ist die Rampe, ueber die der Orbit-Radius
+//     von 0 auf seinen Wert waechst (siehe ~tailOrbitOut).
+//   /klangnetz/param/tail<Tail>Decay     0.0 .. 4.0     Default 0.0
+//     Abfall vom Scheitel auf das Sustain-Plateau. 0 = kein Knick.
+//   /klangnetz/param/tail<Tail>Sustain   0.0 .. 1.0     Default 1.0
+//     Plateau-Pegel nach dem Decay.
+//   /klangnetz/param/tail<Tail>Release   0.2 .. 12.0
+//     Ausklingzeit in s -- Defaults 4.5 / 3.2 / 3.8 / 3.5 / 4.2. Diese Zahl
+//     ist bei Whoosh, FM-Glide und Granular ZUGLEICH die Laufzeit der
+//     internen Sweeps (Bandpass, Tonhoehen-Glide, Koernerdichte): der Regler
+//     dehnt die ganze Geste, nicht nur ihr Ende.
+//   /klangnetz/param/tail<Tail>Amp       0.0 .. 4.0     Default 1.0
+//     Pegel dieser Schicht. 0 heisst: der Synth entsteht beim Treffer gar
+//     nicht erst -- der Regler spart Stimmen, nicht nur Pegel. AUSNAHME
+//     tailWhooshAmp mit Default 3.0: gefiltertes Rauschen traegt wenig
+//     Energie und liegt gemessen rund 10 dB unter den anderen vier
+//     (NRT, 2026-08-01).
+//
+//   ---- Tail-Orbit: Kreisbewegung um den Ausloeseort ------------------
+//   Fuenf GLOBALE Regler fuer alle fuenf Tails (nicht fuenf mal fuenf).
+//   Entwurf und Herleitung:
+//   docs/superpowers/specs/2026-08-01-tail-synth-orbit-design.md.
+//
+//   /klangnetz/param/tailOrbitRadius     0.0 .. 2.0     Default 0.25
+//     Radius, NORMIERT: 1.0 = Boxabstand, nicht Meter. 0 = keine Rotation
+//     (der Aus-Schalter, bitgleich mit einem Tail ohne dieses Feature).
+//   /klangnetz/param/tailOrbitSpeed      0.0 .. 4.0     Default 0.5
+//     Umdrehungen/s BEI VOLLER HUELLKURVE. Der Gesamtwinkel haengt am
+//     Integral der Huellkurve: eine volle Umdrehung ueber einen
+//     4-Sekunden-Tail braucht rund 1.08.
+//   /klangnetz/param/tailOrbitEnvExp     0.25 .. 4.0    Default 1.0
+//   /klangnetz/param/tailOrbitDirLock    -1.0 .. 1.0    Default 0.0
+//     0 = Richtung je Tail-Synth zufaellig, +-1 = erzwungen (zum Pruefen).
+//   /klangnetz/param/tailOrbitMinRadius  0.0 .. 0.5     Default 0.0
+//     Alle fuenf wirken auf NEUE Tails, wie brightness/detune.
 // =====================================================================
 
 (
@@ -349,7 +416,33 @@ s.options.numInputBusChannels = 2;
 // neue startet. Die Drohnen haben ihren eigenen Deckel (~droneLimit oben) --
 // zwei getrennte Grenzen, weil die zwei Stimmenarten aus verschiedenen
 // Quellen kommen und sich nicht gegenseitig verdraengen sollen.
-~maxPolyphony = 24;
+//
+// VON 24 AUF 16 GESENKT (2026-08-01, mit den Bell-Tails): ein Node-Treffer
+// erzeugt jetzt SECHS Synths statt einem -- die Glocke plus fuenf additive
+// Tails (siehe ~tailDefs). Bei 24 liefen an der Grenze 144 Stimmen statt 24,
+// also genau die Last, gegen die dieser Deckel nach dem Live-Ausfall
+// eingezogen wurde. 16 sind 96 Stimmen; die Zahl selbst ist konservativ
+// gewaehlt und kein Messergebnis vom Geraet.
+//
+// Was gemessen IST (Linux-vServer, jack-Dummy, OHNE Echtzeitpriorisierung,
+// 2026-08-01, 40 Treffer mit 10/s): ohne Tails 5 % Server-CPU, mit allen
+// fuenf Tails 65 % -- davon rund zwei Drittel die drei FreeVerbs, die IN den
+// Tails sassen; ohne sie 23 %. Seit dem Merge nach master (Birks
+// Entscheidung, siehe der Block bei den Tail-SynthDefs) laufen die Tails
+// trocken, es gilt also der Wert 23 %. Die absoluten Zahlen sagen fuer den
+// Windows-Laptop nichts, das VERHAELTNIS schon: diese Schicht ist auch
+// trocken noch rund fuenfmal so teuer wie die Glocke allein. Wer den Deckel
+// wieder anhebt, misst vorher am Geraet, statt zu schaetzen. Die
+// Buchfuehrung selbst ist geprueft: nach dem Ausklang eines solchen
+// Dauerfeuers steht ~activeBells wieder auf 0 und auf dem Server laeuft nur
+// noch \masterReverb.
+//
+// ~activeBells haelt seither nicht mehr einzelne Synths, sondern je Treffer
+// ein ARRAY [glocke, tail1..tail5]. Beim Voice-Stealing wird der ganze
+// Eintrag freigegeben. Ohne das ueberlebte der Tail seine gestohlene Glocke:
+// er rotierte weiter, ohne dass ihn jemand kennt oder zaehlt -- der
+// unangenehme Fall, weil er still waechst.
+~maxPolyphony = 16;
 ~activeBells = List.new;
 
 // Amp einer Drohne = geclampte Energie mal diesem Faktor. Deutlich leiser als
@@ -644,6 +737,170 @@ s.options.numInputBusChannels = 2;
 ~registerParam.(\travelFreqMin,   80.0,  20.0,  2000.0, nil);
 ~registerParam.(\travelFreqMax, 6000.0, 200.0, 16000.0, nil);
 
+// ---- Bell-Tails: fuenf additive Schweife je Node-Treffer ---------------
+// Der Glockenanschlag (\glockenBell) bleibt unveraendert; ZUSAETZLICH klingen
+// bei JEDEM Treffer fuenf digitale Schweife mit ("ein Wusch", Birk). Die
+// Klangerzeugung stammt 1:1 aus der abgenommenen Hoerprobe (v3, 2026-08-01):
+// Glass Shimmer, Digital Whoosh, FM-Glide, Granularer Zerfall, Sub-Glow.
+//
+// ALLE FUENF GLEICHZEITIG, nicht einer nach Auswahl -- das ist die
+// Entscheidung, nicht ein Zwischenstand. Wer einen davon nicht will, zieht
+// seinen Amp-Regler auf 0; das ist bitgleich mit "nicht getriggert", nur ohne
+// Neustart. Deshalb gibt es auch keinen Auswahl-Parameter.
+//
+// ONE-SHOT, KEIN GATE (Entscheidung 2026-08-01): ein Node-Treffer hat kein
+// Ende-Ereignis -- /net/hitNode ist ein Impuls, kein Halten. Ein echtes Gate
+// wie bei \impulseDrone braeuchte eine Freigabelogik und einen Reaper; die hat
+// die Drohne nur, weil /net/impulse das AUSBLEIBEN eines Impulses meldet. Fuer
+// Treffer gibt es diese Meldung nicht, ein gehaltener Tail liefe also entweder
+// ewig oder an einem erfundenen Timeout. "Sustain" ist hier folglich ein
+// PLATEAU-PEGEL im festen Envelope, kein gehaltenes Segment:
+//   Env([0, 1, sustain, 0], [attack, decay, release])
+//
+// Defaults decay = 0 und sustain = 1 machen diese Kurve FORMGLEICH mit dem
+// abgenommenen Stand (dort Env([0,1,0],[attack,release])) -- der ADS-Regler
+// ist ein Werkzeug, keine Klangaenderung hinter Birks Ruecken. Wer Decay
+// aufdreht, bekommt den Knick zum Plateau dazu.
+//
+// ATTACK-DEFAULTS: Shimmer, Whoosh und Sub-Glow starten sofort (0.02-0.03 s
+// statt 0.6-0.9 s im Hoerprobenstand) -- Birks Rueckmeldung: "soll nicht so'n
+// langes Attack-Intro haben, soll sofort mit voller Power losgehen und dann
+// nur noch abschwellen." FM-Glide und Granular waren nicht Teil dieser
+// Rueckmeldung und behalten ihre 0.7 s; der Parameter existiert fuer alle
+// fuenf gleichermassen.
+//
+// RELEASE ist die Zeit, die im Hoerprobenstand "dur" hiess: sie ist nicht nur
+// die Ausklingdauer, sondern auch die Laufzeit der internen Sweeps (Whoosh-
+// Bandpass, FM-Glide-Tonhoehe, Koernerdichte des Granulars). Ein Regler daran
+// dehnt also die ganze Geste, nicht nur ihr Ende -- gewollt, und der Grund,
+// warum Release ueberhaupt ein Parameter ist und nicht eine Konstante je
+// SynthDef.
+~tailDefs = [
+    [\tail1_shimmer,  "tailShimmer"],
+    [\tail2_whoosh,   "tailWhoosh"],
+    [\tail3_fmglide,  "tailFmglide"],
+    [\tail4_granular, "tailGranular"],
+    [\tail5_subglow,  "tailSubglow"]
+];
+
+// Verhaeltnis Tail-Amp zu Bell-Amp aus dem abgenommenen Render (dort 0.18 zu
+// 0.3). Konstante, kein Parameter: die Balance ZWISCHEN den Schichten macht
+// tailVolume, die Balance INNERHALB der Tails die fuenf *Amp-Regler -- ein
+// dritter Regler mit derselben Bedeutung waere eine Zahl zum Suchen.
+~tailAmpScale = 0.6;
+
+// Layer-Fader der gesamten Tail-Schicht, neben bellVolume und droneVolume.
+// Default 0.5 und nicht 1.0: fuenf unkorrelierte Schichten addieren sich in
+// der LEISTUNG, nicht in der Amplitude (~sqrt(5) = 2.24-facher Einzelpegel).
+// Bei 1.0 waere der Schweif lauter als der Anschlag, den er begleiten soll.
+// 0 ist ein echter Aus-Schalter: ein Tail, dessen wirksamer Pegel 0 waere,
+// wird beim Treffer gar nicht erst erzeugt (siehe /net/hitNode-Handler) --
+// das spart Stimmen, nicht nur Pegel. Dasselbe gilt je Tail ueber dessen
+// Amp-Regler.
+~registerParam.(\tailVolume, 0.5, 0.0, 1.5, nil);
+
+// Je Tail funf Regler: Attack, Decay, Sustain, Release, Amp. Kein
+// onSet-Callback -- ein Tail ist ein One-Shot mit doneAction 2, die Werte sind
+// Start-Argumente und wirken auf den NAECHSTEN Treffer (wie brightness/detune
+// und bellVolume, siehe deren Begruendung oben). Bei der Trefferrate der
+// Installation ist das praktisch sofort.
+~registerParam.(\tailShimmerAttack,   0.02, 0.001, 2.0,  nil);
+~registerParam.(\tailShimmerDecay,    0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailShimmerSustain,  1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailShimmerRelease,  4.5,  0.2,  12.0,  nil);
+~registerParam.(\tailShimmerAmp,      1.0,  0.0,   4.0,  nil);
+
+~registerParam.(\tailWhooshAttack,    0.02, 0.001, 2.0,  nil);
+~registerParam.(\tailWhooshDecay,     0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailWhooshSustain,   1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailWhooshRelease,   3.2,  0.2,  12.0,  nil);
+// Whoosh mit Default 3.0 statt 1.0, und die Amp-Regler reichen deshalb bis 4:
+// die fuenf Tails wurden EINZELN abgenommen, nie gegeneinander. In der
+// Mischung liegt der Whoosh gemessen rund 10 dB unter den anderen (NRT,
+// 2026-08-01, gleiche Anregung, kein Hall: RMS 0.0006 gegen 0.0061 beim
+// Shimmer, Spitze 0.017 gegen 0.058) -- bandbegrenztes Rauschen mit rq 0.15
+// traegt schlicht wenig Energie. Bei 1.0 waere er zwar getriggert, aber nicht
+// Teil der Schichtung. Die Zahl ist eine Messung, keine Schaetzung, und mit
+// einem Regler zurueckzunehmen.
+~registerParam.(\tailWhooshAmp,       3.0,  0.0,   4.0,  nil);
+
+// FM-Glide und Granular: Attack bewusst bei 0.7 s (keine Rueckmeldung dazu,
+// siehe Block oben) -- der langsame Einschwinger ist bei diesen zweien Teil
+// des abgenommenen Klangs.
+~registerParam.(\tailFmglideAttack,   0.7,  0.001, 2.0,  nil);
+~registerParam.(\tailFmglideDecay,    0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailFmglideSustain,  1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailFmglideRelease,  3.8,  0.2,  12.0,  nil);
+~registerParam.(\tailFmglideAmp,      1.0,  0.0,   4.0,  nil);
+
+~registerParam.(\tailGranularAttack,  0.7,  0.001, 2.0,  nil);
+~registerParam.(\tailGranularDecay,   0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailGranularSustain, 1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailGranularRelease, 3.5,  0.2,  12.0,  nil);
+~registerParam.(\tailGranularAmp,     1.0,  0.0,   4.0,  nil);
+
+~registerParam.(\tailSubglowAttack,   0.03, 0.001, 2.0,  nil);
+~registerParam.(\tailSubglowDecay,    0.0,  0.0,   4.0,  nil);
+~registerParam.(\tailSubglowSustain,  1.0,  0.0,   1.0,  nil);
+~registerParam.(\tailSubglowRelease,  4.2,  0.2,  12.0,  nil);
+~registerParam.(\tailSubglowAmp,      1.0,  0.0,   4.0,  nil);
+
+// ---- Tail-Orbit: Kreisbewegung um den Ausloeseort ----------------------
+// Jeder Tail wandert nach dem Trigger im Kreis um die Position des Knotens,
+// der ihn ausgeloest hat -- zufaellig rechts oder links herum, schnell am
+// Anfang, langsamer zum Ausklingen hin. Entwurf und Herleitung:
+// docs/superpowers/specs/2026-08-01-tail-synth-orbit-design.md (Branch
+// docs/tail-orbit-concept). Die Mathe steht in ~tailOrbitOut, hier stehen
+// nur die Regler.
+//
+// FUENF GLOBALE PARAMETER, nicht fuenf mal fuenf (Entscheidung 2026-08-01):
+// bei fuenf Tail-Synths waeren pro-Tail-Regler 25 Adressen fuer ein Feature,
+// von dem noch niemand gehoert hat, wie es sich im Raum anfuehlt. Der
+// Vertrag aendert sich nicht, wenn spaeter doch pro Tail differenziert wird
+// -- ~tailOrbitOut bekommt die Werte ohnehin als Argumente, nur die
+// Trigger-Stelle liest sie dann aus fuenf Adressen statt aus einer.
+//
+// Radius NORMIERT, nicht in Metern: 1.0 = Boxabstand. Die Grundflaeche ist
+// 14 x 8 m, ~toQuad normiert je Achse getrennt -- ein Kreis in Metern waere
+// im Lautsprecherraum eine Ellipse und klaenge nach einer schwankenden statt
+// nach einer runden Bewegung. Nebenwirkung, die man kennen muss:
+// tailOrbitRadius = 0.5 sind auf dem Grundriss 3.5 m in x, aber nur 2 m in y.
+// Auf dem Papier eine Ellipse, im Klangbild ein Kreis. Das ist gewollt.
+//
+// radius = 0 IST der Aus-Schalter und klingt bitgleich wie ein Tail ohne
+// dieses Feature -- dieselbe Idiomatik wie travelMix = 0 und
+// regionBiasAmount = 0, deshalb gibt es keinen enabled-Schalter.
+~registerParam.(\tailOrbitRadius, 0.25, 0.0, 2.0, nil);
+
+// Umdrehungen pro Sekunde BEI VOLLER HUELLKURVE (env = 1). Der insgesamt
+// ueberstrichene Winkel haengt deshalb nicht an diesem Wert allein, sondern
+// am Flaecheninhalt unter der Huellkurve:
+//   Umdrehungen gesamt = tailOrbitSpeed * Integral(env dt)
+// Fuer eine Perc-artige Huelle mit curve -4 und Ausklingzeit T ist dieses
+// Integral 0.2313 * T. Eine VOLLE Umdrehung ueber einen 4-Sekunden-Tail
+// braucht also tailOrbitSpeed ~ 1.08. Mit dem Default 0.5 kommt weniger als
+// eine halbe Umdrehung heraus -- kein Fehler, sondern die Folge davon, dass
+// die Bewegung mit dem Klang ausklingt. Die Zahl steht hier, weil sie sonst
+// beim Einstellen ueberrascht.
+~registerParam.(\tailOrbitSpeed, 0.5, 0.0, 4.0, nil);
+
+// Exponent auf die Huellkurve in der Ratenformel. < 1 = die Rotation haelt
+// laenger in den Ausklang hinein, > 1 = sie bremst frueher ab.
+~registerParam.(\tailOrbitEnvExp, 1.0, 0.25, 4.0, nil);
+
+// 0 = Richtung je Tail zufaellig (Betrieb), +-1 = Richtung erzwungen (zum
+// Pruefen, etwa in einer NRT-Messung). Gewuerfelt wird JE TAIL-SYNTH, nicht
+// je Treffer: bei einer gemeinsamen Ziehung rotierten alle fuenf Schichten
+// synchron und die additive Schichtung klaenge wieder wie eine Quelle.
+~registerParam.(\tailOrbitDirLock, 0.0, -1.0, 1.0, nil);
+
+// Untergrenze des wirksamen Radius, 0 = aus. Falls sich beim Hoeren zeigt,
+// dass kleine Radien nur verschmieren statt zu bewegen, ist die Untergrenze
+// damit eine Zahl und keine Codeaenderung. ACHTUNG, die eine Nebenwirkung:
+// steht dieser Wert ueber 0, ist tailOrbitRadius = 0 nicht mehr der
+// Aus-Schalter -- dann klemmt die Untergrenze den Radius wieder hoch.
+~registerParam.(\tailOrbitMinRadius, 0.0, 0.0, 0.5, nil);
+
 // ---- Einen Parameterwert anwenden --------------------------------------
 // DER einzige Ort, an dem ein Sound-Parameter seinen Wert bekommt. Sowohl
 // der OSC-Empfang (/klangnetz/param/<name>) als auch das Preset-Laden gehen
@@ -914,6 +1171,106 @@ s.waitForBoot({
         Pan4.ar(sig, (xw - yw), (xw + yw), 1.0)
     };
 
+    // ---- Huellkurve der Bell-Tails ------------------------------------
+    // EIN Ort fuer die Kurve aller fuenf Tails statt fuenf Kopien -- dasselbe
+    // Muster wie ~toQuad: ein sclang-Lambda, das beim .add in jeden Graphen
+    // eingerechnet wird.
+    //
+    // Vier Segmente ueber drei Zeiten: 0 -> 1 (attack, \sin wie im
+    // abgenommenen Stand) -> sustain (decay) -> 0 (release, exponentiell mit
+    // der tailtypischen Kruemmung). SCHEITELWERT 1 ist Pflicht, nicht Zufall:
+    // dieselbe Kurve steuert die Winkelgeschwindigkeit des Orbits, und
+    // tailOrbitSpeed ist als "Umdrehungen pro Sekunde bei env = 1" definiert
+    // (siehe ~tailOrbitOut). Ein anderer Scheitel skalierte die Rotation
+    // stillschweigend mit.
+    //
+    // doneAction 2 sitzt HIER, an der Amplitudenhuelle -- der Orbit fuegt
+    // keine eigene Lebensdauer hinzu und beendet nichts.
+    ~tailEnv = { |attack, decay, sustain, release, releaseCurve|
+        EnvGen.kr(
+            Env([0, 1, sustain, 0], [attack, decay, release],
+                curve: [\sin, releaseCurve, releaseCurve]),
+            doneAction: 2
+        )
+    };
+
+    // ---- Tail-Orbit: Position + Encoder in einem -----------------------
+    // Sechs Zeilen Bahnrechnung, danach der VORHANDENE Encoder. Entwurf:
+    // docs/superpowers/specs/2026-08-01-tail-synth-orbit-design.md, Abschnitt
+    // 4-6. Ein Lambda statt fuenf Kopien -- dieselbe Ueberlegung wie bei
+    // ~toQuad und ~tailEnv.
+    //
+    // WINKEL ALS INTEGRAL DER HUELLKURVE, nicht als Funktion der Zeit mal
+    // Zerfall: Sweep.kr akkumuliert eine Rate, eine Aenderung der Rate
+    // verschiebt also nie die Position, nur die Steigung (dieselbe
+    // Eigenschaft, aus der MusicalClock auf der Java-Seite akkumuliert statt
+    // neu zu rechnen). Der naive Weg "Winkel = Grundtempo * t * decay(t)"
+    // liesse den Winkel bei starkem Zerfall gegen Ende ZURUECKLAUFEN -- die
+    // Bewegung kehrte um. Das Integral einer Rate kann das strukturell nicht.
+    //
+    // Sweep nimmt die Rate in EINHEITEN PRO SEKUNDE, deshalb steht
+    // tailOrbitSpeed hier direkt in Umdrehungen/s. Die naheliegende
+    // Alternative Phasor.kr erwartet den Zuwachs pro CONTROL-SAMPLE; wer dort
+    // ControlDur.ir vergisst, bekommt eine um Faktor ~689 zu schnelle
+    // Rotation -- hoerbar als Zirpen, nicht als Bewegung.
+    //
+    // env ist die AMPLITUDENhuellkurve, keine zweite Kurve: laut = schnell,
+    // leise = langsam, stumm = steht. Die Rotation hoert damit von selbst
+    // auf, wenn nichts mehr zu hoeren ist -- ohne Sonderfall, ohne
+    // Verzweigung. Zwei getrennte Kurven koennten auseinanderlaufen (dieselbe
+    // Ueberlegung wie bei splitLifetimeJitter auf der Java-Seite, das bewusst
+    // ein Faktor auf lifetime ist und kein Ersatzwert).
+    //
+    // RADIUS WAECHST VON 0 AN (entschieden, Abschnitt 2 des Entwurfs): der
+    // Tail startet exakt am Ausloeseort und schraubt sich nach aussen. Bei
+    // festem Radius saesse er zum Zeitpunkt 0 schon einen Radius daneben --
+    // ein Sprung im Einsatz. Als Rampe dient die ATTACK-FLANKE desselben
+    // Tails, kein eigener Parameter. Was man davon erwarten darf: bei den
+    // kurzen Attacks (Shimmer/Whoosh/Sub-Glow, 20-30 ms) entfernt die Rampe
+    // nur den Sprung, sie ist keine hoerbare Spiralbewegung; bei FM-Glide und
+    // Granular (0.7 s) ist sie eine.
+    //
+    // RAUTEN-CLAMPING |xn| + |yn| <= 1 (entschieden, Abschnitt 5), NICHT
+    // Kreis-Clamping: ~toQuad uebergibt Pan4 nicht xn/yn, sondern die
+    // 45-Grad-Rotation (xw - yw, xw + yw). Beide Argumente bleiben genau dann
+    // in +-1, wenn die Summe der Betraege <= 1 ist -- also innerhalb der
+    // RAUTE mit den Ecken (+-1, 0), (0, +-1), und das ist genau die konvexe
+    // Huelle der vier Boxen. Der Einheitskreis ist groesser: auf der
+    // Diagonale (xn = yn = 0.707, r = 1) ist die Summe 1.41, ein
+    // Pan4-Argument also 41 % ueber dem Bereich. Klemmt Pan4 intern, STEHT
+    // die Quelle dort still, waehrend der Winkel weiterlaeuft -- viermal pro
+    // Umdrehung, jeweils zwischen zwei Lautsprechern. Bei einer feststehenden
+    // Glocke faellt das nicht auf, bei einem Feature, dessen ganzer Zweck die
+    // Bewegung ist, schon.
+    //
+    // Das Clamping erfasst den AUSLOESEORT mit: eine Ecke der Grundflaeche
+    // liegt normiert bei |7/7| + |4/4| = 2.0, also weit ausserhalb. Ein
+    // Knoten dort erzeugt einen Orbit, der komplett draussen laege; die
+    // Formel projiziert ihn geschlossen auf den Rand, statt einen Sonderfall
+    // zu brauchen. Kein Kollaps, keine Stille, kein if. max(k, 1) >= 1, also
+    // nie eine Division durch 0, und bei k <= 1 ist scale exakt 1 -- dann ist
+    // das Ergebnis bitgleich der ungeklemmten Bahn.
+    ~tailOrbitOut = { |sig, env, x0, y0, attack, orbitRadius, orbitSpeed,
+            orbitEnvExp, orbitDir, orbitMinRadius|
+        var angle, radiusRamp, rEff, xn, yn, k, scale;
+        angle = Sweep.kr(0, orbitDir * orbitSpeed * env.pow(orbitEnvExp)) * 2pi;
+        radiusRamp = EnvGen.kr(Env([0, 1], [attack], \sin));
+        rEff = orbitRadius.max(orbitMinRadius) * radiusRamp;
+        // Konvention wie ~testSweep: x = sin, y = cos. Winkel 0 zeigt nach
+        // VORN (+y), wachsender Winkel laeuft vorn -> rechts -> hinten ->
+        // links, orbitDir = +1 ist also "rechts herum".
+        xn = (x0 / ~maxX) + (rEff * angle.sin);
+        yn = (y0 / ~maxY) + (rEff * angle.cos);
+        k = xn.abs + yn.abs;
+        scale = 1 / k.max(1);   // Betrag gekappt, der Winkel laeuft weiter
+        // Zurueck in Meter und durch den EINZIGEN Encoder: dort sitzen die
+        // 45-Grad-Rotation, die Kanalkonvention und ~panSharpness. Ein
+        // zweiter Encoder-Pfad, der normierte Koordinaten direkt naehme,
+        // spaerte zwei Multiplikationen und kostete eine zweite Stelle, an
+        // der all das gepflegt werden muss.
+        ~toQuad.(sig, xn * scale * ~maxX, yn * scale * ~maxY)
+    };
+
     // ---- SynthDef: Glockenspiel-Ton ----------------------------------
     // Mehrere Sinus-Partialtöne mit leicht unharmonischen Frequenzverhältnissen
     // (typisch für Glocken-/Metallophon-Klänge) und je eigener Decay-Zeit:
@@ -981,6 +1338,123 @@ s.waitForBoot({
         sig = (bellSig + grit) * amp * bellVolume;
         // Position je Ton fest — eine Glocke wandert nicht. Kein Lag nötig.
         Out.ar(out, ~toQuad.(sig, x, y));
+    }).add;
+
+    // ---- SynthDefs: die fuenf Bell-Tails ------------------------------
+    // Klangerzeugung 1:1 aus der abgenommenen Hoerprobe (v3, 2026-08-01),
+    // Begruendung und Parametertabelle bei den ~registerParam-Aufrufen oben.
+    // Drei Dinge sind gegenueber der Hoerprobe geaendert, alle drei aus dem
+    // Vertrag an die Spatialisierung, nicht aus dem Klang heraus:
+    //
+    //  * MONO statt "sig ! 2". Die Hoerprobe war ein Stereo-Render; hier geht
+    //    ein einkanaliges Signal in ~toQuad, den EINZIGEN Encoder. Zwei
+    //    Panning-Pfade waeren eine zweite Wahrheit, die bei der naechsten
+    //    Verkabelungsmessung auseinanderfaellt (dieselbe Ueberlegung, aus der
+    //    der Hall hinter dem Decoder sitzt).
+    //  * \tail4_granular: GrainSin mit numChannels 1 und OHNE pan-Argument.
+    //    Das pan war ein zweiter Panner INNERHALB des Synths. Die Bewegung,
+    //    die es leisten sollte, liefert jetzt der Orbit -- und zwar im echten
+    //    Raum statt im Stereobild.
+    //  * "dur" heisst jetzt "release" und kommt aus der Registry. Es ist
+    //    dieselbe Zahl an derselben Stelle (Ausklingdauer UND Laufzeit der
+    //    internen Sweeps), nur nicht mehr fest im SynthDef.
+    //
+    // KEIN EIGENHALL MEHR: Shimmer, FM-Glide und Sub-Glow hatten aus der
+    // Hoerprobe je einen FreeVerb IM Synth (mix 0.5/0.4/0.3). Er ist beim
+    // Merge nach master ENTFERNT (Birks Entscheidung, 2026-08-01) -- die
+    // Tails laufen trocken, der Hall kommt ausschliesslich aus
+    // \masterReverb. Drei Gruende, in der Reihenfolge ihres Gewichts:
+    //  * ER KOSTETE GEMESSEN ZWEI DRITTEL DER LAST DIESER SCHICHT: bei 10
+    //    Treffern/s lag die Server-CPU mit den drei FreeVerbs bei 65 %,
+    //    ohne sie bei 23 % (gleiche Maschine, gleicher Lauf, 40 Treffer;
+    //    zum Vergleich: ohne Tails 5 %). Gemessen auf einem Linux-vServer
+    //    OHNE Echtzeitpriorisierung -- die absoluten Zahlen gelten nicht fuer
+    //    den Windows-Laptop, das VERHAELTNIS schon.
+    //  * Ein Hall VOR dem Encoder wird selbst raeumlich codiert und wandert
+    //    mit. Bei einer ROTIERENDEN Quelle -- und genau das ist der Orbit --
+    //    kreist der Raum mit, statt stehen zu bleiben.
+    //  * \masterReverb liefert ohnehin schon Hall, je Hardware-Kanal und
+    //    dekorreliert; der Tail-Hall kam obendrauf.
+    // Wer den Eigenhall zurueckwill, weil der trockene Schweif am Netz zu
+    // duenn klingt: es war je eine Zeile direkt vor dem Out.ar,
+    // "sig = FreeVerb.ar(sig, mix, room, damp);" mit (0.5, 0.9, 0.3) in
+    // Shimmer, (0.4, 0.85, 0.25) in FM-Glide und (0.3, 0.7, 0.2) in
+    // Sub-Glow. Vorher aber \masterReverb hochziehen (~reverbMix) -- das ist
+    // derselbe Effekt an der Stelle, an der diese Datei ihn sonst haben will,
+    // und er kostet nichts zusaetzlich.
+    SynthDef(\tail1_shimmer, { |freq = 440, amp = 0.22, out = 0, x0 = 0, y0 = 0,
+            attack = 0.02, decay = 0.0, sustain = 1.0, release = 4.5,
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
+        var sig, env, n = 6;
+        env = ~tailEnv.(attack, decay, sustain, release, -2);
+        sig = Mix.fill(n, { |i|
+            var detuneHz = LFNoise1.kr(0.1 + (i * 0.05)).range(-1.5, 1.5) * (i + 1);
+            SinOsc.ar(freq * (i + 2) / 2 + detuneHz, 0, 1 / (i + 2))
+        });
+        sig = sig * amp * tailVolume * env;
+        // Trocken in den Orbit, kein FreeVerb mehr -- siehe Block oben.
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
+    }).add;
+
+    SynthDef(\tail2_whoosh, { |freq = 440, amp = 0.28, out = 0, x0 = 0, y0 = 0,
+            attack = 0.02, decay = 0.0, sustain = 1.0, release = 3.2,
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
+        var sig, env, sweepFreq;
+        env = ~tailEnv.(attack, decay, sustain, release, -3);
+        sweepFreq = XLine.kr(freq * 6, freq * 0.8, release);
+        sig = BPF.ar(WhiteNoise.ar(1), sweepFreq, 0.15);
+        sig = sig + (BPF.ar(WhiteNoise.ar(1), sweepFreq * 2, 0.1) * 0.4);
+        sig = sig * amp * tailVolume * env;
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
+    }).add;
+
+    SynthDef(\tail3_fmglide, { |freq = 440, amp = 0.24, out = 0, x0 = 0, y0 = 0,
+            attack = 0.7, decay = 0.0, sustain = 1.0, release = 3.8,
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
+        var sig, env, car, modIdx, glideFreq;
+        env = ~tailEnv.(attack, decay, sustain, release, -4);
+        glideFreq = XLine.kr(freq * 1.5, freq * 0.5, release);
+        modIdx = XLine.kr(4, 0.2, release);
+        car = SinOsc.ar(glideFreq + (SinOsc.ar(glideFreq * 2.756) * glideFreq * modIdx * 0.1));
+        sig = car * amp * tailVolume * env;
+        // Trocken in den Orbit, kein FreeVerb mehr -- siehe Block oben.
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
+    }).add;
+
+    SynthDef(\tail4_granular, { |freq = 440, amp = 0.26, out = 0, x0 = 0, y0 = 0,
+            attack = 0.7, decay = 0.0, sustain = 1.0, release = 3.5,
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
+        var sig, env, trig, grainFreq, grainDur;
+        env = ~tailEnv.(attack, decay, sustain, release, -2);
+        trig = Dust.kr(XLine.kr(35, 5, release));
+        grainFreq = freq * (2 ** (LFNoise0.kr(8).range(-0.3, 1.2)));
+        grainDur = 0.03;
+        // numChannels 1, kein pan: siehe Block oben.
+        sig = GrainSin.ar(1, trig, grainDur, grainFreq, envbufnum: -1);
+        sig = sig * amp * tailVolume * env;
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
+    }).add;
+
+    SynthDef(\tail5_subglow, { |freq = 440, amp = 0.3, out = 0, x0 = 0, y0 = 0,
+            attack = 0.03, decay = 0.0, sustain = 1.0, release = 4.2,
+            tailVolume = 1.0, orbitRadius = 0.25, orbitSpeed = 0.5,
+            orbitEnvExp = 1.0, orbitDir = 1, orbitMinRadius = 0.0|
+        var sig, env, sub, trem;
+        env = ~tailEnv.(attack, decay, sustain, release, -2);
+        trem = SinOsc.kr(4.5).range(0.6, 1.0);
+        sub = (SinOsc.ar(freq / 2) * 0.7) + (SinOsc.ar(freq / 4) * 0.3);
+        sig = sub * trem * amp * tailVolume * env;
+        // Trocken in den Orbit, kein FreeVerb mehr -- siehe Block oben.
+        Out.ar(out, ~tailOrbitOut.(sig, env, x0, y0, attack, orbitRadius,
+            orbitSpeed, orbitEnvExp, orbitDir, orbitMinRadius));
     }).add;
 
     // ---- SynthDef: Drohne eines reisenden Impulses --------------------
@@ -1360,7 +1834,7 @@ s.waitForBoot({
     // Abräumblock, zusammen mit allem anderen aus einem früheren Durchlauf.)
     ~netHitNodeOscFunc = OSCFunc({ |msg, time, addr|
         var nodeId, energy, px, py, noteIndex, octave, degree, semitoneOffset,
-            midiNote, freq, amp, newBell, bias;
+            midiNote, freq, amp, newBell, bias, tailAmp, newTails, voiceGroup;
 
         nodeId = msg[1].asInteger;
         energy = msg[2].asFloat;
@@ -1398,8 +1872,11 @@ s.waitForBoot({
         // ist sofort wirksam (kein Fade-out), das ist ein bewusster
         // Trade-off: ein kurzer harter Cut an der Ueberlastgrenze ist
         // unauffaelliger als gar kein Sound mehr, weil der Server dicht ist.
+        // Ein Eintrag ist seit den Bell-Tails ein ARRAY [glocke, tail1..tail5]
+        // (siehe ~maxPolyphony oben), deshalb .do statt .free -- gestohlen
+        // wird die ganze Stimme, nicht nur ihr Anschlag.
         if (~activeBells.size >= ~maxPolyphony) {
-            ~activeBells.removeAt(0).free;
+            ~activeBells.removeAt(0).do({ |syn| syn.free });
         };
 
         // Die frühere Zufalls-Panoramisierung entfällt: sie war der
@@ -1413,13 +1890,79 @@ s.waitForBoot({
             \detune, (~detune * bias[\detune]).clip(0.0, 1.0),
             \bellVolume, ~bellVolume
         ], ~voices);
-        ~activeBells.add(newBell);
+        // ---- Fuenf additive Tails, ALLE bei JEDEM Treffer ---------------
+        // Nicht einer nach Auswahl: der Schweif ist eine Schichtung, keine
+        // Variantenliste (Birk, 2026-08-01: "am Ende machen wir die alle
+        // additiv"). Wer einen davon nicht will, zieht seinen Amp-Regler auf
+        // 0 -- dann entsteht der Synth gar nicht erst, siehe unten.
+        //
+        // Alle fuenf starten GLEICHZEITIG mit der Glocke, ohne Versatz. Die
+        // Hoerprobe hatte 150 ms Vorsprung fuer die Glocke, damit man Anschlag
+        // und Schweif getrennt beurteilen kann; Birks spaetere Rueckmeldung
+        // ("soll sofort mit voller Power losgehen") hat das ueberholt, und ein
+        // Versatz braeuchte hier eine Zeitplanung je Treffer, die es sonst
+        // nirgends in dieser Datei gibt.
+        tailAmp = amp * ~tailAmpScale;
+        newTails = ~tailDefs.collect({ |entry|
+            var defName = entry[0], prefix = entry[1], dir, thisAmp;
+            thisAmp = tailAmp * currentEnvironment[(prefix ++ "Amp").asSymbol];
+            // Ein stummer Tail wird gar nicht erst erzeugt: der Amp-Regler
+            // (und tailVolume) sparen damit nicht nur Pegel, sondern auch
+            // Last -- sonst liefen fuenf Synths, von denen vier Stille
+            // rechnen, und der Polyphonie-Deckel zaehlte sie mit.
+            if ((thisAmp * ~tailVolume) <= 0) {
+                nil
+            } {
+                // Richtung JE TAIL unabhaengig gewuerfelt, nicht je Treffer:
+                // bei einer gemeinsamen Ziehung rotierten alle fuenf
+                // Schichten synchron -- genau das, was die additive
+                // Schichtung raeumlich wieder zu einer Quelle machen wuerde.
+                // Bewusst hier in sclang und nicht per TIRand im Graphen:
+                // hier ist die Richtung sichtbar, loggbar und per
+                // tailOrbitDirLock feststellbar.
+                dir = if (~tailOrbitDirLock.abs > 0.5) {
+                    ~tailOrbitDirLock.sign
+                } {
+                    [-1, 1].choose
+                };
+                Synth(defName, [
+                    \freq, freq, \amp, thisAmp,
+                    \x0, px, \y0, py, \out, ~quadBus.index,
+                    \attack,  currentEnvironment[(prefix ++ "Attack").asSymbol],
+                    \decay,   currentEnvironment[(prefix ++ "Decay").asSymbol],
+                    \sustain, currentEnvironment[(prefix ++ "Sustain").asSymbol],
+                    \release, currentEnvironment[(prefix ++ "Release").asSymbol],
+                    \tailVolume, ~tailVolume,
+                    \orbitRadius, ~tailOrbitRadius,
+                    \orbitSpeed, ~tailOrbitSpeed,
+                    \orbitEnvExp, ~tailOrbitEnvExp,
+                    \orbitDir, dir,
+                    \orbitMinRadius, ~tailOrbitMinRadius
+                ], ~voices)
+            }
+        }).reject({ |syn| syn.isNil });
+
+        // Glocke und ihre Tails als EINE Stimme fuehren (siehe ~maxPolyphony):
+        // ein Eintrag, ein Deckel, ein Aufraeumer. Kein zweites Dictionary,
+        // kein zweiter Reaper, kein zweites Limit -- dieselbe Ueberlegung, aus
+        // der die Windschicht IN \impulseDrone sitzt statt als eigener Synth.
+        voiceGroup = [newBell] ++ newTails;
+        ~activeBells.add(voiceGroup);
         // Natuerliches Verklingen (doneAction 2 im SynthDef) muss
         // ~activeBells auch aufraeumen, sonst waechst die Liste dauerhaft
         // weiter und removeAt(0) wuergt laengst verklungene Synths ab
         // (harmlos, aber sinnlos -- das echte Voice-Stealing traefe dann die
-        // falschen).
-        newBell.onFree({ ~activeBells.remove(newBell); });
+        // falschen). Aufgehaengt ist das an der GLOCKE, nicht am laengsten
+        // Tail: sie ist der einzige Synth, den es sicher gibt. Folge, die man
+        // kennen muss -- die Tails klingen laenger als die Glocke (bis 4.5 s
+        // gegen 3.2 s), ein Eintrag verlaesst die Buchfuehrung also, waehrend
+        // seine Tails noch ausklingen. Das Fenster ist durch die
+        // Release-Zeiten begrenzt und laeuft von selbst leer; es waechst
+        // nicht. Die Alternative -- jeden der sechs Synths einzeln beobachten
+        // und den Eintrag erst beim letzten raeumen -- kostete sechs
+        // Node-Watcher je Treffer statt einem, fuer ein paar Sekunden
+        // genauere Buchfuehrung an der Ueberlastgrenze.
+        newBell.onFree({ ~activeBells.remove(voiceGroup); });
 
         ("node % -> % Hz (amp %) bei (%, %) m, Zone %".format(
             nodeId, freq.round(0.1), amp.round(0.01), px.round(0.01), py.round(0.01),
@@ -1605,8 +2148,12 @@ s.waitForBoot({
 
     "KlangNetz Hang-Drum-Bells (Phrygisch ab A2, Pan4 auf % Kanaele, Limiter): hoere auf /net/hitNode und /net/impulse, Port % - bereit.".format(
         s.options.numOutputBusChannels, ~oscListenPort).postln;
-    ("Polyphonie: hoechstens % Glocken und % Drohnen gleichzeitig.".format(
-        ~maxPolyphony, ~droneLimit)).postln;
+    // "Stimmen", nicht "Glocken": ein Eintrag ist die Glocke PLUS ihre fuenf
+    // Tails (siehe ~maxPolyphony). Die Synth-Zahl dahinter ist die, die den
+    // Server beschaeftigt, und die soll im Startbericht stehen.
+    (("Polyphonie: hoechstens % Stimmen (je bis zu % Synths: Glocke +"
+        + "% Tails) und % Drohnen gleichzeitig.").format(
+        ~maxPolyphony, ~tailDefs.size + 1, ~tailDefs.size, ~droneLimit)).postln;
     ("Sound-Parameter-Layer aktiv: % Parameter unter /klangnetz/param/<name>, Port % - siehe Adressliste im Kopf der Datei.".format(
         ~params.size, ~oscListenPort)).postln;
     "KlangNetz: Panning auf Pan4 umgebaut (2026-07-31), Rotation+Hardware-Kanal-Permutation per NRT-Messung verifiziert - alle vier Boxpositionen 100% scharf, Netzmitte 25/25/25/25%.".postln;
