@@ -599,6 +599,30 @@ class RealRepositoryTest(unittest.TestCase):
         self.assertIn("data/presets/a.txt", message)
         self.assertIn("nicht gepusht", message)
 
+    def test_works_inside_a_git_worktree(self):
+        """In einem Worktree ist .git eine DATEI, kein Ordner.
+
+        Der Test-Deploy und die Entwicklungs-Checkouts sind Worktrees; wuerde
+        das Aufloesen des git-Dir dort scheitern, faende die Erkennung eines
+        offenen Merges nie einen Marker und der Auto-Commit committete
+        mitten in einen laufenden Vorgang hinein.
+        """
+        tree = os.path.join(self.tmp, "..",
+                            os.path.basename(self.tmp) + "-worktree")
+        tree = os.path.abspath(tree)
+        self.addCleanup(__import__("shutil").rmtree, tree, ignore_errors=True)
+        self.git("worktree", "add", "-q", "-b", "zweig", tree)
+
+        auto = autocommit.AutoCommitter(tree)
+        self.assertIn("HEAD", auto._default_git_dir_lister())
+
+        with open(os.path.join(tree, "data", "presets", "a.txt"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("im Worktree geaendert\n")
+        result = auto.check_and_commit()
+        self.assertEqual(result.status, "committed", result.detail)
+        self.assertEqual(result.paths, ["data/presets/a.txt"])
+
     def test_deleted_preset_is_committed_as_a_deletion(self):
         os.remove(os.path.join(self.tmp, "data", "presets", "a.txt"))
         result = autocommit.AutoCommitter(self.tmp).check_and_commit()
