@@ -647,8 +647,10 @@ class SequencerSectionTest(unittest.TestCase):
                          % (server.SPEED_WEIGHT_PREFIX, suffix))
         lines += [
             "int\t%sstaggerEnabled\tx\t0\t0\t1" % server.SPLIT_PREFIX,
-            "int\t%sstaggerNoteValue\tx\t16\t1\t16" % server.SPLIT_PREFIX,
         ]
+        for suffix, _note in server.SPLIT_STAGGER_NOTES:
+            lines.append("float\t%s%s\tx\t0\t0\t100"
+                         % (server.SPLIT_STAGGER_WEIGHT_PREFIX, suffix))
         for suffix, _label in server.SPLIT_WEIGHTS:
             lines.append("float\t%s%s\tx\t0\t0\t100"
                          % (server.SPLIT_WEIGHT_PREFIX, suffix))
@@ -724,16 +726,18 @@ class SequencerSectionTest(unittest.TestCase):
         self.assertIn("/net/sequencer/track5/energy", taken)
         self.assertIn("/net/impulse/speedQuantize/weight/8x", taken)
         self.assertIn("/net/impulse/split/weight/single", taken)
-        self.assertIn("/net/impulse/split/staggerNoteValue", taken)
+        self.assertIn("/net/impulse/split/stagger/weight/sixteenth", taken)
         # bpm + enabled, sechs Tracks a sechs Felder, quantize enabled+jitter,
-        # ein Gewicht je Klasse, dazu die Split-Sektion (zwei Stagger-Regler
-        # plus ein Gewicht je Kategorie). Aus den Konstanten gerechnet, nicht
-        # als Literal - die Trackzahl steht im Server.
+        # ein Gewicht je Klasse, dazu die Split-Sektion (der Stagger-Schalter,
+        # ein Gewicht je Fanout-Kategorie und eines je Notenwert-Klasse). Aus
+        # den Konstanten gerechnet, nicht als Literal - die Trackzahl steht im
+        # Server.
         expected = (2
                     + server.SEQUENCER_TRACK_COUNT
                     * (1 + len(server.SEQUENCER_TRACK_FIELDS))
                     + 2 + len(server.SPEED_CLASSES)
-                    + 2 + len(server.SPLIT_WEIGHTS))
+                    + 1 + len(server.SPLIT_WEIGHTS)
+                    + len(server.SPLIT_STAGGER_NOTES))
         self.assertEqual(len(taken), expected)
 
     def test_split_keeps_the_java_order(self):
@@ -743,14 +747,31 @@ class SequencerSectionTest(unittest.TestCase):
         # Dieselbe Reihenfolge wie SplitFanout: Index 0 = alle Zweige.
         self.assertTrue(split["weights"][0]["address"].endswith("/all"))
 
-    def test_split_carries_the_note_values_for_the_stagger(self):
-        """Ohne sie faellt app.js auf einen 1..16-Schieber zurueck, der Werte
-        anzeigt, die es nicht gibt (der Sketch rastet auf 1/2/4/8/16)."""
+    def test_split_stagger_weights_follow_the_java_note_values(self):
+        """Ein Gewicht je Notenwert-Klasse, in der Reihenfolge der Java-Seite
+        (OriginSequencer.NOTE_VALUES: Ganze .. Sechzehntel). Der Notenwert des
+        Versatzes wird je Aufspaltung gezogen, es gibt also keinen festen
+        Regler mehr, den eine Notenwert-Leiste zeigen koennte."""
         split = server.build_split(self._params())
-        self.assertEqual([n["value"] for n in split["noteValues"]],
+        self.assertEqual([w["noteValue"] for w in split["staggerWeights"]],
                          [1, 2, 4, 8, 16])
-        self.assertIsNotNone(split["staggerNoteValue"])
+        for weight in split["staggerWeights"]:
+            # Das Symbol allein reicht nicht: nicht jede Windows-Schrift hat
+            # U+1D15D..U+1D161, der Name ist der Rueckfall.
+            self.assertTrue(weight["symbol"])
+            self.assertTrue(weight["label"])
         self.assertIsNotNone(split["staggerEnabled"])
+        self.assertNotIn("staggerNoteValue", split)
+
+    def test_split_without_stagger_weights_still_renders(self):
+        """Aelterer imPulse-Stand ohne die Gewichte: die Sektion soll die
+        Fanout-Gewichte trotzdem zeigen, statt ganz zu verschwinden."""
+        by_address = {a: p for a, p in self._params().items()
+                      if not a.startswith(server.SPLIT_STAGGER_WEIGHT_PREFIX)}
+        split = server.build_split(by_address)
+        self.assertIsNotNone(split)
+        self.assertEqual(split["staggerWeights"], [])
+        self.assertEqual(len(split["weights"]), len(server.SPLIT_WEIGHTS))
 
     def test_snapshot_does_not_render_a_parameter_twice(self):
         """Der eigentliche Zweck der Entnahme: kein doppeltes Bedienelement."""
@@ -820,8 +841,10 @@ class TabLayoutTest(unittest.TestCase):
                          % (server.SPEED_WEIGHT_PREFIX, suffix))
         lines += [
             "int\t%sstaggerEnabled\tx\t0\t0\t1" % server.SPLIT_PREFIX,
-            "int\t%sstaggerNoteValue\tx\t16\t1\t16" % server.SPLIT_PREFIX,
         ]
+        for suffix, _note in server.SPLIT_STAGGER_NOTES:
+            lines.append("float\t%s%s\tx\t0\t0\t100"
+                         % (server.SPLIT_STAGGER_WEIGHT_PREFIX, suffix))
         for suffix, _label in server.SPLIT_WEIGHTS:
             lines.append("float\t%s%s\tx\t100\t0\t100"
                          % (server.SPLIT_WEIGHT_PREFIX, suffix))
@@ -881,7 +904,10 @@ class TabLayoutTest(unittest.TestCase):
         self.assertEqual(
             server.tab_for_address("/net/impulse/split/weight/all"), "noten")
         self.assertEqual(
-            server.tab_for_address("/net/impulse/split/staggerNoteValue"), "noten")
+            server.tab_for_address("/net/impulse/split/staggerEnabled"), "noten")
+        self.assertEqual(
+            server.tab_for_address("/net/impulse/split/stagger/weight/eighth"),
+            "noten")
         self.assertEqual(
             server.tab_for_address("/net/impulse/splitSpeedJitter"), "physik")
         self.assertEqual(

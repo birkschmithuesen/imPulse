@@ -213,6 +213,23 @@ SPLIT_WEIGHTS: List[Tuple[str, str]] = [
     ("single", "nur einer"),
 ]
 
+# Notenwert-Klassen des zeitlichen Versatzes: Adress-Suffix und Notenwert.
+# Reihenfolge wie OriginSequencer.NOTE_VALUES auf der Java-Seite (Ganze ..
+# Sechzehntel). Symbol und Name kommen aus NOTE_VALUES oben, damit "Achtel"
+# im ganzen UI gleich aussieht.
+#
+# Der Versatz hatte bis 2026-08-01 einen einzigen festen Notenwert; jetzt
+# wird er je Aufspaltung aus diesen Klassen gezogen. Deshalb steht hier eine
+# Verteilung wie bei den Speed-Klassen und keine Notenwert-Leiste mehr.
+SPLIT_STAGGER_WEIGHT_PREFIX = SPLIT_PREFIX + "stagger/weight/"
+SPLIT_STAGGER_NOTES: List[Tuple[str, int]] = [
+    ("whole", 1),
+    ("half", 2),
+    ("quarter", 4),
+    ("eighth", 8),
+    ("sixteenth", 16),
+]
+
 # Kurzerklaerungen fuer Parameter, deren Adresse allein nicht verraet, was sie
 # tun. remoteSettings.txt fuehrt zwar eine Beschreibungsspalte, die steht aber
 # bei fast allen Parametern auf dem Platzhalter "space for descripiton".
@@ -242,9 +259,10 @@ DESCRIPTIONS: Dict[str, str] = {
         "Laesst die Zweige einer Aufspaltung nacheinander statt gleichzeitig "
         "starten. Der Abstand haengt an /net/sequencer/bpm, auch wenn der "
         "Sequencer aus ist.",
-    "/net/impulse/split/staggerNoteValue":
-        "Abstand zwischen dem 1., 2. und 3. Zweig einer Aufspaltung, in "
-        "Notenwerten des BPM-Rasters.",
+    "/net/impulse/split/stagger/weight/sixteenth":
+        "Gewicht fuer einen Sechzehntel-Abstand zwischen den Zweigen. "
+        "Gezogen wird je Aufspaltung, nicht je Zweig - die Kinder EINES "
+        "Splits stehen also immer auf demselben Raster.",
     "/net/sequencer/enabled":
         "Not-Aus fuer alle sechs Tracks. Die Taktuhr laeuft weiter, das "
         "Wiedereinschalten haengt also nicht an der Dauer der Pause.",
@@ -319,14 +337,18 @@ def build_speed_classes(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str
 def build_split(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
     """Struktur der Split-Sektion, oder None wenn unbekannt.
 
-    Eigene Sektion statt fuenf generischer Schieber aus zwei Gruenden: die
-    drei Gewichte gehoeren als Verteilung zusammen (wie bei den
-    Speed-Klassen), und staggerNoteValue ist ein Notenwert -- ein Schieber
-    von 1 bis 16, der beim Lesen auf 1/2/4/8/16 rastet, zeigt Werte an, die
-    es nicht gibt. Die Notenwert-Leiste des Sequencers loest genau das schon.
+    Eigene Sektion statt acht generischer Schieber aus einem Grund: die
+    Gewichte gehoeren als Verteilung zusammen (wie bei den Speed-Klassen).
+    Acht Schieber nebeneinander sagen nicht, dass drei davon eine Verteilung
+    und fuenf davon eine zweite sind -- der Operator rechnete sich im Kopf
+    aus, was 40/25/10 bedeutet.
+
+    Zwei Verteilungen also: WIEVIELE Zweige eine Kreuzung nimmt, und mit
+    WELCHEM Notenwert sie auseinander starten. Der Notenwert wird je
+    Aufspaltung gezogen; einen festen Regler dafuer gibt es seit 2026-08-01
+    nicht mehr.
     """
     stagger_enabled = by_address.get(SPLIT_PREFIX + "staggerEnabled")
-    note_value = by_address.get(SPLIT_PREFIX + "staggerNoteValue")
     weights: List[Dict[str, Any]] = []
     for suffix, label in SPLIT_WEIGHTS:
         param = by_address.get(SPLIT_WEIGHT_PREFIX + suffix)
@@ -335,14 +357,24 @@ def build_split(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
         entry = param.as_dict()
         entry["label"] = label
         weights.append(entry)
-    if not weights and stagger_enabled is None:
+    note_labels = {value: (symbol, name) for value, symbol, name in NOTE_VALUES}
+    stagger_weights: List[Dict[str, Any]] = []
+    for suffix, note_value in SPLIT_STAGGER_NOTES:
+        param = by_address.get(SPLIT_STAGGER_WEIGHT_PREFIX + suffix)
+        if param is None:
+            continue
+        symbol, name = note_labels[note_value]
+        entry = param.as_dict()
+        entry["noteValue"] = note_value
+        entry["symbol"] = symbol
+        entry["label"] = name
+        stagger_weights.append(entry)
+    if not weights and not stagger_weights and stagger_enabled is None:
         return None
     return {
         "weights": weights,
         "staggerEnabled": stagger_enabled.as_dict() if stagger_enabled is not None else None,
-        "staggerNoteValue": note_value.as_dict() if note_value is not None else None,
-        "noteValues": [{"value": v, "symbol": s, "name": n}
-                       for v, s, n in NOTE_VALUES],
+        "staggerWeights": stagger_weights,
     }
 
 
@@ -365,11 +397,12 @@ def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
         for weight in speed["weights"]:
             taken.add(weight["address"])
     if split:
-        for key in ("staggerEnabled", "staggerNoteValue"):
-            entry = split.get(key)
-            if entry:
-                taken.add(entry["address"])
+        entry = split.get("staggerEnabled")
+        if entry:
+            taken.add(entry["address"])
         for weight in split["weights"]:
+            taken.add(weight["address"])
+        for weight in split.get("staggerWeights", []):
             taken.add(weight["address"])
     return taken
 
