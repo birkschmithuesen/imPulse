@@ -75,7 +75,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`, `WeightedChoice`, `SpeedQuantizer`, `SplitFanout`, `SplitStagger`, `StripeTreeStore`, `EnergyLevelStore`, `SongStructureDirector`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `StripeColorDefaults`, `OriginSequencer`, `WeightedChoice`, `SpeedQuantizer`, `SplitFanout`, `SplitStagger`, `StripeTreeStore`, `EnergyLevelStore`, `SongStructureDirector`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
@@ -99,6 +99,12 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
 - `WeightedChoiceTest` — die gewichtete Ziehung, aus `SpeedQuantizer` herausgezogen: Verteilung über 100 000 Ziehungen, Gewicht 0 wird nie gezogen, Normalisierung, Gewichte hinter `count` zählen nicht mit, entartete Eingaben (null, `count` zu gross, alle 0, negativ, NaN)
 - `EnergyLevelStoreTest` — die Energie-Level-Klassifikation: Parsen samt Kommentaren, unbekanntes Level, doppelter Name (letzte Zeile gewinnt), Rückfall auf *mittel*, `presetsForLevel` liefert eine **leere Liste** statt `null`, fehlende Datei, Gegenprobe an der echten `data/energyLevels.txt` gegen `data/presets/` (jedes Preset getaggt, mindestens zwei je Level — aus dem Verzeichnis gerechnet, nicht als Zahl notiert)
+- `StripeColorDefaultsTest` — die acht Auslieferungsfarben des Modus
+  „Stripe-Farben": acht Slots, die 24 Kanalwerte **unabhängig abgetippt**
+  (eine Prüfung, die dieselbe Tabelle gegen sich selbst hält, wäre keine),
+  Umrechnung 0..255 → 0..1, und kein Slot ist schwarz — ein schwarzer Slot
+  wäre ein Stripe, auf dem Impulse unsichtbar sind, ein Loch im Netz ohne
+  Fehlermeldung
 - `SongStructureDirectorTest` — die Dramaturgie-Ebene: Startlevel fest *ruhig*, Verweildauer in der Spanne des Levels, vertauschte min/max, live verengte Spanne klemmt die laufende Dauer, die Verteilung jeder Matrixzeile über 100 000 Übergänge, Gewicht 0 kommt nie vor, Nullzeile fällt auf *mittel* zurück, „zuletzt gespielt vermeiden", leerer Pool, manueller Sprung samt Verfall, `noteLoaded()`-Synchronisierung, ausgeschaltet zieht den Timer mit
 
 Daneben liegen im selben Ordner drei Sonden, die **echte Hardware ansprechen** und deshalb nicht Teil der Default-Suite sind: `TimingProbe` (misst den 40-Hz-Sendetakt am echten Netz), `PollProbe` (fragt die Controller per ArtPoll nach ihrem Befinden ab) und `PatternProbe` (speist die fünf Testbilder direkt über `ArtNetOutput` ein, ohne Processing-Laufzeit). Diese drei gezielt einzeln aufrufen, z. B. `test/run.sh TimingProbe`, niemals ungefragt gegen die Installation.
@@ -280,10 +286,46 @@ so prüfbar bleibt. Der Hinweis **je Track** erscheint dagegen nur, wenn
 Zustand, in dem ein eingestellter Filter wirkungslos ist, ohne Fehler und
 ohne Symptom.
 
+**Farben werden ausschliesslich am Farbwähler eingestellt** (Birk,
+2026-08-01) — die einzelnen Kanalregler sind aus dem UI verschwunden. Drei
+Sektionen im Farben-Tab, alle drei aus `build_colors()`/`build_fade()` in
+`server.py`:
+
+- **Impuls-Farbe** — der Moduswahlschalter `/net/impulse/color/useSpecificColor`
+  (hiess bis 2026-08-01 `useRemoteCol`; „remote" beschrieb, *woher* der Wert
+  kommt, und das tun beide Fälle) als Auswahlbalken mit zwei
+  Klartext-Zuständen, darunter der Wähler für die eine Impulsfarbe und die
+  **acht Stripe-Slots**. Die gerade unwirksame Quelle bleibt **sichtbar** und
+  wird nur gedimmt: ausblenden liesse offen, ob das Feature fehlt oder nur
+  gerade nicht dran ist, und wer die Slots einstellen will, *bevor* er
+  umschaltet, käme gar nicht an sie heran.
+- **Nachleuchten der Impulse** — siehe unten. Heisst nicht nur
+  „Nachleuchten", weil `Master/trace` im Mixer-Tab auch so heisst und das
+  ganze Bild betrifft statt nur die Impuls-Spur.
+- **Knoten-Farben** — die sechs HSB-Karten, jetzt ohne ihre drei Schieber.
+
+Zwei Dinge, die man beim Ändern kennen muss:
+
+- **`headlessControl()` hält die Adressen in der `controls`-Map**, obwohl es
+  ihre Regler nicht mehr gibt. Über genau diese Map laufen das Preset-Laden
+  und der `applied`/`echoed`-Rücklauf — eine Adresse, die dort fehlt, wird von
+  einem Preset still nicht angezeigt, und die Karte zeigt danach eine andere
+  Farbe als die Installation. Dasselbe Argument wie bei „`buildTabs()` baut
+  ALLE Panels".
+- **`color_addresses()`/`fade_addresses()` nehmen die Adressen aus dem
+  generischen Rendering**, genau wie `sequencer_addresses()`. Sonst stünde
+  jeder Kanal zweimal auf der Seite. `/net/impulse/color/gamma` ist bewusst
+  **nicht** dabei: eine Kurve ist keine Farbe, sie bleibt ein Regler (in der
+  Gruppe „Impuls-Farbe: Feinheiten" — der Gruppentitel trägt den Zusatz, weil
+  die Sektion daneben schon „Impuls-Farbe" heisst).
+
 **Die Farbpalette** (`data/colorPalettes.txt`, `GET`/`POST /api/palette`) ist
 eine Sammlung wiederverwendbarer Farben. Dieselbe Swatch-Reihe steht unter
 **jeder** Farbwähler-Karte; ein Klick setzt Hue/Sat/Bright genau dieser Karte
-über den ganz normalen `queueSendMany`-Weg, kein Sonderpfad. Fünf Dinge:
+über den ganz normalen `queueSendMany`-Weg, kein Sonderpfad. Bei den
+RGB-Karten (Impulsfarbe, Stripe-Slots) wird beim Anwenden und beim Übernehmen
+umgerechnet — sonst wäre die Palette ausgerechnet an den neun Karten nicht
+verfügbar, die es seit dem Farbwähler-Umbau gibt. Fünf Dinge:
 
 - **Format wie `data/stripeTrees.txt`** — Tab-Spalten
   `name hue sat bright` (0..1), `#` als Kommentar, von Hand editierbar, bei
@@ -297,6 +339,41 @@ eine Sammlung wiederverwendbarer Farben. Dieselbe Swatch-Reihe steht unter
 - **Kein OSC.** Die Palette ist reine UI-Sache, imPulse kennt sie nicht.
 - **Kein Preset-Ersatz.** Sie hält nur Farbwerte, nicht welche Karte welche
   Farbe trägt — das können die Presets schon.
+
+**Das Nachleuchten wird über Zielfarbe und Tempo bedient, nicht über die drei
+Zerfallsraten.** `/net/impulse/fadeOut/{r,g,b}` sind **keine Farbe**: der
+Effekt multipliziert den ganzen LED-Puffer in jedem Frame damit
+(`LedColor.mult` in `drawMe()`). Ein Farbwähler direkt darauf wäre
+irreführend — „heller im Wähler" hiesse dort „zerfällt *langsamer*". Bedient
+wird deshalb, was ein Operator wirklich fragt: welche Farbe hat die Spur, kurz
+bevor sie verschwindet, und wie schnell verschwindet sie.
+
+```
+w_c       = MIN_WEIGHT + (1 - MIN_WEIGHT) * (ziel_c / max(ziel))
+fadeOut_c = baseDecay ** (1 / w_c)
+```
+
+Vier Dinge dazu:
+
+- **Die Umrechnung steht in `server.py`** (`fade_from_target`,
+  `fade_to_target`, `POST /api/fadeout`), nicht in `app.js`. Sie ist eine
+  Aussage darüber, wie der Effekt den Puffer multipliziert, und nur dort ohne
+  jsdom prüfbar; das UI kennt nur Zielfarbe und Tempo, also genau die zwei
+  Dinge, die es anzeigt. Eine zweite Kopie im JS wären zwei Wahrheiten.
+- **Die Potenz-Form ist kein Geschmack, sondern der Grenzfall `baseDecay = 1`:**
+  `1**x == 1` für jedes `x`, also alle drei Kanäle 1, unabhängig von der
+  Zielfarbe. Eine multiplikative Gewichtung hätte dort je Kanal etwas anderes
+  ergeben — „kein Zerfall" wäre farbabhängig gewesen.
+- **`MIN_WEIGHT = 0.05` ist zurückgerechnet, nicht geraten.** Der
+  Auslieferungswert 0.97/0.96/0.56 (der warme Schweif der Installation) muss
+  mit dem neuen Bedienelement einstellbar bleiben; er verlangt für Blau ein
+  Gewicht von `ln(0.97)/ln(0.56) = 0.0525`. Bei einem grösseren Mindestgewicht
+  wäre er unerreichbar. Hin- und Rückweg reproduzieren ihn exakt (Test).
+- **Schwarze Zielfarbe fällt auf Gewicht 1 zurück**, statt durch null zu
+  teilen: „welche Farbe bleibt übrig" hat bei Schwarz keine Antwort, also
+  verfärbt sich nichts. Die Umkehrung liefert bei „zerfällt gar nichts" und
+  „zerfällt alles sofort" **Weiss** — beides sind Fälle ohne eindeutige
+  Zielfarbe, und Weiss behauptet keine Färbung, die es nicht gibt.
 
 Sechs Dinge, die man beim Ändern kennen muss:
 
@@ -363,6 +440,31 @@ Jede `TravellingActivation` trägt ausserdem eine fortlaufende `id` (`final`, ve
 Zwei Mechanismen, die man beim Ändern kennen muss:
 - **Filler**: Bei hoher Geschwindigkeit überspringt ein Impuls LEDs zwischen zwei Frames. Für die übersprungenen Positionen werden `TravellingActivationFiller` erzeugt, gezeichnet und am Ende desselben Frames wieder entfernt. Ein Filler übernimmt die `id` seines Elternimpulses, statt eine neue zu verbrauchen — strukturell erzwungen, weil die Filler-Klasse nur den Konstruktor mit ausdrücklicher ID anbietet. Im Positionsstrom werden Filler zusätzlich explizit übersprungen, sonst sähe die Klangseite einen einzigen Impuls, der im selben Takt zwischen mehreren Positionen hin- und herspringt.
 - **nodeDeadTime**: Ein Node feuert erst wieder nach `/net/impulse/nodeDeadTime` Sekunden. Ohne diese Totzeit würde ein Impuls denselben Node in aufeinanderfolgenden Frames endlos neu triggern.
+
+**Zwei Farbquellen, ein Schalter** (`/net/impulse/color/useSpecificColor`, int
+0/1, Default 1): bei 1 bekommt jeder Impuls die eine zentral gesetzte Farbe
+(`impulseR/G/B`), bei 0 die Farbe seines Stripes. Der Schalter hiess bis
+2026-08-01 `useRemoteCol` — „remote" beschrieb, *woher* der Wert kommt, und
+das tun beide Fälle; die 14 Preset-Dateien sind mit umbenannt, sonst hätte
+jedes Laden die Adresse als unbekannt gemeldet und den Modus stehen lassen.
+
+Die acht Farben des Gegenfalls waren bis dahin ein Literal-Array
+(`stripeColorMapping`) mitten im Effekt und weder per OSC noch im Web-UI
+erreichbar. Sie sind jetzt 24 `RemoteControlledFloatParameter` unter
+`/net/impulse/stripeColor/<0..7>/{r,g,b}`; Stripe → Slot geht per Modulo, bei
+30 Stripes wiederholt sich das Muster also alle acht. Zwei Dinge:
+
+- **Es gibt bewusst keine `data/stripeColors.txt`.** Stripe-Farben stünden
+  damit an drei Orten (Code-Default, Datei, Preset) statt an zweien, und ein
+  geladenes Preset widerspräche der Datei, ohne dass das auffällt. Als normale
+  Parameter erben sie Preset-Persistenz, `remoteSettings.txt` und
+  Live-Änderung geschenkt; die Rückwärtskompatibilität liefert der
+  Compile-Time-Default.
+- **Die Startwerte stehen in `StripeColorDefaults.java`**, allein und ohne
+  oscP5 — nur so ist die Tabelle über `test/run.sh` prüfbar
+  (`StripeColorDefaultsTest` hält die 24 Kanalwerte unabhängig abgetippt
+  fest). Ein beim Umbau vertauschter Kanal fiele sonst erst an der
+  Installation auf, und dann als „die Farben stimmen irgendwie nicht mehr".
 
 Bei einem Node-Treffer erhält jeder Zweig aktuell die **volle** Energie des Elternimpulses (`childEnergy = curActivation.energy`) — ein bewusster Quick-Fix, jede Aufspaltung vervielfacht also die Gesamtenergie. Die auskommentierte Zeile darüber zeigt die energieerhaltende Variante.
 
