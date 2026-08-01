@@ -258,8 +258,8 @@ function appendMeta(wrap, param, address) {
   return wrap;
 }
 
-function makeHead(param, addressOverride) {
-  const address = addressOverride || param.address;
+function makeHead(param) {
+  const address = param.address;
   const head = document.createElement('div');
   head.className = 'param-head';
 

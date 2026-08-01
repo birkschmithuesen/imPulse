@@ -153,6 +153,41 @@ Zwei Dinge, die man beim Ändern kennen muss:
 - **Normalisierung**: Float-Parameter werden auf 0..1 normalisiert gesendet, weil `RemoteControlledFloatParameter.digestMessage` selbst `PApplet.map(value, 0, 1, min, max)` anwendet. Int-Parameter gehen dagegen unverändert als Ganzzahl raus — die Float-Variante von `RemoteControlledIntParameter.digestMessage` ruft `intValue()` auf dem Float auf und verstümmelt den Wert. Ausserdem sind `Master/trace` und `Master/0/opacity/0.Impulse` in `mixer.java` **ohne** führenden Schrägstrich registriert; `python-osc` lehnt solche Adressen ab, deshalb hat `server.py` für diese einen eigenen minimalen OSC-Encoder.
 - **Speed-Kopplung**: Eine Änderung an `/net/impulse/speed` zieht `lifetime` (proportional) sowie `nodeDeadTime` und `/net/randomSpawn/interval` (invers) mit, damit die Impulse bei geänderter Geschwindigkeit weder reissen noch das Netz verstopfen (dieselbe Rechnung wie im Kommentar bei den Defaults in `LedNetworkTransportEffect.java`). Referenzpunkt und Formel stehen als `SPEED_REFERENCE`/`SPEED_COUPLED` oben in `server.py`, im UI ist die Kopplung per Checkbox abschaltbar.
 
+**Beschriftet wird auf der Server-Seite** (`ADDRESS_LABELS` in `server.py`,
+`label`-Feld je `SC_PARAMS`-Eintrag, `GROUP_TITLE_OVERRIDES` für die
+Überschriften). Bis 2026-08-01 war der sichtbare Titel eines Reglers das
+letzte Segment seiner OSC-Adresse — für einen Operator ohne Code-Kenntnis
+keine Beschriftung, sondern ein Hinweis darauf, wo man nachschlagen müsste.
+Jetzt steht dort Klartext („Totzeit pro Knoten"), darunter ein bis zwei Sätze
+zur Wirkung, darunter die rohe Adresse als kleinste, gedimmte Zeile
+(`.param-addr`). Fünf Dinge:
+
+- **Die Zuordnung steht in `server.py`, nicht in `app.js`** — dasselbe
+  Argument wie bei `TAB_RULES` und `TREE_HELP`: sie ist eine inhaltliche
+  Aussage darüber, was ein Parameter im Sketch bewirkt, und nur hier ohne
+  jsdom prüfbar. `test_webui.py` hält fest, dass **kein** Regler des fertigen
+  Snapshots ohne Titel bleibt.
+- **Drei Nachschlagestufen** (`label_for`): exakte Adresse, dann das
+  Ziffern-Muster (`/net/sequencer/track0/energy` →
+  `/net/sequencer/track#/energy`, sechs Tracks teilen sich einen Eintrag),
+  dann das letzte Segment (`Hue` → „Farbton" deckt die 18 Farbkomponenten der
+  sechs Knoten-Karten ab). Eine unbekannte Adresse fällt auf das Adresssegment
+  zurück — ein neuer Regler ist dann technisch beschriftet statt gar nicht.
+- **`None` als Erklärung heisst „selbsterklärend", ein fehlender Eintrag
+  heisst „vergessen".** Deshalb stehen auch triviale Adressen
+  (`/net/impulse/color/r`) mit `None` in der Tabelle; sonst könnte der
+  Vollständigkeitstest die zwei Fälle nicht unterscheiden.
+- **Die rohe Adresse bleibt sichtbar**, nicht nur im `title`-Attribut: zum
+  Debuggen mit OSC von Hand wird sie gebraucht, und im Dunkeln neben der
+  Installation findet niemand einen Hover-Text. Sie ist nur nicht mehr der
+  Haupttext.
+- **Die kompakten Panels behalten ihre kurzen Beschriftungen** („Wdh.",
+  „Swing", „0,5x"): sechs Erklärungen mal sechs Track-Karten wären 36 Absätze
+  und machten genau das Panel unbedienbar, das die flache Reglerliste ersetzt
+  hat. Statt dessen steht **einmal** unter der Spurenreihe eine Legende
+  (`track_field_legend()`), deren Texte aus `ADDRESS_LABELS` kommen — nicht
+  aus einer zweiten Liste, die nachgezogen werden müsste.
+
 Über den Reglern sitzt die Sektion **Presets** (Dropdown + Laden, Textfeld + Speichern). Sie ist der dritte Ladeweg neben OSC von Hand und dem Scheduler, benutzt aber dieselben Kommandos: `/preset/load <name>` und `/preset/save <name>` als OSC-String an 8001. Drei Dinge daran sind nicht offensichtlich:
 - **Die Liste kommt vom Dateisystem, nicht per OSC.** `server.py` läuft auf derselben Maschine wie imPulse und liest `data/presets/` direkt (`--presets`, Vorgabe `presets/` neben `--settings`). Ein OSC-Rückkanal wäre neu zu bauen — die einzige Ausgangsadresse des Sketches ist 8002. Geschrieben wird der Ordner weiterhin ausschliesslich von imPulse; deshalb gibt es im UI auch kein Löschen.
 - **Nach dem Laden zieht der Server die Regleranzeige nach**, indem er dieselbe Preset-Datei mit `parse_settings()` liest — das geht, weil Preset- und `remoteSettings.txt`-Format identisch sind. Die Werte gehen in der HTTP-Antwort zurück und werden im Browser *still* gesetzt (kein zweites OSC); geklemmt wird auf die Range aus `remoteSettings.txt`, nicht auf die aus der Preset-Datei — dieselbe Regel wie `PresetStore.applyPreset()`. Adressen, die der Dump nicht kennt, und Werte ausserhalb der verengten UI-Range (`UI_RANGE_OVERRIDES`) nennt die Statuszeile, statt sie zu verschlucken.
