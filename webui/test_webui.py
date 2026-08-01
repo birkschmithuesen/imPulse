@@ -1289,6 +1289,20 @@ class ScParamTest(unittest.TestCase):
             self.assertGreaterEqual(entry["default"], entry["min"], entry["name"])
             self.assertLessEqual(entry["default"], entry["max"], entry["name"])
 
+    def test_every_entry_has_a_label_and_a_description(self):
+        """Der Registry-Name ("travelOctavesPerStep") ist die OSC-Kennung, kein
+        Titel fuer einen Operator. Beides muss dastehen."""
+        for entry in server.SC_PARAMS:
+            self.assertTrue(entry.get("label"),
+                            "%s ohne label" % entry["name"])
+            self.assertTrue(entry.get("description"),
+                            "%s ohne description" % entry["name"])
+
+    def test_labels_are_unique(self):
+        """Zwei Regler mit demselben Titel waeren im UI nicht zu unterscheiden."""
+        labels = [p["label"] for p in server.SC_PARAMS]
+        self.assertEqual(len(labels), len(set(labels)))
+
     def test_names_are_unique(self):
         names = [p["name"] for p in server.SC_PARAMS]
         self.assertEqual(len(names), len(set(names)))

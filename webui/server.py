@@ -1010,57 +1010,101 @@ TAB_PRIMARY: Dict[str, List[str]] = {
 
 SC_OSC_PORT = 8002
 SC_PARAM_PREFIX = "/klangnetz/param/"
+#
+# "label" ist der sprechende Titel im UI, "description" die Zeile darunter --
+# dieselbe Aufteilung wie ADDRESS_LABELS fuer die imPulse-Parameter. Der Name
+# aus der Registry ("travelOctavesPerStep") bleibt als Adresszeile sichtbar:
+# er ist die Kennung, unter der der Parameter per OSC ansprechbar ist.
 SC_PARAMS: List[Dict[str, Any]] = [
     {"name": "masterVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
-     "group": "Master", "description": "Gain nach dem Panning, vor dem Limiter."},
+     "group": "Master", "label": "Gesamtlautstaerke", "description":
+     "Der Show-Fader des Klangs, hinter dem Panning und vor dem Limiter. "
+     "Wirkt auf alles."},
     {"name": "bellVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
-     "group": "Master", "description":
-     "Layer-Fader der Glocken, vor masterVolume. Wirkt auf den naechsten Ton."},
+     "group": "Master", "label": "Lautstaerke der Glocken", "description":
+     "Nur die Toene, die an den Kreuzungen anschlagen. Wirkt erst auf den "
+     "naechsten Ton - eine Glocke wird nicht mittendrin leiser."},
     {"name": "droneVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
-     "group": "Master", "description":
-     "Layer-Fader der Impuls-Drohnen, vor masterVolume. Wirkt sofort."},
+     "group": "Master", "label": "Lautstaerke der Impuls-Drohnen", "description":
+     "Nur die liegenden Klaenge, die den reisenden Impulsen folgen. Wirkt "
+     "sofort, auch auf schon klingende Stimmen."},
     {"name": "reverbMix", "tab": TAB_MIXER, "default": 0.35, "min": 0.0, "max": 1.0,
-     "group": "Master", "description": "Trocken/nass des Halls hinter dem Panning."},
+     "group": "Master", "label": "Hallanteil", "description":
+     "Trocken zu nass. Der Hall sitzt hinter der Ortung, verwischt sie also "
+     "nicht."},
     {"name": "reverbRoom", "tab": TAB_MIXER, "default": 0.5, "min": 0.0, "max": 1.0,
-     "group": "Master", "description": "Gefuehlte Raumgroesse."},
+     "group": "Master", "label": "Raumgroesse", "description":
+     "Wie gross der Raum klingt, in dem die Toene stehen - laengerer Schweif "
+     "bei hohen Werten."},
     {"name": "reverbDamp", "tab": TAB_MIXER, "default": 0.5, "min": 0.0, "max": 1.0,
-     "group": "Master", "description": "Hoehendaempfung im Hallschweif."},
+     "group": "Master", "label": "Hoehendaempfung im Hall", "description":
+     "Wie schnell die Hoehen im Hallschweif wegsterben. Hoch = dunkler, "
+     "weicher Nachklang."},
     {"name": "panSharpness", "tab": TAB_SOUND, "default": 1.0, "min": 0.1, "max": 8.0,
-     "group": "Master", "description": "Schaerfe der Ortung. 1 = Referenz."},
+     "group": "Master", "label": "Schaerfe der Ortung", "description":
+     "Wie eng ein Klang auf eine Box gezogen wird. 1 = Referenz; hoch = "
+     "punktgenau, niedrig = im Raum verteilt."},
     {"name": "brightness", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 2.0,
-     "group": "Glocke", "description": "Amp der oberen vier Teiltoene."},
+     "group": "Glocke", "label": "Glanz der Glocke", "description":
+     "Pegel der oberen vier Teiltoene. Hoch = hell und glasig, niedrig = "
+     "dumpf und holzig."},
     {"name": "detune", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
-     "group": "Glocke", "description": "1 = metallisch, 0 = rein harmonisch."},
+     "group": "Glocke", "label": "Metallischer Charakter", "description":
+     "Verstimmung der Teiltoene gegeneinander. 1 = metallisch und schwebend, "
+     "0 = rein harmonisch wie eine Orgel."},
     {"name": "regionBiasAmount", "tab": TAB_SOUND, "default": 0.6, "min": 0.0, "max": 1.0,
-     "group": "Glocke", "description":
-     "Klangbias nach Netzregion (vier Quadranten). 0 = aus."},
+     "group": "Glocke", "label": "Regions-Klangbias", "description":
+     "Wie stark sich Tonwahl und Klangfarbe zwischen den vier Netzquadranten "
+     "unterscheiden. 0 = aus, ueberall gleich."},
     {"name": "droneLpfMult", "tab": TAB_SOUND, "default": 6.0, "min": 1.0, "max": 12.0,
-     "group": "Travel-Sound", "description": "Filter der Tonschicht der Drohne."},
+     "group": "Travel-Sound", "label": "Klangfarbe der Drohne", "description":
+     "Filter auf der Tonschicht einer Impuls-Drohne. Niedrig = dumpf und "
+     "zurueckhaltend, hoch = praesent."},
     {"name": "travelMix", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 1.0,
-     "group": "Travel-Sound", "description":
-     "Crossfade Tondrohne zu Windband. 0 = kein Travel-Sound."},
+     "group": "Travel-Sound", "label": "Wind statt Ton", "description":
+     "Blendet die Drohne vom liegenden Ton zur rieselnden Windschicht ueber. "
+     "0 = kein Travel-Sound; nur ueber diese Schicht ist die Tempo-Klasse "
+     "eines Impulses hoerbar."},
     {"name": "travelRq", "tab": TAB_SOUND, "default": 0.35, "min": 0.02, "max": 1.0,
-     "group": "Travel-Sound", "description":
-     "Koernerdauer (Anteil von 20 ms). Klein = sandig und kleinteilig."},
+     "group": "Travel-Sound", "label": "Koernerdauer im Wind", "description":
+     "Wie lang ein einzelnes Rauschkorn klingt (Anteil von 20 ms). Klein = "
+     "sandig und kleinteilig, gross = fliessend."},
     {"name": "travelGrainRatio", "tab": TAB_SOUND, "default": 0.125, "min": 0.01, "max": 2.0,
-     "group": "Travel-Sound", "description":
-     "Koerner je Sekunde als Vielfaches von travelFreq - traegt die Speed-Klasse."},
+     "group": "Travel-Sound", "label": "Dichte des Windes", "description":
+     "Koerner je Sekunde, gerechnet als Vielfaches der Windfrequenz - dadurch "
+     "rieseln schnelle Impulse dichter als langsame."},
     {"name": "travelAmpScale", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 2.0,
-     "group": "Travel-Sound", "description": "Pegel nur der Rauschschicht."},
+     "group": "Travel-Sound", "label": "Pegel der Windschicht", "description":
+     "Nur das Rauschen, ohne die Tonschicht. Zum Abgleichen, wenn der "
+     "Uebergang beim Ueberblenden einen Sprung macht."},
     {"name": "travelFreqBase", "tab": TAB_SOUND, "default": 400.0, "min": 50.0, "max": 4000.0,
-     "group": "Travel-Sound", "description": "Frequenz bei der 1x-Speed-Klasse."},
+     "group": "Travel-Sound", "label": "Wind-Tonlage bei 1x", "description":
+     "Grenzfrequenz des Windes fuer einen Impuls der Klasse 1x. Alle anderen "
+     "Klassen liegen oktavweise darueber und darunter."},
     {"name": "travelSpeedRef", "tab": TAB_SOUND, "default": 16.0, "min": 1.0, "max": 1500.0,
-     "group": "Travel-Sound", "description": "Speed in LEDs/s, die als 1x gilt."},
+     "group": "Travel-Sound", "label": "Bezugsgeschwindigkeit", "description":
+     "Welche Geschwindigkeit in LEDs/s als 1x gilt. Sollte zur "
+     "Grundgeschwindigkeit im Impuls-Tab passen, sonst liegt der ganze "
+     "Wind zu hoch oder zu tief."},
     {"name": "travelOctavesPerStep", "tab": TAB_SOUND, "default": 1.0, "min": 0.25, "max": 3.0,
-     "group": "Travel-Sound", "description":
-     "Oktaven je Verdopplung der Speed. Groesser = Klassen deutlicher getrennt."},
+     "group": "Travel-Sound", "label": "Spreizung der Tempo-Klassen",
+     "description":
+     "Oktaven je Verdopplung der Geschwindigkeit. Groesser = die Klassen "
+     "liegen klanglich weiter auseinander und sind leichter zu "
+     "unterscheiden."},
     {"name": "travelSnap", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
-     "group": "Travel-Sound", "description":
-     "Rastet die Frequenz auf die Speed-Klasse, damit Jitter sie nicht verschmiert."},
+     "group": "Travel-Sound", "label": "Auf Tempo-Klasse rasten",
+     "description":
+     "Rundet die Wind-Tonlage auf die Klasse, damit jeder Impuls einer Klasse "
+     "auf derselben Hoehe zischt und der Swing sie nicht verschmiert."},
     {"name": "travelFreqMin", "tab": TAB_SOUND, "default": 80.0, "min": 20.0, "max": 2000.0,
-     "group": "Travel-Sound", "description": "Untere harte Grenze."},
+     "group": "Travel-Sound", "label": "Wind: tiefste Tonlage", "description":
+     "Harte Untergrenze - darunter faellt der Wind nie, egal wie langsam ein "
+     "Impuls reist."},
     {"name": "travelFreqMax", "tab": TAB_SOUND, "default": 6000.0, "min": 200.0, "max": 16000.0,
-     "group": "Travel-Sound", "description": "Obere harte Grenze."},
+     "group": "Travel-Sound", "label": "Wind: hoechste Tonlage", "description":
+     "Harte Obergrenze - darueber steigt der Wind nie, egal wie schnell ein "
+     "Impuls reist."},
 ]
 
 
