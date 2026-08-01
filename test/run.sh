@@ -37,7 +37,10 @@ SOURCES="LedColor.java ArtNetOutput.java"
 [ -f SplitVariance.java ] && SOURCES="$SOURCES SplitVariance.java"
 [ -f MusicalClock.java ] && SOURCES="$SOURCES MusicalClock.java"
 [ -f OriginSequencer.java ] && SOURCES="$SOURCES OriginSequencer.java"
+[ -f WeightedChoice.java ] && SOURCES="$SOURCES WeightedChoice.java"
 [ -f SpeedQuantizer.java ] && SOURCES="$SOURCES SpeedQuantizer.java"
+[ -f SplitFanout.java ] && SOURCES="$SOURCES SplitFanout.java"
+[ -f SplitStagger.java ] && SOURCES="$SOURCES SplitStagger.java"
 [ -f StripeTreeStore.java ] && SOURCES="$SOURCES StripeTreeStore.java"
 
 javac -nowarn -cp "$CORE" -d build $SOURCES test/*.java
@@ -56,7 +59,7 @@ if [ "$#" -eq 0 ]; then
                   TestPatternsTest PresetStoreTest PresetSchedulerTest \
                   ParameterOscillatorTest SplitVarianceTest \
                   MusicalClockTest OriginSequencerTest SpeedQuantizerTest \
-                  StripeTreeStoreTest; do
+                  StripeTreeStoreTest SplitFanoutTest SplitStaggerTest; do
     if [ -f "test/$optional.java" ]; then
       set -- "$@" "$optional"
     else
