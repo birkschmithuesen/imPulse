@@ -97,6 +97,22 @@ class StripeTreeStore {
     return pool;
   }
 
+  // Baumindex eines Stripes: 0..3 in der Reihenfolge von TREE_NAMES, oder -1.
+  //
+  // Die Indexvariante zu treeNameOf: der Klangbias auf der SC-Seite rechnet
+  // mit Zahlen (er indiziert vier gleich lange Tabellen), nicht mit Namen,
+  // und der Wert wird als OSC-Argument an /net/hitNode angehaengt.
+  //
+  // -1 heisst ausdruecklich "unbekannt", nicht "vorn": ein unzugeordneter
+  // Stripe bekommt auf der Klangseite den neutralen Bias, statt still in
+  // die Faerbung des ersten Baums zu rutschen.
+  int treeOf(int stripeIndex) {
+    if (stripeIndex < 0 || stripeIndex >= nStripes) {
+      return -1;
+    }
+    return treeOfStripe[stripeIndex];
+  }
+
   // Name des Baums eines Stripes, oder "-". Nur fuer Diagnoseausgaben.
   String treeNameOf(int stripeIndex) {
     if (stripeIndex < 0 || stripeIndex >= nStripes) {

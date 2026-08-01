@@ -169,6 +169,28 @@ public class StripeTreeStoreTest {
     Check.eq("Stripe 3 gehoert zu links", "links", s.treeNameOf(3));
     Check.eq("unbekannter Stripe hat keinen Baum", "-", s.treeNameOf(99));
 
+    // ---- treeOf: die Indexvariante fuer den Klangbias ----
+    // Der Bias auf der SC-Seite indiziert vier gleich lange Tabellen und
+    // rechnet deshalb mit 0..3, nicht mit Namen. Der Wert wird als OSC-
+    // Argument an /net/hitNode angehaengt.
+    Check.eq("Stripe 0 hat Baumindex 0 (vorn)", 0, s.treeOf(0));
+    Check.eq("Stripe 3 hat Baumindex 3 (links)", 3, s.treeOf(3));
+    // -1 heisst "unbekannt", nicht "vorn": ein unzugeordneter Stripe soll auf
+    // der Klangseite den neutralen Bias bekommen, statt still in die Faerbung
+    // des ersten Baums zu rutschen.
+    Check.eq("Stripe ausserhalb des Bereichs", -1, s.treeOf(99));
+    Check.eq("negativer Stripe", -1, s.treeOf(-1));
+    StripeTreeStore neverLoaded = new StripeTreeStore(8);
+    Check.eq("ohne Laden ist kein Stripe zugeordnet", -1, neverLoaded.treeOf(0));
+    // treeOf und treeNameOf muessen dieselbe Zuordnung liefern - zwei
+    // Ableitungen aus demselben Array, die auseinanderlaufen koennten.
+    for (int i = 0; i < 8; i++) {
+      int idx = s.treeOf(i);
+      String expected = (idx < 0) ? "-" : StripeTreeStore.TREE_NAMES[idx];
+      Check.eq("treeOf und treeNameOf sind einig fuer Stripe " + i,
+          expected, s.treeNameOf(i));
+    }
+
     // ---- Bericht fuer die Konsole ----
     Check.that("der Bericht nennt alle vier Baeume",
         s.report().contains("vorn") && s.report().contains("hinten")
