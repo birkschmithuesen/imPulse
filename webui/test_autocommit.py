@@ -402,5 +402,210 @@ class SchedulerTest(unittest.TestCase):
         self.assertIs(sched._thread, first)
 
 
+# Die Trennzeichenklasse ["'\s,]+ faengt beide Schreibweisen: die Kommandozeile
+# (`git add -A`) und die Argumentliste (`["git", "add", "-A"]`). Ein Muster,
+# das nur eine von beiden kennt, waere ein Test mit blindem Fleck genau dort,
+# wo dieses Modul arbeitet.
+FORBIDDEN_GIT_PATTERNS = (
+    r"""add["'\s,]+-A\b""",
+    r"""add["'\s,]+--all\b""",
+    r"""add["'\s,]+["']?\.(?![\w/])""",
+    r"""commit["'\s,]+-a\b""",
+    r"""\bgit\s+push\b""",
+    r"""["']push["']""",
+)
+
+
+class NoBlanketStagingTest(unittest.TestCase):
+    """Harte Sicherheitsanforderung, kein Stilwunsch.
+
+    Ein pauschales Staging wuerde fremde, halbfertige Handarbeit in einen
+    automatischen Commit ziehen; ein Push waere eine Fernwirkung ohne
+    Entscheidung, bei mehreren parallelen Checkouts am selben Remote. Beides
+    darf im Web-UI-Code nicht vorkommen -- auch nicht versehentlich in einer
+    spaeteren Erweiterung.
+    """
+
+    def python_sources(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        for name in sorted(os.listdir(here)):
+            if not name.endswith(".py"):
+                continue
+            if name == os.path.basename(__file__):
+                continue  # die Muster selbst stehen hier drin
+            with open(os.path.join(here, name), encoding="utf-8") as handle:
+                yield name, handle.read()
+
+    def test_no_blanket_add_and_no_push(self):
+        import re
+        checked = 0
+        for name, text in self.python_sources():
+            checked += 1
+            for pattern in FORBIDDEN_GIT_PATTERNS:
+                self.assertIsNone(
+                    re.search(pattern, text, re.MULTILINE),
+                    "%s enthaelt ein verbotenes Git-Muster: %s"
+                    % (name, pattern))
+        self.assertGreater(checked, 0, "keine Quelldatei geprueft")
+
+    def test_the_patterns_would_actually_catch_something(self):
+        """Gegenprobe: ein Test, der nie anschlaegt, prueft nichts."""
+        import re
+        offenders = [
+            'run(["git", "add", "-A"])',
+            'run(["git", "add", "--all"])',
+            'subprocess.run(["git", "add", "."])',
+            'git("commit", "-a", "-m", "x")',
+            'os.system("git push")',
+        ]
+        for line in offenders:
+            self.assertTrue(
+                any(re.search(p, line, re.MULTILINE)
+                    for p in FORBIDDEN_GIT_PATTERNS),
+                "kein Muster faengt %r" % line)
+
+
+def git_available():
+    import shutil
+    return shutil.which("git") is not None
+
+
+@unittest.skipUnless(git_available(), "git nicht verfuegbar")
+class RealRepositoryTest(unittest.TestCase):
+    """Der eigentliche Beweis: nur die ueberwachten Pfade landen im Commit.
+
+    Der Grep-Test oben prueft die Schreibweise, dieser das Verhalten.
+    """
+
+    def setUp(self):
+        import shutil
+        import subprocess
+        import tempfile
+        self.tmp = tempfile.mkdtemp(prefix="autocommit-test-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+        def git(*args):
+            done = subprocess.run(["git"] + list(args), cwd=self.tmp,
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT)
+            self.assertEqual(done.returncode, 0,
+                             done.stdout.decode("utf-8", "replace"))
+            return done.stdout.decode("utf-8", "replace")
+
+        self.git = git
+        git("init", "-q")
+        git("checkout", "-q", "-B", "master")
+        git("config", "user.email", "test@example.invalid")
+        git("config", "user.name", "Test")
+        git("config", "commit.gpgsign", "false")
+        self.write("data/presets/a.txt", "erste Fassung\n")
+        self.write("imPulse.pde", "// Sketch\n")
+        git("add", "--", "data/presets/a.txt", "imPulse.pde")
+        git("commit", "-q", "-m", "Ausgangsstand")
+
+    def write(self, relative, text):
+        path = os.path.join(self.tmp, *relative.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def head_files(self):
+        out = self.git("show", "--name-only", "--pretty=format:", "HEAD")
+        return sorted(out.split())
+
+    def test_only_watched_paths_are_committed(self):
+        self.write("data/presets/a.txt", "live geaendert\n")
+        self.write("imPulse.pde", "// von Hand angefasst\n")
+        result = autocommit.AutoCommitter(self.tmp).check_and_commit()
+        self.assertEqual(result.status, "committed", result.detail)
+        self.assertEqual(self.head_files(), ["data/presets/a.txt"])
+        # Die fremde Aenderung ist noch da und noch schmutzig:
+        self.assertIn("imPulse.pde", self.git("status", "--porcelain"))
+
+    def test_new_preset_is_picked_up(self):
+        self.write("data/presets/neu.txt", "frisch\n")
+        result = autocommit.AutoCommitter(self.tmp).check_and_commit()
+        self.assertEqual(result.status, "committed", result.detail)
+        self.assertIn("data/presets/neu.txt", self.head_files())
+
+    def test_sound_preset_travels_with_the_light_preset(self):
+        self.write("data/presets/neu.txt", "licht\n")
+        self.write("supercollider/presets/neu.txt", "klang\n")
+        result = autocommit.AutoCommitter(self.tmp).check_and_commit()
+        self.assertEqual(result.status, "committed", result.detail)
+        self.assertEqual(self.head_files(),
+                         ["data/presets/neu.txt",
+                          "supercollider/presets/neu.txt"])
+
+    def test_clean_tree_creates_no_commit(self):
+        before = self.git("rev-list", "--count", "HEAD").strip()
+        result = autocommit.AutoCommitter(self.tmp).check_and_commit()
+        self.assertEqual(result.status, "clean")
+        self.assertEqual(self.git("rev-list", "--count", "HEAD").strip(),
+                         before)
+
+    def test_second_round_without_changes_commits_nothing(self):
+        self.write("data/presets/a.txt", "live geaendert\n")
+        auto = autocommit.AutoCommitter(self.tmp)
+        self.assertEqual(auto.check_and_commit().status, "committed")
+        before = self.git("rev-list", "--count", "HEAD").strip()
+        self.assertEqual(auto.check_and_commit().status, "clean")
+        self.assertEqual(self.git("rev-list", "--count", "HEAD").strip(),
+                         before)
+
+    def test_staged_foreign_change_stays_out_of_the_commit(self):
+        self.write("data/presets/a.txt", "live geaendert\n")
+        self.write("imPulse.pde", "// bewusst gestaged\n")
+        self.git("add", "--", "imPulse.pde")
+        result = autocommit.AutoCommitter(self.tmp).check_and_commit()
+        self.assertEqual(result.status, "committed", result.detail)
+        self.assertEqual(self.head_files(), ["data/presets/a.txt"])
+        self.assertIn("imPulse.pde", self.git("status", "--porcelain"))
+
+    def test_open_merge_is_left_alone(self):
+        with open(os.path.join(self.tmp, ".git", "MERGE_HEAD"), "w") as handle:
+            handle.write("0" * 40 + "\n")
+        self.write("data/presets/a.txt", "live geaendert\n")
+        before = self.git("rev-list", "--count", "HEAD").strip()
+        result = autocommit.AutoCommitter(self.tmp).check_and_commit()
+        self.assertEqual(result.status, "skipped", result.detail)
+        self.assertEqual(self.git("rev-list", "--count", "HEAD").strip(),
+                         before)
+
+    def test_detached_head_is_left_alone(self):
+        self.git("checkout", "-q", "--detach")
+        self.write("data/presets/a.txt", "live geaendert\n")
+        before = self.git("rev-list", "--count", "HEAD").strip()
+        result = autocommit.AutoCommitter(self.tmp).check_and_commit()
+        self.assertEqual(result.status, "skipped", result.detail)
+        self.assertEqual(self.git("rev-list", "--count", "HEAD").strip(),
+                         before)
+
+    def test_ignored_boot_snapshot_is_not_touched(self):
+        self.write(".gitignore", "data/remoteSettings.txt\n")
+        self.git("add", "--", ".gitignore")
+        self.git("commit", "-q", "-m", "gitignore")
+        self.write("data/remoteSettings.txt", "Boot-Snapshot\n")
+        self.write("data/presets/a.txt", "live geaendert\n")
+        result = autocommit.AutoCommitter(self.tmp).check_and_commit()
+        self.assertEqual(result.status, "committed", result.detail)
+        self.assertEqual(self.head_files(), ["data/presets/a.txt"])
+
+    def test_commit_message_names_the_file(self):
+        self.write("data/presets/a.txt", "live geaendert\n")
+        autocommit.AutoCommitter(self.tmp).check_and_commit()
+        message = self.git("log", "-1", "--pretty=%B")
+        self.assertIn("Auto-Commit: Live-Daten-Sicherung", message)
+        self.assertIn("data/presets/a.txt", message)
+        self.assertIn("nicht gepusht", message)
+
+    def test_deleted_preset_is_committed_as_a_deletion(self):
+        os.remove(os.path.join(self.tmp, "data", "presets", "a.txt"))
+        result = autocommit.AutoCommitter(self.tmp).check_and_commit()
+        self.assertEqual(result.status, "committed", result.detail)
+        self.assertEqual(self.head_files(), ["data/presets/a.txt"])
+        self.assertEqual(self.git("status", "--porcelain").strip(), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
