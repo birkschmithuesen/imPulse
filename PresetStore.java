@@ -312,7 +312,20 @@ class PresetStore {
   // wuerde die Installation einfrieren.
   static final String[] EXCLUDED = {
       "/preset/scheduler/enabled",
-      "/preset/scheduler/interval"
+      "/preset/scheduler/interval",
+      // Die vier Melodie-Parameter sind ebenfalls Transport, nicht Inhalt:
+      // sie verstellen keinen Klangwert, sondern beschreiben, wie die
+      // Zuordnung beim naechsten /net/melody/recompute gerechnet wird.
+      //
+      // Ein Preset kann sie nicht sanft ueberblenden - zwischen "alte
+      // Zuordnung" und "neue Zuordnung" gibt es nichts. Ein Preset-Wechsel
+      // mitten in der Show, der den Startknoten mitaenderte, saehe im Licht
+      // nach nichts aus und setzte beim naechsten Neuberechnen die Tonhoehen
+      // aller Glocken schlagartig neu.
+      "/net/melody/mode",
+      "/net/melody/startNode",
+      "/net/melody/rootMidiNote",
+      "/net/melody/numOctaves"
   };
 
   // Wie EXCLUDED, aber fuer ganze Adressbaeume. Die Song-Struktur-Ebene ist

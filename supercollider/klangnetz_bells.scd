@@ -64,10 +64,17 @@
 //    zweiten Stelle, an der man ihn suchen muss.
 //
 // Empfängt OSC von imPulse (Processing-Sketch) auf Port 8002:
-//   /net/hitNode <nodeId:int>    <energy:float> <x:float> <y:float>
+//   /net/hitNode <nodeId:int>    <energy:float> <x:float> <y:float> <tree:int>
 //   /net/impulse <impulseId:int> <x:float>      <y:float> <energy:float> <speed:float>
 //   /sc/preset/load <name:string>   Sound-Preset laden (siehe ~presetLoad)
 //   /sc/preset/save <name:string>   Sound-Preset schreiben (siehe ~presetSave)
+//   /net/melody/reload <modus:string>  Melodie-Zuordnung neu laden (siehe ~melodyLoad)
+//
+// <tree> ist der URSPRUNGS-BAUM des Impulses: 0..3 nach
+// StripeTreeStore.TREE_NAMES (vorn, hinten, rechts, links), -1 = unbekannt.
+// Er kam am 2026-08-01 dazu, rein ANGEHÄNGT — dieselbe Bauform wie seinerzeit
+// x/y an /net/hitNode. Er ersetzt den früheren Zonen-Bias nach der Geoposition
+// des getroffenen Knotens (siehe ~treeBias unten).
 // (siehe LedNetworkTransportEffect.java sendOscMessage() und
 // sendImpulseStream(), Adresse in imPulse.pde:
 // NetAddress oscOutput = new NetAddress("127.0.0.1", 8002))
@@ -186,12 +193,53 @@
 //     25/25/25/25% (siehe ~toQuad-Kommentar). Wirkt nur auf NEU
 //     getriggerte Toene/Drohnen, aus demselben Grund wie brightness.
 //
-//   /klangnetz/param/regionBiasAmount  0.0 .. 1.0   Default 0.6
-//     Staerke des Klangbias nach Netzregion (vier Quadranten, siehe
-//     ~regionZone/~regionBias im Code). 0 = aus, der Klang ist dann
-//     bitgleich dem ohne dieses Feature. Verschiebt je Zone die Notenwahl
-//     (in SKALENSTUFEN, bleibt also in Phrygisch) sowie brightness und
-//     detune. Wirkt auf NEUE Toene, wie brightness/detune selbst.
+//   /klangnetz/param/treeBiasAmount  0.0 .. 1.0   Default 0.6
+//     Staerke des Klangbias nach URSPRUNGS-BAUM des Impulses (vier Baeume,
+//     siehe ~treeBias im Code). 0 = aus, der Klang ist dann bitgleich dem
+//     ohne dieses Feature. Verschiebt je Baum die Notenwahl (in
+//     SKALENSTUFEN, bleibt also auf der Skala) sowie brightness und detune.
+//     Wirkt auf NEUE Toene, wie brightness/detune selbst.
+//
+//     ERSETZT (2026-08-01) den frueheren regionBiasAmount, der nach dem
+//     Quadranten des GETROFFENEN KNOTENS bias'te. Der Grund ist nicht
+//     Geschmack: der Zonen-Bias addierte seinen Notenoffset auf den Index
+//     des getroffenen Knotens, zwei benachbarte Knoten beiderseits einer
+//     Quadrantengrenze bekamen also verschiedene Offsets — und das
+//     Intervall zwischen ihnen, das die topologische Zuordnung sorgfaeltig
+//     auf eine Modusregel gesetzt hat, verschob sich um bis zu sechs
+//     Skalenstufen. Der Ursprungs-Bias ist fuer einen gegebenen Impuls
+//     KONSTANT, transponiert also seinen ganzen Weg gleichmaessig und laesst
+//     jedes Intervall darauf unangetastet: vier Baeume ergeben vier
+//     Transpositionen derselben Melodie statt vier Stoerungen darin.
+//
+//   ---- Topologiebasierte Melodiekomposition ----
+//   Die Note eines Knotens kommt seit 2026-08-01 nicht mehr aus
+//   `nodeId % notesPerOctaveSet`, sondern aus einer vorberechneten Datei
+//   data/nodeMelody_<modus>.txt (geschrieben von imPulse auf
+//   /net/melody/recompute, siehe MelodyManager.java). Fehlt die Datei, faellt
+//   die Zuordnung auf die alte nodeId-Rechnung zurueck — mit WARNUNG, nicht
+//   still.
+//
+//   /klangnetz/param/melodyMode      0 .. 7        Default 4 (Phrygisch)
+//     Welche Zuordnungsdatei geladen wird. Reihenfolge identisch mit
+//     MelodyModes.ALL auf der Java-Seite: 0 Dorisch, 1 Pentatonik,
+//     2 Hijaz, 3 Harmonisch Moll, 4 Phrygisch, 5 Ajam, 6 Nikriz, 7 Saba.
+//     Ein Wechsel laedt sofort die andere Datei (onSet-Callback).
+//   /klangnetz/param/melodyRootMidiNote  24 .. 84  Default 45 (A2)
+//   /klangnetz/param/melodyNumOctaves     1 ..  6  Default 3
+//     Die zwei Werte, mit denen der gefaltete Skalenindex in eine MIDI-Note
+//     umgerechnet wird. BEIM LADEN einer Melodie-Datei gewinnt deren Kopf
+//     (siehe ~melodyLoad): die Faltung ist mit genau diesen Werten gerechnet
+//     worden, ein abweichender numOctaves-Wert machte die Zuordnung nicht
+//     transponiert, sondern falsch. Danach transponiert melodyRootMidiNote
+//     live und sauber; melodyNumOctaves dagegen kann eine schon geladene
+//     Zuordnung nicht nachfalten und meldet das.
+//
+//     Es gibt hier bewusst KEINEN melodyStartNode: SuperCollider rechnet
+//     nichts neu, der Regler waere hier ohne Wirkung und wanderte trotzdem
+//     in jedes Sound-Preset. Er liegt auf der Seite, die ihn ausfuehren kann
+//     (/net/melody/startNode in imPulse); zur Diagnose steht er im Kopf der
+//     Melodie-Datei und wird beim Laden ausgegeben.
 //
 //   /klangnetz/param/brightness     0.0 .. 2.0   Default 1.0
 //     \glockenBell: Amp-Faktor auf die VIER oberen Partialtöne (Grundton
@@ -459,32 +507,43 @@ s.options.numInputBusChannels = 2;
 // 25/25/25/25% auf alle vier Boxen, weil 0^x = 0 fuer jeden Exponenten.
 ~panSharpness = 1.0;
 
-// ---- Klangbias nach Netzregion ----------------------------------------
-// Ziel: ein Knoten soll nicht nur rhythmisch, sondern auch klanglich
-// verraten, aus welchem Teil des Netzes er kommt.
+// ---- Klangbias nach Ursprungs-Baum ------------------------------------
+// Ziel: ein Impuls soll nicht nur rhythmisch, sondern auch klanglich
+// verraten, WOHER er gestartet ist.
 //
-// ZONIERUNG: vier Quadranten, Zone = (x>=0) + 2*(y>=0). Der Grund ist die
-// Lautsprecher-Geometrie: die vier Boxen stehen auf den SEITENMITTEN
-// (0,+4) (+7,0) (0,-4) (-7,0), jeder Quadrant liegt also genau zwischen
-// zwei Boxen und hat eine eindeutige Richtung im Raum. Ortung und
-// Klangfarbe stuetzen sich damit gegenseitig -- man hoert "vorne rechts"
-// UND "die helle Farbe", und beides meint dieselbe Netzregion.
+// ERSETZT seit 2026-08-01 den frueheren Zonen-Bias (~regionZone/~regionBias,
+// vier Quadranten nach der Geoposition des getroffenen Knotens). Nicht
+// additiv daneben, sondern an seiner Stelle -- die zwei parallel zu fahren
+// hiesse zwei Notenoffsets auf demselben Notenindex, und der Zonen-Anteil
+// braechte den unten beschriebenen Intervallschaden vollstaendig zurueck.
 //
-// Radiale Ringe (Zentrum/Rand) waeren die naheliegende Alternative und
-// scheiden genau daran aus: sie korrelieren mit keiner
-// Lautsprecherrichtung, und in der Mitte pannt ~toQuad ohnehin auf alle
-// vier Boxen gleich (25/25/25/25%) -- die Zone mit dem eigensten Charakter
-// laege dort, wo die Ortung am schwaechsten ist.
-~regionZone = { |px, py|
-    var xi = if (px >= 0) { 1 } { 0 };
-    var yi = if (py >= 0) { 1 } { 0 };
-    xi + (2 * yi)
-};
-
-// Bias je Zone. Der Notenoffset zaehlt in SKALENSTUFEN, nicht Halbtoenen:
+// Drei Gruende, der dritte ist der technisch zwingende:
+//
+//  1. Ein Impuls erzaehlt die Geschichte seines Ausgangspunktes. Was ihn als
+//     EIN Ereignis zusammenhaelt, ist sein Ursprung, nicht die zufaellige
+//     Region, in der er sich gerade befindet. Beim Zonen-Bias wechselte
+//     derselbe Impuls im Flug die Klangfarbe -- die Farbe beschrieb dann den
+//     Raum, nicht den Weg.
+//  2. Es ist genau das, was der Origin-Sequencer schon anlegt: sein
+//     originTreeFilter schraenkt ein, von welchem Baum ein Track spawnt.
+//     Bisher hoerte man diese Wahl nur raeumlich; jetzt bekommt jeder Baum
+//     eine eigene Klangfarbe.
+//  3. Der Ursprungs-Bias ist INTERVALLERHALTEND, der Zonen-Bias war es
+//     nicht. Sein Notenoffset wurde auf den Index des GETROFFENEN Knotens
+//     addiert -- zwei benachbarte Knoten beiderseits einer Quadrantengrenze
+//     bekamen also verschiedene Offsets, und das Intervall zwischen ihnen
+//     verschob sich um bis zu sechs Skalenstufen. Genau die Intervalle, die
+//     die topologische Zuordnung setzt, waeren an jeder Grenze wieder
+//     zerlegt worden. Der Ursprungs-Bias ist fuer einen gegebenen Impuls
+//     konstant und transponiert seinen ganzen Weg gleichmaessig.
+//
+// Wer den geografischen Charakter behalten will, hat ihn ohnehin noch: die
+// Lautsprecher-Ortung ueber ~toQuad ist davon unberuehrt.
+//
+// Bias je Baum. Der Notenoffset zaehlt in SKALENSTUFEN, nicht Halbtoenen:
 // er wird auf noteIndex addiert, bevor ~scaleSteps nachgeschlagen wird. Ein
-// Halbtonoffset erzeugte Toene ausserhalb von Phrygisch und zerstoerte den
-// vor Ort gewaehlten Modus.
+// Halbtonoffset erzeugte Toene ausserhalb der Skala und zerstoerte den
+// gewaehlten Modus.
 //
 // brightness und detune sind die vorhandenen Timbre-Regler (siehe
 // ~registerParam unten): brightness skaliert die oberen vier Teiltoene
@@ -492,26 +551,188 @@ s.options.numInputBusChannels = 2;
 // harmonischen Verhaeltnissen (metallisch/orgelartig). Die in aelteren
 // Notizen genannten ~tilt/~decayScale gibt es in dieser Datei nicht.
 //
-//   Zone 0 = hinten links   tief,   dumpf,     metallisch
-//   Zone 1 = hinten rechts  mitte,  neutral,   harmonischer
-//   Zone 2 = vorn links     hoeher, heller,    metallisch
-//   Zone 3 = vorn rechts    hoch,   brillant,  fast rein harmonisch
-~regionNoteOffsets = [-2, 0, 2, 4];
-~regionBrightness  = [0.65, 1.0, 1.35, 1.7];
-~regionDetune      = [1.0, 0.7, 1.0, 0.4];
+// Form und Groesse der drei Tabellen sind unveraendert (vier Eintraege) --
+// getauscht wurde nur die INDEXQUELLE, nicht die Bias-Mechanik. Die
+// Reihenfolge ist StripeTreeStore.TREE_NAMES:
+//
+//   Baum 0 = vorn     tief,   dumpf,     metallisch
+//   Baum 1 = hinten   mitte,  neutral,   harmonischer
+//   Baum 2 = rechts   hoeher, heller,    metallisch
+//   Baum 3 = links    hoch,   brillant,  fast rein harmonisch
+// Klartext fuer die Konsole. Reihenfolge = StripeTreeStore.TREE_NAMES.
+~treeNames = ["vorn", "hinten", "rechts", "links"];
+~treeNoteOffsets = [-2, 0, 2, 4];
+~treeBrightness  = [0.65, 1.0, 1.35, 1.7];
+~treeDetune      = [1.0, 0.7, 1.0, 0.4];
 
-// Liefert den wirksamen Bias, linear zwischen neutral und vollem Zonenwert
-// interpoliert. Bei ~regionBiasAmount = 0 ist das Ergebnis exakt neutral,
+// Liefert den wirksamen Bias, linear zwischen neutral und vollem Baumwert
+// interpoliert. Bei ~treeBiasAmount = 0 ist das Ergebnis exakt neutral,
 // der Klang also bitgleich dem ohne dieses Feature.
-~regionBias = { |px, py|
-    var zone = ~regionZone.(px, py);
-    var amt = ~regionBiasAmount ? 0;
-    (
-        zone: zone,
-        noteOffset: (~regionNoteOffsets[zone] * amt).round.asInteger,
-        brightness: 1.0 + ((~regionBrightness[zone] - 1.0) * amt),
-        detune: 1.0 + ((~regionDetune[zone] - 1.0) * amt)
-    )
+//
+// Ein unbekannter Baum (-1, also ein Stripe ohne Zuordnung in
+// data/stripeTrees.txt, oder ein aelterer Processing-Stand ohne das fuenfte
+// Argument) ergibt ebenfalls NEUTRAL. Ihn auf Baum 0 zu legen hiesse, eine
+// Luecke in der Zuordnungsdatei still als "vorn" zu hoeren.
+~treeBias = { |treeIndex|
+    var idx = treeIndex ? -1;
+    var amt = ~treeBiasAmount ? 0;
+    if ((idx < 0) or: { idx >= ~treeNoteOffsets.size }) {
+        (tree: -1, noteOffset: 0, brightness: 1.0, detune: 1.0)
+    } {
+        (
+            tree: idx,
+            noteOffset: (~treeNoteOffsets[idx] * amt).round.asInteger,
+            brightness: 1.0 + ((~treeBrightness[idx] - 1.0) * amt),
+            detune: 1.0 + ((~treeDetune[idx] - 1.0) * amt)
+        )
+    }
+};
+
+// ---- Topologiebasierte Melodie-Zuordnung ------------------------------
+// Die Note eines Knotens kommt aus data/nodeMelody_<modus>.txt statt aus
+// `nodeId % notesPerOctaveSet`. Die nodeId ist die Zeilennummer in
+// nodeCrossings.txt und hat KEINEN Bezug zur physischen Nachbarschaft --
+// Node 5 und Node 6 koennen an entgegengesetzten Enden der Installation
+// liegen. Ein Impuls, der von Knoten zu Knoten wandert, traf deshalb auf
+// eine Folge von Toenen mit rein zufaelligem Abstand: mal ein Halbton, mal
+// ein Tritonus. Die Datei ersetzt den ZAEHLER vor dem Modulo, nicht den
+// Modulo (die Faltung auf drei Oktaven gab es schon).
+//
+// Berechnet wird sie von imPulse (MelodyManager.java), NUR auf
+// /net/melody/recompute. Hier wird sie ausschliesslich GELESEN.
+//
+// Die acht Modi -- handgepflegte Spiegelung von MelodyModes.ALL auf der
+// Java-Seite, gleiche Reihenfolge, gleiche Schluessel. Dieselbe Bauform wie
+// SC_PARAMS im Web-UI: zwei Kopien, deren Abgleich Handarbeit ist. Gebraucht
+// werden sie hier fuer den Dateinamen; die Halbtonabstaende stehen zusaetzlich
+// im Kopf jeder Datei und gewinnen beim Laden (siehe ~melodyLoad).
+~melodyModes = [
+    (key: "dorisch",        steps: [0, 2, 3, 5, 7, 9, 10]),
+    (key: "pentatonik",     steps: [0, 3, 5, 7, 10]),
+    (key: "hijaz",          steps: [0, 1, 4, 5, 7, 8, 10]),
+    (key: "harmonischmoll", steps: [0, 2, 3, 5, 7, 8, 11]),
+    (key: "phrygisch",      steps: [0, 1, 3, 5, 7, 8, 10]),
+    (key: "ajam",           steps: [0, 2, 4, 5, 7, 9, 11]),
+    (key: "nikriz",         steps: [0, 2, 3, 6, 7, 9, 10]),
+    (key: "saba",           steps: [0, 1, 3, 4, 7, 8, 10])
+];
+
+// nodeId -> gefalteter Skalenindex. Leer = keine Zuordnung geladen, dann
+// faellt ~netHitNodeOscFunc auf die alte nodeId-Rechnung zurueck.
+~melodyScaleIndex = Dictionary.new;
+~melodyLoadedKey = nil;
+
+// Der data-Ordner des Sketches, eine Ebene ueber supercollider/. Gleiche
+// Bauform wie ~presetDir, gleicher Rueckfall.
+~melodyDir = thisProcess.nowExecutingPath.notNil.if(
+    { thisProcess.nowExecutingPath.dirname.dirname +/+ "data" },
+    { "data" }
+);
+
+~melodyPath = { |key| ~melodyDir +/+ ("nodeMelody_" ++ key.asString ++ ".txt") };
+
+// Laedt die Zuordnung eines Modus. Liefert die Anzahl uebernommener Knoten.
+//
+// FEHLT DIE DATEI, ist das kein Absturz, sondern eine WARNUNG plus Rueckfall
+// auf die heutige nodeId-Zuordnung -- dasselbe Muster wie bei fehlenden
+// LED-Positionen auf der Java-Seite. Der haeufige Fall ist "noch nie
+// berechnet", nicht "kaputt".
+~melodyLoad = { |key|
+    var path = ~melodyPath.(key);
+    var file, text, loaded = 0, headerRoot = nil, headerOct = nil,
+        headerSteps = nil, headerStart = nil;
+    ~melodyScaleIndex = Dictionary.new;
+    ~melodyLoadedKey = nil;
+    if (File.exists(path).not) {
+        ("WARNUNG: keine Melodie-Zuordnung % -- Klangseite faellt auf die alte"
+            + " nodeId-Zuordnung zurueck. In imPulse mit /net/melody/recompute"
+            + " berechnen.").format(path).postln;
+    } {
+        file = File(path, "r");
+        if (file.isOpen.not) {
+            ("WARNUNG: Melodie-Zuordnung nicht lesbar: %".format(path)).postln;
+        } {
+            text = file.readAllString;
+            file.close;
+            // \r mit weg, wie in ~presetLoad: eine unter Windows von Hand
+            // bearbeitete Datei haette sonst ein \r am Ende jedes Zahlenwerts.
+            text.replace("\r", "").split($\n).do({ |line|
+                var stripped = line.stripWhiteSpace, fields, value;
+                if (stripped.size > 0) {
+                    if (stripped[0] == $#) {
+                        // Kopfzeilen "# Schluessel: Wert". Nur das erste Wort
+                        // hinter dem Doppelpunkt -- dahinter stehen teils
+                        // Klammerzusaetze.
+                        stripped = stripped.copyToEnd(1).stripWhiteSpace;
+                        if (stripped.contains(":")) {
+                            value = stripped.split($:);
+                            if (value.size >= 2) {
+                                var k = value[0].stripWhiteSpace;
+                                var v = value[1].stripWhiteSpace.split($ )[0];
+                                if (k == "rootMidiNote") { headerRoot = v.asInteger };
+                                if (k == "numOctaves") { headerOct = v.asInteger };
+                                if (k == "Startknoten") { headerStart = v.asInteger };
+                                if (k == "scaleSteps") {
+                                    headerSteps = stripped.copyToEnd(
+                                        stripped.find(":") + 1)
+                                        .stripWhiteSpace.split($ )
+                                        .reject({ |t| t.size == 0 })
+                                        .collect({ |t| t.asInteger });
+                                };
+                            };
+                        };
+                    } {
+                        fields = stripped.split($\t);
+                        if (fields.size < 2) { fields = stripped.split($ ) };
+                        fields = fields.reject({ |t| t.stripWhiteSpace.size == 0 });
+                        if (fields.size >= 2) {
+                            // Die LETZTE Zeile gewinnt bei doppeltem nodeId --
+                            // gleiche Regel wie auf der Java-Seite, weil die
+                            // natuerliche Handkorrektur eine angehaengte Zeile
+                            // am Ende ist.
+                            ~melodyScaleIndex[fields[0].asInteger] =
+                                fields[1].asInteger;
+                            loaded = loaded + 1;
+                        };
+                    };
+                };
+            });
+            // DER DATEIKOPF GEWINNT. Die Oktavfaltung ist mit genau diesen
+            // Werten gerechnet worden; ein abweichendes numOctaves machte die
+            // geladene Zuordnung nicht transponiert, sondern falsch. Gemeldet
+            // wird die Abweichung, statt sie zu verschlucken.
+            if (headerSteps.notNil and: { headerSteps.size > 1 }) {
+                if (headerSteps != ~scaleSteps) {
+                    ("  Melodie-Datei setzt scaleSteps % (vorher %)"
+                        .format(headerSteps, ~scaleSteps)).postln;
+                };
+                ~scaleSteps = headerSteps;
+            };
+            if (headerRoot.notNil and: { headerRoot > 0 }) {
+                if (headerRoot != ~rootMidiNote) {
+                    ("  Melodie-Datei setzt rootMidiNote % (vorher %)"
+                        .format(headerRoot, ~rootMidiNote)).postln;
+                };
+                ~rootMidiNote = headerRoot;
+                ~melodyRootMidiNote = headerRoot;
+            };
+            if (headerOct.notNil and: { headerOct > 0 }) {
+                if (headerOct != ~numOctaves) {
+                    ("  Melodie-Datei setzt numOctaves % (vorher %)"
+                        .format(headerOct, ~numOctaves)).postln;
+                };
+                ~numOctaves = headerOct;
+                ~melodyNumOctaves = headerOct;
+            };
+            ~notesPerOctaveSet = ~scaleSteps.size * ~numOctaves;
+            ~melodyLoadedKey = key.asString;
+            ("Melodie-Zuordnung % geladen: % Knoten, Grundton MIDI %, % Oktaven"
+                + " (% Stufen), Startknoten %")
+                .format(key.asString, loaded, ~rootMidiNote, ~numOctaves,
+                    ~notesPerOctaveSet, headerStart ? "?").postln;
+        };
+    };
+    loaded
 };
 
 // ---- OSC-Sound-Parameter-Registry --------------------------------------
@@ -601,8 +822,15 @@ s.options.numInputBusChannels = 2;
 // (Ecke ist ohnehin schon bei jedem Wert 100% scharf, siehe ~toQuad).
 ~registerParam.(\panSharpness, 1.0, 0.1, 8.0, nil);
 
-// Staerke des Regionen-Klangbias (siehe ~regionBias oben). 0 = aus, der
-// Klang ist dann bitgleich dem ohne dieses Feature; 1 = voller Zonenwert.
+// Staerke des Ursprungs-Baum-Klangbias (siehe ~treeBias oben). 0 = aus, der
+// Klang ist dann bitgleich dem ohne dieses Feature; 1 = voller Baumwert.
+//
+// UMBENANNT am 2026-08-01 von regionBiasAmount: mit dem Wechsel von der
+// Netzregion auf den Ursprungs-Baum stimmte der alte Name nicht mehr. Die
+// Umbenennung bricht vorhandene SC-Presets an genau dieser einen Zeile (sie
+// meldet dann "1 unbekannt") und muss in SC_PARAMS im Web-UI nachgezogen
+// werden -- beides bewusst in Kauf genommen, weil ein Regler namens "region",
+// der nach Baeumen biast, die schlechtere Falle ist.
 //
 // Ein eigener enabled-Schalter entfaellt bewusst: amount = 0 IST aus, und
 // ein stufenloser Regler ist live wertvoller als ein harter Schalter, weil
@@ -612,7 +840,52 @@ s.options.numInputBusChannels = 2;
 //
 // Wirkt auf NEUE Toene: brightness/detune sind Start-Argumente der
 // Glocken-SynthDef (siehe dort), ein spaeteres .set kaeme nie mehr an.
-~registerParam.(\regionBiasAmount, 0.6, 0.0, 1.0, nil);
+~registerParam.(\treeBiasAmount, 0.6, 0.0, 1.0, nil);
+
+// ---- Topologiebasierte Melodie-Zuordnung ------------------------------
+// Welche Zuordnungsdatei geladen ist. Der onSet-Callback laedt sofort --
+// ein Moduswechsel IST ein Zuordnungswechsel, und ein Regler, der die Zahl
+// verstellt, ohne die Datei zu wechseln, waere ein stiller Fehlerzustand.
+//
+// Default 4 = Phrygisch, derselbe Wert wie /net/melody/mode auf der
+// Java-Seite: der einzige der acht Modi, der den heute live laufenden
+// Tonvorrat unveraendert laesst.
+//
+// Es gibt hier bewusst KEINEN melodyStartNode: SuperCollider rechnet nichts
+// neu, der Regler waere ohne Wirkung und wanderte trotzdem in jedes Preset
+// und in die Web-UI-Sound-Sektion. Er liegt in imPulse
+// (/net/melody/startNode), wo die Neuberechnung stattfindet.
+~registerParam.(\melodyMode, 4, 0, 7, { |val|
+    var idx = val.round.asInteger.clip(0, ~melodyModes.size - 1);
+    ~melodyLoad.(~melodyModes[idx][\key]);
+});
+
+// Die zwei Werte der Umrechnung gefalteter Skalenindex -> MIDI-Note. Sie
+// spiegeln ~rootMidiNote/~numOctaves und setzen sie mit.
+//
+// BEIM LADEN gewinnt der Kopf der Melodie-Datei (siehe ~melodyLoad): die
+// Faltung ist mit genau diesen Werten gerechnet worden.
+//
+// Danach ist melodyRootMidiNote eine saubere Live-Transposition (reine
+// Addition, jede resultierende MIDI-Note verschiebt sich gleich weit).
+// melodyNumOctaves dagegen aendert den Modulo-Teiler der Faltung SELBST --
+// eine schon geladene Zuordnung laesst sich damit nicht nachfalten, sie ist
+// mit dem neuen Wert schlicht falsch. Deshalb der Hinweis im Callback statt
+// eines stillen Uebernehmens.
+~registerParam.(\melodyRootMidiNote, 45, 24, 84, { |val|
+    ~rootMidiNote = val.round.asInteger;
+});
+~registerParam.(\melodyNumOctaves, 3, 1, 6, { |val|
+    ~numOctaves = val.round.asInteger;
+    ~notesPerOctaveSet = ~scaleSteps.size * ~numOctaves;
+    if (~melodyLoadedKey.notNil) {
+        ("HINWEIS: numOctaves live auf % gesetzt, die geladene Zuordnung % ist"
+            + " aber mit der alten Faltungsbreite gerechnet. Fuer ein"
+            + " stimmiges Ergebnis in imPulse /net/melody/numOctaves setzen"
+            + " und /net/melody/recompute ausloesen.")
+            .format(~numOctaves, ~melodyLoadedKey).postln;
+    };
+});
 
 // ---- Travel-Sound: Wind-/Rauschschicht der reisenden Impulse ----------
 // Setzt auf dem VORHANDENEN gedrosselten Positionsstrom /net/impulse auf
@@ -869,7 +1142,7 @@ s.options.numInputBusChannels = 2;
 //
 // radius = 0 IST der Aus-Schalter und klingt bitgleich wie ein Tail ohne
 // dieses Feature -- dieselbe Idiomatik wie travelMix = 0 und
-// regionBiasAmount = 0, deshalb gibt es keinen enabled-Schalter.
+// treeBiasAmount = 0, deshalb gibt es keinen enabled-Schalter.
 ~registerParam.(\tailOrbitRadius, 0.25, 0.0, 2.0, nil);
 
 // Umdrehungen pro Sekunde BEI VOLLER HUELLKURVE (env = 1). Der insgesamt
@@ -1104,6 +1377,7 @@ s.waitForBoot({
     OSCdef(\impulseStream) !? { |d| d.free };
     OSCdef(\scPresetLoad) !? { |d| d.free };
     OSCdef(\scPresetSave) !? { |d| d.free };
+    OSCdef(\netMelodyReload) !? { |d| d.free };
     ~droneReaper !? { |r| r.stop };
     ~paramOscDefs !? { |defs| defs.do({ |d| d.free }) };
     ~masterReverbSyn !? { |syn| syn.free };
@@ -1783,15 +2057,19 @@ s.waitForBoot({
                 travelFreq = ~travelFreqBase
                     * (2 ** (travelOct * ~travelOctavesPerStep));
                 travelFreq = travelFreq.clip(~travelFreqMin, ~travelFreqMax);
-                // Klangbias der HERKUNFTS-Region (siehe ~regionBias): die
-                // ERSTE gemeldete Position eines Impulses kommt aus dem Takt
-                // direkt nach seiner Entstehung, liegt also nahe an seinem
-                // Spawn- bzw. Splitpunkt -- das IST die Herkunftsregion, ohne
-                // ein weiteres OSC-Feld und ohne Zustand auf der
-                // Processing-Seite. Einmal beim Anlegen gerechnet, damit der
-                // Whoosh seine Klangidentitaet ueber seine ganze Lebensdauer
-                // behaelt, auch wenn er in eine andere Region fliegt.
-                bias = ~regionBias.(px, py);
+                // Der Klangbias haengt seit 2026-08-01 am Ursprungs-BAUM,
+                // nicht mehr an der Region der ersten gemeldeten Position
+                // (siehe ~treeBias). /net/impulse traegt den Baum aber NICHT
+                // -- die Adresse hat vier Argumente plus speed, ein sechstes
+                // waere eine eigene Erweiterung des Positionsstroms.
+                //
+                // Die Drohne laeuft deshalb bis dahin NEUTRAL. Bewusst so
+                // statt den alten Zonen-Bias hier stehenzulassen: dann haetten
+                // Glocke und Drohne desselben Impulses zwei verschiedene
+                // Herkunftsbegriffe, und der eine wuerde im Flug wechseln,
+                // der andere nicht. Ein halb umgestellter Mechanismus ist
+                // schwerer zu hoeren als ein ganz abgeschalteter.
+                bias = ~treeBias.(-1);
                 travelFreq = (travelFreq * bias[\brightness]).clip(20, 18000);
                 ~drones[id] = (
                     synth: Synth(\impulseDrone, [
@@ -1833,8 +2111,9 @@ s.waitForBoot({
     // (Das Abmelden eines schon vorhandenen Empfängers passiert oben im
     // Abräumblock, zusammen mit allem anderen aus einem früheren Durchlauf.)
     ~netHitNodeOscFunc = OSCFunc({ |msg, time, addr|
-        var nodeId, energy, px, py, noteIndex, octave, degree, semitoneOffset,
-            midiNote, freq, amp, newBell, bias, tailAmp, newTails, voiceGroup;
+        var nodeId, energy, px, py, tree, baseIndex, noteIndex, octave, degree,
+            semitoneOffset, midiNote, freq, amp, newBell, bias,
+            tailAmp, newTails, voiceGroup;
 
         nodeId = msg[1].asInteger;
         energy = msg[2].asFloat;
@@ -1844,14 +2123,28 @@ s.waitForBoot({
         // keine Koordinaten schickt — dann klingt alles aus der Mitte.
         px = if (msg.size > 3) { msg[3].asFloat } { 0 };
         py = if (msg.size > 4) { msg[4].asFloat } { 0 };
+        // Der Ursprungs-Baum des Impulses (0..3), seit 2026-08-01 angehaengt.
+        // -1 bei einem aelteren Processing-Stand ODER bei einem Stripe ohne
+        // Zuordnung -- beides ergibt neutralen Bias, siehe ~treeBias.
+        tree = if (msg.size > 5) { msg[5].asInteger } { -1 };
 
-        // Klangbias nach Netzregion (siehe ~regionBias oben): der Notenoffset
-        // wird auf den SKALENINDEX addiert, nicht auf die MIDI-Note -- so
-        // bleibt jeder Ton in Phrygisch.
-        bias = ~regionBias.(px, py);
+        // Klangbias nach Ursprungs-Baum (siehe ~treeBias oben): der
+        // Notenoffset wird auf den SKALENINDEX addiert, nicht auf die
+        // MIDI-Note -- so bleibt jeder Ton auf der Skala. Und weil er fuer
+        // einen gegebenen Impuls konstant ist, transponiert er dessen ganzen
+        // Weg gleichmaessig, statt die topologisch gesetzten Intervalle an
+        // einer Grenze zu zerlegen.
+        bias = ~treeBias.(tree);
 
-        // Node-ID auf einen Ton der Tonleiter über mehrere Oktaven abbilden.
-        noteIndex = (nodeId + bias[\noteOffset]) % ~notesPerOctaveSet;
+        // Skalenstufe des Knotens: aus der vorberechneten Zuordnung, sonst
+        // die alte nodeId-Rechnung.
+        //
+        // Der Rueckfall ist bewusst die ALTE Formel und nicht etwa die
+        // Tonika: eine fehlende Datei soll klingen wie frueher (zufaellig,
+        // aber lebendig), nicht wie ein Unisono aus 92 gleichen Toenen. Die
+        // WARNUNG steht in ~melodyLoad.
+        baseIndex = ~melodyScaleIndex[nodeId] ? nodeId;
+        noteIndex = (baseIndex + bias[\noteOffset]) % ~notesPerOctaveSet;
         // Ein negativer Offset kann noteIndex unter 0 druecken; SCs % liefert
         // fuer negative Zahlen bereits einen nichtnegativen Rest, die
         // Absicherung hier ist das Netz darunter.
@@ -1964,9 +2257,10 @@ s.waitForBoot({
         // genauere Buchfuehrung an der Ueberlastgrenze.
         newBell.onFree({ ~activeBells.remove(voiceGroup); });
 
-        ("node % -> % Hz (amp %) bei (%, %) m, Zone %".format(
+        ("node % -> % Hz (amp %) bei (%, %) m, Stufe %, Baum %".format(
             nodeId, freq.round(0.1), amp.round(0.01), px.round(0.01), py.round(0.01),
-            bias[\zone]
+            noteIndex,
+            if (bias[\tree] >= 0) { ~treeNames[bias[\tree]] } { "-" }
         )).postln;
     }, '/net/hitNode', recvPort: ~oscListenPort);
 
@@ -2038,6 +2332,32 @@ s.waitForBoot({
     OSCdef(\scPresetSave, { |msg|
         if (msg.size > 1) { ~presetSave.(msg[1].asString) };
     }, '/sc/preset/save', recvPort: ~oscListenPort);
+
+    // ---- OSC-Empfang: Melodie-Zuordnung neu laden ---------------------
+    // /net/melody/reload <modus:string>
+    //
+    // imPulse schickt das nach jedem erfolgreichen /net/melody/recompute,
+    // also NACHDEM die Datei geschrieben ist (MelodyManager.recompute()).
+    // Die Reihenfolge ist wichtig: umgekehrt laedt SC eine Datei, die es
+    // noch nicht gibt oder die noch den alten Stand traegt.
+    //
+    // Der Modusname wird mitgeschickt statt hier aus ~melodyMode gelesen:
+    // wer in imPulse den Modus umstellt und neu rechnet, soll nicht
+    // zusaetzlich daran denken muessen, auch hier umzuschalten. Der
+    // ~melodyMode-Regler zieht deshalb mit.
+    OSCdef(\netMelodyReload, { |msg|
+        if (msg.size > 1) {
+            var key = msg[1].asString;
+            var idx = ~melodyModes.detectIndex({ |m| m[\key] == key });
+            ~melodyLoad.(key);
+            if (idx.notNil) { ~melodyMode = idx };
+        };
+    }, '/net/melody/reload', recvPort: ~oscListenPort);
+
+    // Erstladung beim Start. Fehlt die Datei, ist das eine WARNUNG und kein
+    // Abbruch -- der Klang laeuft dann auf der alten nodeId-Zuordnung.
+    ~melodyLoad.(~melodyModes[
+        ~melodyMode.round.asInteger.clip(0, ~melodyModes.size - 1)][\key]);
 
     // =================================================================
     // Messhilfen für die zwei ungemessenen Werte

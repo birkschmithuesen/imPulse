@@ -58,7 +58,7 @@ Verzeichnis, das schafft sofort wieder zwei Wahrheiten.
 
 ## Ausführen
 
-Kein Build-System für den Sketch selbst — reines Processing-Projekt. Für die netz- und processingunabhängigen Teile (`ArtNetOutput`, `NodeCrossingStore`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`) gibt es aber eine eigene Testsuite, siehe „Tests" unten.
+Kein Build-System für den Sketch selbst — reines Processing-Projekt. Für die netz- und processingunabhängigen Teile (`ArtNetOutput`, `NodeCrossingStore`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `MelodyGraph`, `MelodyAssigner`) gibt es aber eine eigene Testsuite, siehe „Tests" unten.
 
 - **IDE**: `imPulse.pde` in Processing 3 öffnen, Play. Der Sketch-Ordner **muss** `imPulse` heissen (Processing-Konvention: Ordnername == Name der Haupt-`.pde`).
 - **CLI**: `processing-java --sketch=/Users/macbook/Projekte/_gitHub/imPulse --run`
@@ -75,7 +75,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `StripeColorDefaults`, `OriginSequencer`, `WeightedChoice`, `SpeedQuantizer`, `SplitFanout`, `SplitStagger`, `StripeTreeStore`, `EnergyLevelStore`, `SongStructureDirector`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `StripeColorDefaults`, `OriginSequencer`, `WeightedChoice`, `SpeedQuantizer`, `SplitFanout`, `SplitStagger`, `StripeTreeStore`, `EnergyLevelStore`, `SongStructureDirector`, `MelodyModes`, `MelodyGraph`, `MelodyAssigner`, `NodeMelodyStore`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
@@ -94,6 +94,10 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `StripeTreeStoreTest` — die Baum-Zuordnung: Parsen samt Kommentaren, unbekannter Baumname, Index ausserhalb des Bereichs, doppelter Stripe (letzte Zeile gewinnt), leerer Baum liefert `null`, fehlende Datei, Gegenprobe an der echten `data/stripeTrees.txt`
 - `SplitFanoutTest` — die Zahl der Zweige einer Aufspaltung: der neutrale Auslieferungsfall (`weight/all=100` nimmt immer alle), die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, entartete Gewichte fallen auf „alle" zurück, Knoten mit einem/zwei/vier möglichen Zweigen (bei zwei fallen „einer weniger" und „genau einer" zusammen), nie 0 Zweige bei vorhandenen Kandidaten, und `chooseOrder` liefert verschiedene Indizes im Bereich, in wechselnder Reihenfolge, auch bei unbrauchbaren Zufallswerten
 - `SplitStaggerTest` — die Warteschlange der zeitversetzten Kinder: Slot 0 hat exakt keinen Versatz, Notenwert-Intervalle samt Rasterung, fällig genau auf der Grenze, Reihenfolge nach Fälligkeit, ein Rückwärtssprung der Beat-Position verliert nichts, `MAX_PENDING` weist den neuen Eintrag ab statt einen wartenden zu verwerfen, und die Kindwerte kommen unverändert wieder heraus. Dazu die gewichtete Ziehung des Notenwerts (`pickNoteValue`): die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, nicht-prozentuale Gewichte werden normalisiert, der entartete Fall (alle 0, negativ, NaN, zu kurzes Array) fällt auf Sechzehntel zurück, und jeder gezogene Wert übersteht die Rasterung unverändert
+- `MelodyModesTest` — die acht Modi: Skalen aufsteigend und unter der Oktave, Schlüssel eindeutig und dateinamenstauglich, in jedem Modus ist der Sekundschritt das höchstgewichtete Intervall, die gewichtete Ziehung samt Verteilung über 100 000 Ziehungen, entartete Gewichte, `drawInterval` zieht beide Vorzeichen
+- `MelodyGraphTest` — die Nachbarschaftsableitung: zwei Kreuzungen auf derselben Stripe mit einer dritten dazwischen sind **nicht** benachbart, ein Knoten an zwei Stripes bekommt Nachbarn aus beiden, Mehrfachkante zählt einmal, keine Schleife auf sich selbst, Dreieck-Zyklus, Hub-Schwelle und Default-Startknoten, Gegenprobe an der echten `data/nodeCrossings.txt` (nur Invarianten, keine absoluten Zahlen)
+- `MelodyAssignerTest` — die BFS-Zuweisung: Startknoten in der mittleren Oktave, Determinismus, die Landmarken-Rotation nach `(tiefe+rang) mod 3` an einem konstruierten Graph nachgerechnet, kein Ton-Stapel unter Geschwistern, negative Rohwerte falten korrekt, Dreieck liefert genau eine Rückwärtskante, unerreichbare Knoten werden gezählt, `numOctaves = 1` und `0` brechen nicht, Gegenprobe über alle acht Modi
+- `NodeMelodyStoreTest` — Format und Datei: Rundlauf schreiben→lesen, Kommentare und Leerzeilen, kaputte Zeilen gezählt statt geworfen, doppelter `nodeId` (letzte Zeile gewinnt), fehlende Datei, Kopfzeilen, wiederholtes Schreiben verdoppelt nichts
 - `SpeedQuantizerTest` — die gewichtete Auswahl der Speed-Klasse: die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, Normalisierung nicht-prozentualer Gewichte, entartete Gewichte (alle 0, negativ, NaN)
 - `PresetStoreTest` — Format, Datei, Snapshot und Anwenden eines Presets, inklusive der ausgeschlossenen und still übergangenen Adressen
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
@@ -240,6 +244,33 @@ Farbkarte, ohne die Nachbarn anzufassen.
 Kopfzeile, Statuszeile und Preset-Sektion stehen bewusst **über** der
 Tab-Leiste: sie gelten für alle Tabs, und ein Preset-Feld, das nur auf einem
 Tab sichtbar wäre, wäre eine Falle.
+
+**Die Sektion „Melodie-Zuordnung"** steht wie die Presets **über** der
+Tab-Leiste und ist die einzige Stelle im UI, an der das **Verstellen eines
+Feldes nichts sendet**. Die vier Werte
+`/net/melody/{mode,startNode,rootMidiNote,numOctaves}` beschreiben, wie die
+Zuordnung beim nächsten Mal *gerechnet* wird; erst der Knopf setzt sie und
+löst danach `/net/melody/recompute` aus. Vier Dinge dazu:
+
+- **Die Reihenfolge im Endpunkt ist der Punkt.** `/api/melody/recompute` setzt
+  erst alle vier Werte über denselben `apply_value()`-Weg wie jeder andere
+  Regler, **dann** geht das Kommando raus — umgekehrt rechnete imPulse mit dem
+  alten Stand.
+- **Die Bestätigung ist Pflicht und gilt für einen Druck.** Der Knopf ist
+  gesperrt, bis das Häkchen sitzt, und das Häkchen fällt danach wieder weg,
+  auch nach einem Fehler. Dieselbe Überlegung wie bei `L` in den zwei
+  Kalibriermodi: die Aktion überschreibt `data/nodeMelody_<modus>.txt` samt
+  von Hand korrigierter Zeilen und lässt sich nicht zurücknehmen.
+- **Es gibt keine Erfolgsmeldung von imPulse** (kein Rückkanal). Die
+  Statuszeile sagt, was *gesendet* wurde und wo das Ergebnis steht, nicht
+  „fertig".
+- **`melody_addresses()` nimmt die vier Adressen aus dem generischen
+  Rendering** — sonst stünde jeder zweimal auf der Seite, einmal mit
+  Bestätigung und einmal als Schieber, der so aussieht, als täte er etwas.
+
+`MELODY_MODE_NAMES` in `server.py` ist die dritte Kopie der Modusliste (neben
+`MelodyModes.ALL` und `~melodyModes` in der `.scd`); ein Test vergleicht sie
+mit der Java-Datei.
 
 **Sechs Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
 flache Liste aus 38 Sequencer-Reglern unbedienbar wäre. Der Server liefert
@@ -420,7 +451,11 @@ Für die UI-Schicht selbst gibt es **kein** Testgerüst im Repo — `webui/` sol
 ohne Node/npm auskommen, und ein jsdom-Test würde genau das einführen. Geprüft
 ist die Server-Seite (`webui/test_webui.py`, ohne Fremdabhängigkeiten); das
 Rendering wurde einmalig headless mit jsdom gegengeprüft, ohne den Test
-aufzunehmen.
+aufzunehmen. Eine Ausnahme geht ohne Fremdabhängigkeit und ist deshalb drin:
+`MarkupWiringTest` liest `app.js` und `index.html` als Text und prüft, dass
+jedes `getElementById()` ein `id=` im Markup findet — ein Handle, das `null`
+ist, fällt im Browser sonst erst als stumme Seite auf, weil `app.js` seine
+Listener beim Laden anhängt.
 
 Start (Details, Windows-Scheduled-Task `WebUiRun` und Firewall-Hinweise in `webui/README.md`):
 
@@ -820,6 +855,158 @@ Im Web-UI bilden die acht Adressen eine eigene Sektion „Impuls-Randomizer
 Präfix-Regel schneidet nach zwei Segmenten ab, ohne den Sonderfall stünden alle
 acht Regler zwischen den vier Reglern, die sie steuern.
 
+### Topologiebasierte Melodiekomposition (MelodyModes/MelodyGraph/MelodyAssigner/NodeMelodyStore/MelodyManager)
+
+Die Note eines Knotens kam bis 2026-08-01 aus `nodeId % notesPerOctaveSet`.
+Die `nodeId` ist die Zeilennummer in `nodeCrossings.txt` und hat **keinen
+Bezug zur physischen Nachbarschaft** — Node 5 und Node 6 können an
+entgegengesetzten Enden der Installation liegen. Ein Impuls, der von Knoten
+zu Knoten wandert, traf deshalb auf eine Folge von Tönen mit rein zufälligem
+Abstand: mal ein Halbton, mal ein Tritonus. Das klang nach Skalentönen in
+zufälliger Reihenfolge, nicht nach einer Melodie.
+
+Stattdessen wird die Note jetzt **einmalig aus der Graphstruktur** vergeben:
+eine Breitensuche vom Startknoten aus, bei der jeder neu erreichte Knoten
+seine Skalenstufe **relativ zu dem Nachbarn** bekommt, über den er zuerst
+erreicht wurde. Damit ist jede Baumkante ein regelkonformes Intervall, und
+jeder mögliche Impulsweg — egal wie lang — ist eine Kette solcher Intervalle.
+Konzept: `docs/superpowers/specs/2026-08-01-topologiebasierte-melodiekomposition-konzept.md`,
+Umsetzungsplan: `docs/superpowers/plans/2026-08-01-topologiebasierte-melodiekomposition-plan.md`.
+
+Vier reine Klassen ohne Processing/oscP5 (in `test/run.sh`) plus eine dünne
+Klebeschicht mit OSC:
+
+- `MelodyModes` — die acht Modi als Tonvorrat **plus** Kantenregel. Zwei Modi
+  mit gleicher Tonmenge, aber verschiedener Wegeregel sind zwei verschiedene
+  Modi (Ajam gegen Ionisch). Reihenfolge A–H: Dorisch, Moll-Pentatonik, Maqam
+  Hijaz, Harmonisch Moll, Phrygisch, Maqam ʿAjam, Maqam Nikriz, Maqam Saba.
+- `MelodyGraph` — die Nachbarschaft aus `nodeCrossings.txt` +
+  `numLedsPerStripe`: zwei Nodes sind benachbart, wenn sie auf **derselben**
+  Stripe liegen und dort unmittelbar aufeinanderfolgen.
+- `MelodyAssigner` — BFS, Landmarken-Rotation, Oktavfaltung.
+- `NodeMelodyStore` — `data/nodeMelody_<modus>.txt` schreiben und lesen.
+- `MelodyManager` — die vier OSC-Parameter und `/net/melody/recompute`. Kennt
+  oscP5 und darf **nicht** in `test/run.sh`, genau wie `PresetManager`.
+
+**Die zwei Regeln, ohne die das Verfahren nicht funktioniert** (beide erst in
+der zweiten Fassung des Konzepts dazugekommen, weil im ersten Entwurf nicht
+bedacht):
+
+- **Landmarken-Rotation.** Eine Kante zu einem Hub-Knoten bekommt nicht immer
+  die Quint, sondern rotiert über `STABLE_INTERVALS = { +4, -3, +2 }`
+  Skalenstufen nach `(BFS-Tiefe + Rang in der Nachbarliste) mod 3`. „Immer
+  Quint" macht zwei Dinge kaputt: alle Landmarken-Geschwister eines Knotens
+  landen auf **exakt demselben Ton** (Verdopplung und Phasing statt Akkord),
+  und jede Landmarken-Ebene addiert +4 Stufen — unbegrenzte Oktavdrift.
+  `+4` und `-3` liegen auf **derselben** Skalenstufe in verschiedenen Oktaven,
+  der Ankercharakter bleibt also erhalten; der Mittelwert sinkt von +4 auf +1
+  und wechselt das Vorzeichen. **Beide Summanden werden gebraucht**: nur
+  `tiefe` gäbe allen Landmarken einer Ebene dasselbe Intervall (Ton-Stapel
+  verschoben statt aufgelöst), nur `rang` gäbe jedem ersten Nachbarn immer
+  `+4` (Drift entlang eines langen Weges ungebremst).
+- **Oktavfaltung als harte Grenze.** `((raw % n) + n) % n` mit
+  `n = scale.length * numOctaves`. Die Rotation *dämpft* die Drift, sie
+  beschränkt sie nicht — auch die vorzeichenbehaftete Ziehung auf den
+  normalen Kanten hat zwar Mittelwert 0, jede einzelne Realisierung ist aber
+  eine Irrfahrt. Der **doppelte Modulo** ist Pflicht: durch die `-3` kann der
+  Rohwert negativ werden, und Javas `%` liefert dann ein negatives Ergebnis.
+  Der **Startknoten sitzt in der mittleren Oktave**
+  (`scale.length * (numOctaves / 2)`) — läge die Tonika bei 0, bräche jedes
+  Abwärtsintervall sofort um und die Rotation wäre wirkungslos bis schädlich.
+
+**Zwei Kantenklassen ohne Regel-Garantie, beide gezählt und im Dateikopf
+genannt.** Der Graph ist nicht kreisfrei; **Rückwärtskanten** (Kanten auf
+einen schon besuchten Knoten) werden nicht mehr bewertet, ihr Intervall ist
+eine Restgröße. **Umbruchkanten** sind Baumkanten, bei denen die Faltung das
+gewählte Intervall zerrissen hat. Es gibt bewusst **keine**
+Nachbearbeitungsstufe, die sie glättet (Birk, 2026-08-01). Sie zu zählen ist
+der Unterschied zwischen einem bekannten Kompromiss und einem stillen Fehler.
+Am echten Datenstand: 92 Knoten, 154 Kanten, **63 Rückwärtskanten** (41 %,
+deutlich mehr als die im Konzept geschätzten 10–20 %) und 4–10 Umbruchkanten
+je nach Modus.
+
+**Die Datei entsteht nur auf ausdrücklichen Trigger.** `data/nodeMelody_<modus>.txt`,
+Format nach dem Vorbild von `stripeTrees.txt`: Kopfzeilen mit `#`, dann
+`nodeId <TAB> scaleIndex <TAB> midiNote <TAB> tiefe`. **Maßgeblich ist
+`scaleIndex`** — `midiNote` ist eine abgeleitete Kontrollspalte zum Mitlesen,
+`tiefe` reine Diagnose, beide werden beim Laden nicht ausgewertet. Bei
+doppeltem `nodeId` gewinnt die **letzte** Zeile (die Handkorrektur wird
+angehängt). Beim Start wird nur **gelesen**: automatisches Neurechnen machte
+die Datei zu einem Zwischenspeicher statt zu einer Quelle, und eine von Hand
+korrigierte Zeile wäre beim nächsten Start weg, ohne Meldung.
+
+**Vier Parameter, ein Trigger, ein atomarer Vorgang:**
+
+- `/net/melody/mode` (int 0..7, Default **4** = Phrygisch — der einzige der
+  acht, der den heute live laufenden Tonvorrat unverändert lässt, also der
+  Modus für einen A/B-Vergleich, bei dem sich genau eine Sache ändert)
+- `/net/melody/startNode` (int 0..`nodeCount-1`, Default = Knoten mit dem
+  höchsten Grad). **Die Obergrenze kommt zur Laufzeit aus dem Graphen**, nicht
+  als Literal (CLAUDE.md-Konvention: keine von der Kreuzungszahl abgeleitete
+  Zahl als Literal).
+- `/net/melody/rootMidiNote` (int 24..84, Default 45 = A2)
+- `/net/melody/numOctaves` (int 1..6, Default 3)
+- `/net/melody/recompute` — **Kommando**, kein Parameter. Erst dieses rechnet,
+  schreibt die Datei und schickt `/net/melody/reload <modus>` an 8002.
+
+**Warum ein gemeinsamer Trigger und nicht drei.** Die vier Werte sind für sich
+harmlos; drei unabhängige Trigger rechneten beim Verstellen von dreien
+dreimal, davon zweimal mit einem halb gesetzten Zustand. Und `numOctaves`
+ändert den **Modulo-Teiler der Faltung selbst** — eine mit dem alten Wert
+gerechnete Zuordnung ist danach nicht transponiert, sondern schlicht falsch.
+Alle vier stehen in `PresetStore.EXCLUDED`: Transport, nicht Inhalt, und ein
+Preset kann zwischen „alte Zuordnung" und „neue Zuordnung" nicht überblenden.
+
+**`hubThreshold` ist bewusst kein OSC-Parameter** (`MelodyManager.HUB_PERCENTILE`,
+75. Perzentil). Er löste wie `startNode` eine Neuberechnung aus und wäre ein
+fünfter Regler, dessen Wirkung sich nur im Vergleich zweier kompletter Läufe
+zeigt. Der konkrete Wert bleibt laut Konzept offene Geschmacksfrage — am
+echten Datenstand gelten damit 46 der 92 Knoten als Landmarke.
+
+**Unerreichbare Knoten** (andere Zusammenhangskomponente, etwa während einer
+laufenden Kalibrierung) bekommen die Tonika und werden **gezählt**. Das
+Konzept sagt dazu nichts; ein unbestimmter Wert wäre ein stiller Ausfall, ein
+Abbruch hänge die Show an einer Kalibrierlücke auf.
+
+**Der Graph wird beim Start gebaut und bei `R` in der Kalibrierung NICHT neu.**
+Eine Zuordnung, die zur alten Topologie gehört, bleibt gültig, bis jemand
+ausdrücklich neu rechnet; der Startbericht meldet eine abweichende Knotenzahl.
+
+### Ursprungs-Baum am Impuls (Klangbias)
+
+`TravellingActivation` trägt seit 2026-08-01 ein `final int originTree`
+(0..3 nach `StripeTreeStore.TREE_NAMES`, -1 = unbekannt), neben `final int id`
+und `final float decayScale` und aus demselben Grund: es ist eine Eigenschaft,
+die der Impuls bei der Geburt bekommt und bis zum Tod behält.
+
+- **Genau eine Stelle, an der der Wert entsteht:** `spawnTree(stripeIdx)`,
+  analog `spawnSpeed()`. Alle fünf Spawn-Pfade gehen hindurch.
+- **Vererbt an Split-Kinder und Filler**, die ziehen nicht neu. Ohne das wäre
+  der Bias nach dem ersten Split weg, und zwar lautlos.
+- **Der Konstruktor ohne den Wert wurde entfernt.** Damit weist der Compiler
+  jede Konstruktionsstelle aus, die ihn vergäße — dieselbe strukturelle
+  Absicherung wie bei `id`, statt einer Konvention, an die man sich erinnern
+  müsste.
+- **Fünftes Argument an `/net/hitNode`**, rein angehängt (wie seinerzeit `x`/`y`
+  dort und `speed` an `/net/impulse`). Er kommt von `curActivation`, nicht von
+  `hitNode`: er beschreibt den **Impuls**, nicht den getroffenen Knoten.
+
+Auf der Klangseite ersetzt er den Zonen-Bias vollständig (siehe „Klangseite").
+Der Grund ist nicht Geschmack, sondern **Intervallerhaltung**: der alte
+Zonen-Offset wurde auf den Index des *getroffenen* Knotens addiert, zwei
+benachbarte Knoten beiderseits einer Quadrantengrenze bekamen also
+verschiedene Offsets — und genau die Intervalle, die die topologische
+Zuordnung setzt, wären an jeder Grenze wieder zerlegt worden. Der
+Ursprungs-Bias ist für einen gegebenen Impuls **konstant** und transponiert
+seinen ganzen Weg gleichmäßig: vier Bäume ergeben vier Transpositionen
+derselben Melodie statt vier Störungen darin.
+
+**`/net/impulse` trägt den Baum nicht.** Die Drohnen laufen deshalb mit
+neutralem Bias. Bewusst so, statt dort den alten Zonen-Bias stehen zu lassen:
+sonst hätten Glocke und Drohne desselben Impulses zwei verschiedene
+Herkunftsbegriffe, und der eine wechselte im Flug, der andere nicht. Ein halb
+umgestellter Mechanismus ist schwerer zu hören als ein ganz abgeschalteter.
+
 ### Preset-System (PresetStore.java, PresetScheduler.java, PresetManager.java)
 
 Ein Preset ist ein **kompletter** Wertesatz aller 48 fernsteuerbaren
@@ -1176,23 +1363,72 @@ One-Shots, ein Lag würde den Anschlag weichzeichnen, der ihren Klang ausmacht.
 
 Der Klang selbst ist der vor Ort getunte Stand: Phrygisch ab A2 (`~scaleSteps`), `~minAmp`/`~maxAmp` aus dem +6-dB-Live-Abgleich, Sägezahn-Layer für den Hang-Drum-Attack, `~maxPolyphony = 16` als Voice-Stealing-Deckel gegen „command FIFO full" (der Ausfallmodus dabei ist **Stille ohne Absturz**). Der Hall sitzt **hinter** dem Decoder (`\masterReverb`, je Hardware-Kanal getrennt) und nicht in der Glocke — vor dem Encoder würde er selbst räumlich codiert und wieder zu einer Punktquelle verschmiert; `~reverbMix` steht deshalb auf 0.35 statt auf dem früheren Wert 0.15.
 
-**Klangbias nach Netzregion** (`~regionZone`, `~regionBias`, Parameter
-`/klangnetz/param/regionBiasAmount`, Default 0.6): vier Quadranten,
-Zone = `(x>=0) + 2*(y>=0)`. Je Zone verschieben sich die Notenwahl sowie
-`brightness` und `detune`. Die Zonierung folgt der Lautsprecher-Geometrie —
-die vier Boxen stehen auf den Seitenmitten, jeder Quadrant liegt also zwischen
-zwei Boxen und hat eine eindeutige Richtung, Ortung und Klangfarbe stützen
-sich gegenseitig. Radiale Ringe (Zentrum/Rand) korrelieren mit keiner
-Lautsprecherrichtung, und in der Mitte pannt `~toQuad` ohnehin auf alle vier
-Boxen gleich — die Zone mit dem eigensten Charakter läge dort, wo die Ortung
-am schwächsten ist.
+**Topologiebasierte Notenzuordnung** (seit 2026-08-01): `~melodyLoad` liest
+`data/nodeMelody_<modus>.txt` und füllt `~melodyScaleIndex` (nodeId →
+gefalteter Skalenindex). Der `/net/hitNode`-Handler nimmt daraus den Zähler
+vor dem Modulo — die Faltung auf drei Oktaven ist dieselbe wie vorher, nur
+`nodeId` ist ersetzt. Berechnet wird die Datei ausschliesslich von imPulse
+(`/net/melody/recompute`), hier wird sie nur gelesen; `/net/melody/reload
+<modus>` schiebt sie nach.
+
+Drei Dinge, die man beim Ändern kennen muss:
+
+- **Fehlt die Datei, ist der Rückfall die ALTE `nodeId`-Formel, nicht die
+  Tonika.** Eine fehlende Datei soll klingen wie früher (zufällig, aber
+  lebendig), nicht wie 92 gleiche Töne. Die `WARNUNG` steht in `~melodyLoad`.
+- **Beim Laden gewinnt der Kopf der Datei** über `melodyRootMidiNote` /
+  `melodyNumOctaves` / `~scaleSteps`: die Oktavfaltung ist mit genau diesen
+  Werten gerechnet worden, ein abweichendes `numOctaves` machte die Zuordnung
+  nicht transponiert, sondern falsch. Eine Abweichung wird gemeldet, nicht
+  verschluckt. Danach ist `melodyRootMidiNote` eine saubere
+  Live-Transposition; `melodyNumOctaves` kann eine geladene Zuordnung nicht
+  nachfalten und sagt das.
+- **Es gibt kein `melodyStartNode`.** SuperCollider rechnet nichts neu, der
+  Regler wäre hier wirkungslos und wanderte trotzdem in jedes Sound-Preset.
+  Er liegt in imPulse (`/net/melody/startNode`); zur Diagnose steht er im Kopf
+  der Datei und wird beim Laden ausgegeben.
+
+`~melodyModes` ist eine **handgepflegte Spiegelung** von `MelodyModes.ALL` —
+dieselbe Bauform wie `SC_PARAMS` im Web-UI, gleiche Reihenfolge, gleiche
+Schlüssel.
+
+**Klangbias nach Ursprungs-Baum** (`~treeBias`, Parameter
+`/klangnetz/param/treeBiasAmount`, Default 0.6): vier Bäume, indiziert über
+das **fünfte Argument von `/net/hitNode`**. Je Baum verschieben sich die
+Notenwahl sowie `brightness` und `detune`.
+
+Das **ersetzt** seit 2026-08-01 den früheren Zonen-Bias
+(`~regionZone`/`~regionBias`/`regionBiasAmount`, vier Quadranten nach der
+Geoposition des getroffenen Knotens) — nicht additiv daneben: zwei
+Notenoffsets auf demselben Notenindex brächten den Intervallschaden
+vollständig zurück. Form und Größe der drei Tabellen sind unverändert (vier
+Einträge), getauscht wurde nur die **Indexquelle**. Der geografische Charakter
+ist davon unberührt — die Lautsprecher-Ortung über `~toQuad` bleibt.
+
+Ein **unbekannter Baum** (`-1`: Stripe ohne Zuordnung in `stripeTrees.txt`,
+oder ein älterer Processing-Stand ohne das fünfte Argument) ergibt neutralen
+Bias. Ihn auf Baum 0 zu legen hiesse, eine Lücke in der Zuordnungsdatei still
+als „vorn" zu hören.
 
 Der Notenoffset zählt in **Skalenstufen**, nicht Halbtönen: er geht auf den
 Skalenindex, bevor `~scaleSteps` nachgeschlagen wird, sonst fielen Töne aus
-Phrygisch heraus. Ein eigener `enabled`-Schalter entfällt — `amount = 0` ist
+der Skala heraus. Ein eigener `enabled`-Schalter entfällt — `amount = 0` ist
 aus und klingt bitgleich wie ohne das Feature. `~tilt` und `~decayScale`, die
 in älteren Notizen als Timbre-Regler auftauchen, gibt es in dieser Datei
 nicht; die vorhandenen Äquivalente sind `brightness` und `detune`.
+
+**Die Umbenennung `regionBiasAmount` → `treeBiasAmount` bricht vorhandene
+SC-Presets an genau dieser einen Zeile** (sie melden dann „1 unbekannt") und
+musste in `SC_PARAMS` im Web-UI nachgezogen werden. Bewusst in Kauf genommen:
+ein Regler namens „region", der nach Bäumen biast, ist die schlechtere Falle.
+
+**Prüfung der SC-Seite:** `test/melodyProbe.scd` ist **keine zweite
+Sound-Datei**. Es liest `supercollider/klangnetz_bells.scd` und wertet deren
+Kopfteil bis zum `s.waitForBoot` aus — also genau die Teile ohne Server —, und
+prüft `~melodyModes`, `~melodyLoad`, `~treeBias` und die Parameter-Registry.
+Dieselben Zeilen laufen, es kann also keine zweite Wahrheit entstehen.
+Aufruf: `QT_QPA_PLATFORM=offscreen sclang -D test/melodyProbe.scd`. Klang
+prüft es nicht — dafür gilt weiter manuelle Prüfung am Gerät.
 
 **Bell-Tails: fünf additive Schweife je Node-Treffer** (`\tail1_shimmer`,
 `\tail2_whoosh`, `\tail3_fmglide`, `\tail4_granular`, `\tail5_subglow`,
@@ -1417,14 +1653,16 @@ Amplituden-Grenzen sind vor Ort getunte Konstanten und bleiben es.
   unbekannt" plus einen Hinweis auf genau diese Ursache. Ein
   `/sc/preset/save standby` überschreibt sie mit dem aktuellen Satz.
 
-Die 52 Parameter, die ein Preset umfasst: `masterVolume`, **`bellVolume`**,
+Die 55 Parameter, die ein Preset umfasst: `masterVolume`, **`bellVolume`**,
 **`droneVolume`**, **`tailVolume`**, `reverbMix`, `reverbRoom`, `reverbDamp`,
-`brightness`, `detune`, `droneLpfMult`, `panSharpness`, `regionBiasAmount`,
-`travelMix`, `travelRq`, `travelGrainRatio`, `travelAmpScale`,
-`travelFreqBase`, `travelSpeedRef`, `travelOctavesPerStep`, `travelSnap`,
-`travelFreqMin`, `travelFreqMax`, dazu die **fünf Orbit-Regler**
-(`tailOrbitRadius`, `tailOrbitSpeed`, `tailOrbitEnvExp`, `tailOrbitDirLock`,
-`tailOrbitMinRadius`) und **je Tail fünf** Hüllkurven-/Pegelregler
+`brightness`, `detune`, `droneLpfMult`, `panSharpness`, **`treeBiasAmount`**
+(bis 2026-08-01 `regionBiasAmount`), **`melodyMode`**,
+**`melodyRootMidiNote`**, **`melodyNumOctaves`**, `travelMix`, `travelRq`,
+`travelGrainRatio`, `travelAmpScale`, `travelFreqBase`, `travelSpeedRef`,
+`travelOctavesPerStep`, `travelSnap`, `travelFreqMin`, `travelFreqMax`, dazu
+die **fünf Orbit-Regler** (`tailOrbitRadius`, `tailOrbitSpeed`,
+`tailOrbitEnvExp`, `tailOrbitDirLock`, `tailOrbitMinRadius`) und **je Tail
+fünf** Hüllkurven-/Pegelregler
 (`tail<Shimmer|Whoosh|Fmglide|Granular|Subglow><Attack|Decay|Sustain|Release|Amp>`).
 Wer einen `~registerParam`
 ergänzt, bekommt ihn ohne weiteres Zutun in die Presets — die Liste wird aus

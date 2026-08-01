@@ -16,6 +16,11 @@ class PendingSpawn {
   float speed;       // Betrag und Richtung, wie beim sofort gespawnten Kind
   float energy;
   float decayScale;
+  // Der Ursprungs-Baum des Elternimpulses (0..3, -1 = unbekannt). Ein
+  // wartendes Kind erbt ihn wie jedes andere Split-Kind - ohne dieses Feld
+  // waere der Klangbias ausgerechnet an den zeitversetzten Zweigen weg, und
+  // zwar lautlos.
+  int originTree;
 }
 
 // Warteschlange fuer die zeitversetzten Kinder einer Aufspaltung.

@@ -393,15 +393,16 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         float cmdSpeed=spawnSpeed();
         for (Integer nodeLedIdx : activeNode.ledIndices) {
           LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
+          int cmdTree=spawnTree(curLedInfo.stripeIndex);
           //  activation spreads in boths directions
           int forwPos=nodeLedIdx +1;
           if (forwPos>0&&forwPos<nLeds) {
-			activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, cmdSpeed, 1f ));
+			activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, cmdSpeed, 1f, cmdTree));
 		}
           //do not go back the same stripe:
           int backwPos=nodeLedIdx -1;
           if (backwPos>0&&backwPos<nLeds) {
-			activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -cmdSpeed, 1f));
+			activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -cmdSpeed, 1f, cmdTree));
 		}
         }
       }
@@ -411,7 +412,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       newMessage.getTypetagAsBytes()[0]=='i'
       ) {
       int theValue=newMessage.get(0).intValue();
-      activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), 1f ));
+      activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), 1f, spawnTree(theValue)));
     }
 
     //System.out.println(newMessage);
@@ -432,7 +433,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       //System.out.println("Calculated Energy: "  + energy);
       //PApplet.println(theValue);
       if (theValue<nStripes) {
-        activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), energy));
+        activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), energy, spawnTree(theValue)));
       }
     }
   }
@@ -450,27 +451,36 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   //represents one travelling activation
   public class TravellingActivation {
-    TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_) {
-      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++, 1f);
+    // Der Konstruktor OHNE originTree ist bewusst entfallen (2026-08-01): der
+    // Ursprungs-Baum ist wie die id eine Eigenschaft, die der Impuls bei der
+    // Geburt bekommt und bis zum Tod behaelt, und ein vergessener Wert waere
+    // ein Impuls mit falscher Klangfarbe OHNE Fehlermeldung. Ohne den alten
+    // Konstruktor weist der Compiler jede Konstruktionsstelle aus, die ihn
+    // nicht setzt - dieselbe strukturelle Absicherung wie bei final int id.
+    TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
+        int originTree_) {
+      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++, 1f, originTree_);
     }
 
     // Mit ausdruecklichem decayScale - fuer die Kinder einer Aufspaltung, die
     // ihre Lebensdauer streuen sollen (siehe /net/impulse/splitLifetimeJitter).
     TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
-        float decayScale_) {
-      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++, decayScale_);
+        float decayScale_, int originTree_) {
+      this(ledIdxPos_, stripeIdx_, speed_, energy_, nextImpulseId++, decayScale_,
+          originTree_);
     }
 
     // Mit ausdruecklicher ID - nur fuer den Filler, der die ID seines
     // Elternimpulses uebernimmt statt eine neue zu verbrauchen.
     TravellingActivation(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
-        int id_, float decayScale_) {
+        int id_, float decayScale_, int originTree_) {
       ledIdxPos=ledIdxPos_;
       stripeIdx=stripeIdx_;
       speed=speed_;
       energy=energy_;
       id=id_;
       decayScale=decayScale_;
+      originTree=originTree_;
     }
 
     int getLedIndex() {
@@ -491,14 +501,25 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // saehe die lebenden Impulse unbeeindruckt weiterlaufen - beides ohne
     // Fehlermeldung.
     final float decayScale;
+    // Der Baum, an dem dieser Impuls entstanden ist: 0..3 nach
+    // StripeTreeStore.TREE_NAMES, -1 = unbekannt. Wird an /net/hitNode
+    // angehaengt und traegt dort den Klangbias.
+    //
+    // Unveraenderlich und vererbt, aus demselben Grund wie id und decayScale:
+    // was einen Impuls als EIN Ereignis zusammenhaelt, ist sein Ursprung,
+    // nicht die Region, in der er sich gerade befindet. Ein Bias, der beim
+    // ersten Split verschwindet, waere lautlos falsch - deshalb uebernimmt
+    // jedes Kind einer Aufspaltung und jeder Filler den Wert des
+    // Elternimpulses.
+    final int originTree;
     void setEnergy(float _energy){energy=_energy;}
   }
 
   //represents fillers needed when high travelling speeds lead to skipping some leds in each frame
   public class TravellingActivationFiller extends TravellingActivation {
     TravellingActivationFiller(float ledIdxPos_, int stripeIdx_, float speed_, float energy_,
-        int parentId_, float decayScale_) {
-      super(ledIdxPos_, stripeIdx_, speed_, energy_, parentId_, decayScale_);
+        int parentId_, float decayScale_, int originTree_) {
+      super(ledIdxPos_, stripeIdx_, speed_, energy_, parentId_, decayScale_, originTree_);
     }
   }
 
@@ -552,7 +573,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
             break;
           }
           LedInNetInfo curLedInfo=ledNetInfo[curActivationLedIdx];
-          newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy, curActivation.id, curActivation.decayScale));
+          // Der Filler erbt id, decayScale UND originTree seines
+          // Elternimpulses - er ist derselbe Impuls, nur an einer
+          // uebersprungenen Position.
+          newActivations.add(new TravellingActivationFiller(curActivationLedIdx, curLedInfo.stripeIndex, curActivation.speed, curActivation.energy, curActivation.id, curActivation.decayScale, curActivation.originTree));
         }
       }
       if (activationIsValid(activationLedIdx, curActivation) && (activationLedIdx == prevActivationLedIdx || !activationEncounteredNode(activationLedIdx, curActivation, newActivations, currentTime))) {
@@ -646,7 +670,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
             splitCandidates.add(candidate(forwPos, curLedInfo.stripeIndex,
                 SplitVariance.jitter(curActivation.speed, speedJitter, Math.random()),
                 childEnergy,
-                SplitVariance.jitter(1f, lifetimeJitter, Math.random())));
+                SplitVariance.jitter(1f, lifetimeJitter, Math.random()),
+                curActivation.originTree));
           }
           //do not go back the same stripe:
           if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex || activationLedIdx < nodeLedIdx) {//ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
@@ -655,7 +680,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
               splitCandidates.add(candidate(backwPos, curLedInfo.stripeIndex,
                   SplitVariance.jitter(-curActivation.speed, speedJitter, Math.random()),
                   childEnergy,
-                  SplitVariance.jitter(1f, lifetimeJitter, Math.random())));
+                  SplitVariance.jitter(1f, lifetimeJitter, Math.random()),
+                  curActivation.originTree));
             }
           }
         }
@@ -673,13 +699,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   // Schluessel des Positionsstroms /net/impulse, und eine Luecke darin waere
   // auf der Klangseite eine Drohne, die nie kommt.
   private PendingSpawn candidate(float ledPos, int stripeIdx, float speed,
-      float energy, float decayScale) {
+      float energy, float decayScale, int originTree) {
     PendingSpawn p = new PendingSpawn();
     p.ledPos=ledPos;
     p.stripeIdx=stripeIdx;
     p.speed=speed;
     p.energy=energy;
     p.decayScale=decayScale;
+    p.originTree=originTree;
     return p;
   }
 
@@ -726,7 +753,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       double delay=stagger ? SplitStagger.delayBeats(noteValue, slot) : 0.0;
       if (delay <= 0.0) {
         newActivations.add(new TravellingActivation(p.ledPos, p.stripeIdx, p.speed,
-            p.energy, p.decayScale));
+            p.energy, p.decayScale, p.originTree));
       } else {
         p.dueBeats=beats + delay;
         splitStagger.schedule(p);
@@ -743,7 +770,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     for (int i=0; i<due.size(); i++) {
       PendingSpawn p=due.get(i);
       activations.add(new TravellingActivation(p.ledPos, p.stripeIdx, p.speed,
-          p.energy, p.decayScale));
+          p.energy, p.decayScale, p.originTree));
     }
   }
 
@@ -759,6 +786,19 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // liest, ignoriert die zwei zusaetzlichen Argumente.
     myMessage.add(hitNode.posX);
     myMessage.add(hitNode.posY);
+    // Der Ursprungs-Baum des Impulses (0..3, -1 = unbekannt), rein
+    // ANGEHAENGT - genau dasselbe Muster, mit dem /net/hitNode schon um x/y
+    // und /net/impulse um speed erweitert wurde: ein Empfaenger, der nur die
+    // ersten vier Argumente liest, bleibt unberuehrt.
+    //
+    // Er ist eine Eigenschaft des IMPULSES, nicht des getroffenen Knotens -
+    // deshalb kommt er von curActivation und nicht von hitNode. Genau darin
+    // liegt der Sinn: er ist fuer einen gegebenen Impuls konstant,
+    // transponiert also seinen ganzen Weg gleichmaessig und laesst jedes
+    // Intervall darauf unangetastet. Ein Bias nach der Region des Knotens
+    // wuerde die topologisch gesetzten Intervalle an jeder Quadrantengrenze
+    // wieder zerlegen.
+    myMessage.add(curActivation.originTree);
     oscP5.send(myMessage, remoteLocation);
   }
 
@@ -877,7 +917,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // "rueckwaerts" beginnt am anderen Ende des Stripes, sonst wuerde der Impuls sofort
       // wieder aus den Bounds fallen (siehe activationIsValid) statt eine sichtbare Strecke zu reisen
       float startPos=forward ? stripeIdx*nLedsInStripe : stripeIdx*nLedsInStripe + (nLedsInStripe-1);
-      activations.add(new TravellingActivation(startPos, stripeIdx, forward ? speed : -speed, energy));
+      activations.add(new TravellingActivation(startPos, stripeIdx, forward ? speed : -speed, energy, spawnTree(stripeIdx)));
     }
   }
 
@@ -905,6 +945,24 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // Auslieferungswert 0 wie ueberall sonst: Choreografie primaer exakt,
     // Jitter ein optionaler Regler obendrauf.
     return SplitVariance.jitter(speed, speedQuantizeJitter.getValue(), Math.random());
+  }
+
+  // Der Ursprungs-Baum fuer EINEN neu gespawnten Impuls: 0..3 nach
+  // StripeTreeStore.TREE_NAMES, -1 = unbekannt.
+  //
+  // Der einzige Ort, an dem ein Ursprungs-Baum entsteht - genau wie
+  // spawnSpeed() der einzige Ort fuer eine Spawn-Geschwindigkeit ist. Alle
+  // fuenf Spawn-Pfade (Tube-Trigger, activateStripe, activateNode,
+  // RandomSpawn, Sequencer) gehen hierdurch; Split-Kinder und Filler ziehen
+  // NICHT neu, sondern erben den Wert ihres Elternimpulses. Ein sechster
+  // Pfad, der das Feld selbst setzte, waere ein Impuls mit falscher
+  // Klangfarbe ohne Fehlermeldung.
+  //
+  // Ohne geladene Baum-Zuordnung liefert die Methode -1: die Show laeuft
+  // dann ohne Klangbias weiter, statt alle Impulse in die Faerbung des
+  // ersten Baums zu legen.
+  private int spawnTree(int stripeIdx) {
+    return (stripeTrees == null) ? -1 : stripeTrees.treeOf(stripeIdx);
   }
 
   // Die Baum-Zuordnung nachreichen. Aus setup() zu rufen, nachdem
@@ -959,7 +1017,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         continue;
       }
       activations.add(new TravellingActivation(stripeIdx*nLedsInStripe, stripeIdx,
-          spawnSpeed(), trackConfigs[track].energy));
+          spawnSpeed(), trackConfigs[track].energy, spawnTree(stripeIdx)));
     }
   }
 
@@ -982,7 +1040,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
 
   void createRandomActivation() {
     int ledIdx=0;//papplet.floor(papplet.random(ledNetInfo.length));
-    activations.add(new TravellingActivation(ledIdx, ledNetInfo[ledIdx].stripeIndex, 20, 1));
+    activations.add(new TravellingActivation(ledIdx, ledNetInfo[ledIdx].stripeIndex, 20, 1,
+        spawnTree(ledNetInfo[ledIdx].stripeIndex)));
   }
 
 

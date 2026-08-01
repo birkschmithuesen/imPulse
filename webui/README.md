@@ -108,9 +108,54 @@ liefert dafuer Struktur (`build_sequencer`, `build_speed_classes`,
 - **Sound (SuperCollider)**: siehe unten, eigener Port.
 
 Die Adressen dieser drei Sektionen nimmt `sequencer_addresses()` aus dem
-generischen Rendering heraus. Ohne das stuende jeder Regler zweimal auf der
-Seite — zwei Bedienelemente fuer denselben Parameter, die auseinanderlaufen
+generischen Rendering heraus, die der Melodie-Sektion (siehe unten)
+`melody_addresses()`. Ohne das stuende jeder Regler zweimal auf der Seite —
+zwei Bedienelemente fuer denselben Parameter, die auseinanderlaufen
 koennen.
+
+### Melodie-Zuordnung: eine Sektion, in der Regler nichts tun
+
+Ueber den Tabs, neben den Presets, sitzt **Melodie-Zuordnung** mit den vier
+Werten `/net/melody/{mode,startNode,rootMidiNote,numOctaves}` und einem
+Knopf. Sie ist die einzige Stelle im UI, an der das **Verstellen eines
+Feldes nichts sendet**.
+
+Der Grund steht im Konzept (`docs/superpowers/specs/2026-08-01-...`,
+Abschnitte 9 und 9b): die vier Werte sind keine Klangregler, sie beschreiben,
+wie die Zuordnung beim naechsten Mal **gerechnet** wird. Erst
+`/net/melody/recompute` fuehrt sie aus — und zwar alle vier zusammen, als
+**ein** Vorgang. Drei getrennte Trigger rechneten beim Verstellen von dreien
+dreimal, davon zweimal mit einem halb gesetzten Zustand; und `numOctaves`
+aendert den Modulo-Teiler der Oktavfaltung selbst, eine mit dem alten Wert
+gerechnete Zuordnung ist danach nicht transponiert, sondern falsch.
+
+Vier Dinge, die man beim Aendern kennen muss:
+
+- **Die Reihenfolge im Endpunkt ist der Punkt.** `/api/melody/recompute`
+  setzt erst alle vier Werte ueber denselben `apply_value()`-Weg wie jeder
+  andere Regler, **dann** geht das Kommando raus. Umgekehrt rechnete imPulse
+  mit dem alten Stand. Eine Endpunkt-Probe haelt die Reihenfolge nach.
+- **Die Bestaetigung ist Pflicht und gilt fuer einen Druck.** Der Knopf ist
+  gesperrt, bis das Haekchen sitzt, und das Haekchen faellt danach wieder weg
+  — auch nach einem Fehler. Dieselbe Ueberlegung wie bei der Taste `L` in den
+  zwei Kalibriermodi: die Aktion ueberschreibt `data/nodeMelody_<modus>.txt`
+  samt von Hand korrigierter Zeilen und laesst sich nicht zuruecknehmen.
+- **Es gibt keine Erfolgsmeldung von imPulse.** Kein Rueckkanal — die
+  Statuszeile sagt deshalb, was *gesendet* wurde und wo das Ergebnis steht
+  (Konsole von imPulse, `data/nodeMelody_<modus>.txt`), nicht „fertig".
+  Anders als beim Preset-Speichern, wo eine Datei erscheint, auf die sich
+  warten laesst.
+- **Der Modus ist ein Dropdown, kein Zahlenfeld.** `MELODY_MODE_NAMES` in
+  `server.py` ist die dritte Kopie der Modusliste (neben `MelodyModes.ALL`
+  und `~melodyModes` in der `.scd`); ein Test vergleicht sie mit der
+  Java-Datei, damit das Dropdown nicht den falschen Namen zu einer Nummer
+  zeigt.
+
+`/net/melody/startNode` hat auf der **Sound**-Seite bewusst **kein**
+Gegenstueck: SuperCollider rechnet nichts neu, der Regler waere dort
+wirkungslos und wanderte trotzdem in jedes Sound-Preset. `melodyMode`,
+`melodyRootMidiNote` und `melodyNumOctaves` gibt es dagegen auch dort — beim
+Laden einer Zuordnungsdatei gewinnt allerdings deren Kopf.
 
 **Die Rasteranzeige je Track ist die Uhr des Browsers.** Sie rechnet aus BPM
 und Notenwert, in welchem *Abstand* ein Track feuert, und ist ausdruecklich
@@ -477,6 +522,13 @@ Browser kommt (kein Tabulator im Namen, keine NaN, Obergrenze, leere Liste
 erlaubt) und die beiden Endpoints. Die Endpoint-Tests brauchen als einzige
 Flask und werden sonst uebersprungen — wie schon der python-osc-Gegentest.
 
+Dazu die Melodie-Sektion: alle vier Felder in der vorgesehenen Reihenfolge,
+die Obergrenze von `startNode` aus dem Dump statt fest verdrahtet (sie haengt
+an der Kreuzungszahl), ein aelterer Stand ohne `/net/melody/*` blendet die
+Sektion aus, keine Melodie-Adresse landet zusaetzlich in einem Tab, die
+Modusnamen decken sich mit `MelodyModes.java`, und die vier Adressen stehen
+in `PresetStore.EXCLUDED`.
+
 ```bash
 python3 webui/test_webui.py
 ```
@@ -510,3 +562,10 @@ ohne Node/npm auskommen (siehe oben), und ein jsdom-Test wuerde genau das
 einfuehren. Das Rendering des Sequencer-Panels wurde einmalig headless mit
 jsdom gegengeprueft — der Test ist bewusst **nicht** aufgenommen. Wer daran
 etwas aendert, prueft im Browser nach.
+
+Eine Ausnahme gibt es, weil sie ohne Fremdabhaengigkeit geht:
+`MarkupWiringTest` liest `static/app.js` und `templates/index.html` als Text
+und prueft, dass jedes `getElementById()` ein `id=` im Markup findet. Das
+faengt den haeufigsten Verdrahtungsfehler — ein Handle, das `null` ist, weil
+das Markup nicht mitgezogen wurde. Im Browser faellt das sonst erst als
+stumme Seite auf, weil `app.js` seine Listener beim Laden anhaengt.
