@@ -684,7 +684,7 @@ function trackColor(index) {
 /* Kompakter Regler fuer die Track-Karten: Beschriftung, Schieber, Zahl.
  * Bewusst nicht buildSlider(): dort gehoert eine Adresszeile mit Range dazu,
  * das waere in einer Karte mit fuenf Reglern nur Rauschen. */
-function miniSlider(labelText, param, initial, format) {
+function miniSlider(labelText, param, initial, format, onChange) {
   const row = document.createElement('label');
   row.className = 'mini-row';
 
@@ -715,6 +715,7 @@ function miniSlider(labelText, param, initial, format) {
     range.value = next;
     out.textContent = fmt(next);
     if (!silent) { queueSend(param.address, next); }
+    if (onChange) { onChange(next); }
   }
 
   range.addEventListener('input', () => apply(range.value, false));
@@ -794,6 +795,76 @@ function noteBar(param, initial, noteValues, onPick) {
       const active = buttons.find((entry) =>
         entry.button.getAttribute('aria-pressed') === 'true');
       return active ? active.value : noteValues[0].value;
+    },
+    flash: () => {},
+  };
+  controls.set(param.address, handle);
+  return handle;
+}
+
+/* Baum-Filter als Auswahlbalken.
+ *
+ * Bewusst kein Schieber und auch kein Schalter-plus-Dropdown: der Parameter
+ * hat fuenf gleichrangige Zustaende, von denen "alle" (=0) einer ist. Ein
+ * Balken zeigt alle fuenf gleichzeitig, jeder ist einen Klick entfernt, und
+ * es gibt keinen verborgenen "zuletzt gewaehlter Baum"-Zustand, der nach
+ * einem Preset-Laden gegenueber dem Sketch falsch stehen koennte. Gleiche
+ * Bauform wie noteBar() eine Karte weiter oben.
+ *
+ * Der Wertebereich bleibt der rohe int 0..4 von RemoteControlledIntParameter
+ * -- hier wird nur beschriftet. */
+function treeBar(param, initial, labels, onPick) {
+  const bar = document.createElement('div');
+  bar.className = 'tree-bar';
+  const buttons = [];
+
+  function clampIndex(raw) {
+    const v = Math.round(Number(raw));
+    if (!isFinite(v)) { return 0; }
+    return Math.max(0, Math.min(labels.length - 1, v));
+  }
+
+  function mark(value) {
+    buttons.forEach((entry) => {
+      entry.button.setAttribute('aria-pressed',
+        entry.value === value ? 'true' : 'false');
+    });
+  }
+
+  labels.forEach((label, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.title = index === 0
+      ? 'Kein Filter – der Track wuerfelt aus allen Stripes ('
+        + param.address + ' = 0)'
+      : 'Nur Stripes am Baum "' + label + '" (' + param.address
+        + ' = ' + index + ')';
+    button.addEventListener('click', () => {
+      mark(index);
+      queueSend(param.address, index);
+      if (onPick) { onPick(index); }
+    });
+    buttons.push({ value: index, button: button });
+    bar.appendChild(button);
+  });
+
+  const start = clampIndex(initial);
+  mark(start);
+  if (onPick) { onPick(start); }
+
+  const handle = {
+    element: bar,
+    set: (value, silent) => {
+      const index = clampIndex(value);
+      mark(index);
+      if (!silent) { queueSend(param.address, index); }
+      if (onPick) { onPick(index); }
+    },
+    get: () => {
+      const active = buttons.find((entry) =>
+        entry.button.getAttribute('aria-pressed') === 'true');
+      return active ? active.value : 0;
     },
     flash: () => {},
   };
@@ -986,29 +1057,66 @@ function buildSequencer(data, host) {
       mini.appendChild(miniSlider('Swing', fields.swingJitter,
         data.values[fields.swingJitter.address]).element);
     }
+    // Baum-Filter und fester Ursprung haengen zusammen: ein gesetzter
+    // Ursprung schlaegt den Filter (OriginSequencer.advanceOrigin). Diese
+    // Zeile sagt es genau dann, wenn es zutrifft -- ein statischer Satz je
+    // Track waere sechsmal dasselbe und stuende auch dann da, wenn kein
+    // Konflikt vorliegt.
+    let treeValue = 0;
+    let originValue = -1;
+    const conflict = document.createElement('p');
+    conflict.className = 'track-note';
+    conflict.hidden = true;
+
+    function refreshConflict() {
+      const shadowed = treeValue > 0 && originValue >= 0;
+      conflict.hidden = !shadowed;
+      if (shadowed) {
+        conflict.textContent = 'Fester Ursprung S' + originValue
+          + ' – der Baum-Filter wirkt nicht.';
+      }
+    }
+
     if (fields.originTreeFilter) {
       const labels = seq.treeLabels || ['alle'];
-      mini.appendChild(miniSlider('Baum', fields.originTreeFilter,
-        data.values[fields.originTreeFilter.address],
-        // Klartext statt Zahl: "3" verraet niemandem, welcher Baum gemeint
-        // ist. Die Reihenfolge spiegelt StripeTreeStore.TREE_NAMES.
-        (v) => labels[Math.max(0, Math.min(labels.length - 1, Math.round(v)))]
-      ).element);
+      const caption = document.createElement('span');
+      caption.className = 'mini-caption';
+      caption.textContent = 'Baum';
+      mini.appendChild(caption);
+      // Klartext statt Zahl: "3" verraet niemandem, welcher Baum gemeint
+      // ist. Die Reihenfolge spiegelt StripeTreeStore.TREE_NAMES.
+      const bar = treeBar(fields.originTreeFilter,
+        data.values[fields.originTreeFilter.address], labels,
+        (v) => { treeValue = v; refreshConflict(); });
+      mini.appendChild(bar.element);
     }
     if (fields.originStripeOverride) {
       mini.appendChild(miniSlider('Ursprung', fields.originStripeOverride,
         data.values[fields.originStripeOverride.address],
         // -1 heisst "zufaellig" - als Zahl waere das ein Raetsel. Steht hier
         // ein Stripe, hat er Vorrang vor dem Baum-Filter darueber (siehe
-        // OriginSequencer.advanceOrigin).
-        (v) => (Math.round(v) < 0 ? 'zufall' : 'S' + Math.round(v))).element);
+        // OriginSequencer.advanceOrigin); refreshConflict sagt das dann auch.
+        (v) => (Math.round(v) < 0 ? 'zufall' : 'S' + Math.round(v)),
+        (v) => { originValue = Math.round(v); refreshConflict(); }).element);
     }
     card.appendChild(mini);
+    card.appendChild(conflict);
 
     grid.appendChild(card);
   });
 
   section.appendChild(grid);
+
+  // Erklaerung zum Baum-Filter: einmal unter der Spurenreihe statt sechsmal
+  // in den Karten. Der Text kommt vom Server (TREE_HELP in server.py), weil
+  // er eine Aussage ueber die Java-Seite trifft und dort pruefbar ist.
+  if (seq.treeHelp) {
+    const help = document.createElement('p');
+    help.className = 'seq-help';
+    help.textContent = seq.treeHelp;
+    section.appendChild(help);
+  }
+
   host.appendChild(section);
 }
 

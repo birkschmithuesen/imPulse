@@ -670,6 +670,17 @@ class SequencerSectionTest(unittest.TestCase):
         self.assertEqual(seq["treeLabels"][1:],
                          ["vorn", "hinten", "rechts", "links"])
 
+    def test_sequencer_carries_a_help_line_for_the_tree_filter(self):
+        """Ohne Erklaerung ist "alle" fuer einen Operator ein Raetsel.
+
+        Der Text muss den Vorrang von originStripeOverride nennen: das ist
+        die Falle, bei der der Filter eingestellt ist und trotzdem nichts
+        tut (siehe OriginSequencer.advanceOrigin).
+        """
+        seq = server.build_sequencer(self._params())
+        self.assertTrue(seq["treeHelp"])
+        self.assertIn("originStripeOverride", seq["treeHelp"])
+
     def test_tree_labels_match_the_java_constant(self):
         """Driftet TREE_NAMES in StripeTreeStore.java, faellt es hier auf."""
         path = os.path.join(os.path.dirname(os.path.dirname(

@@ -373,6 +373,49 @@ input[type=color] {
   font-weight: 700;
 }
 
+/* Baum-Filter: gleiche Bauform wie .notes, nur mit Woertern statt Symbolen.
+   Ein Balken statt eines 0..4-Schiebers -- "0 = zufaellig" ist an einem
+   Zahlenregler nicht zu erraten. */
+.tree-bar { display: flex; gap: 0.2rem; }
+.tree-bar button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 1.7rem;
+  padding: 0.2rem 0.1rem;
+  background: #12151a;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.66rem;
+}
+.tree-bar button[aria-pressed=true] {
+  background: var(--tc, var(--accent));
+  border-color: var(--tc, var(--accent));
+  color: #10131a;
+  font-weight: 700;
+}
+
+.mini-caption { color: var(--muted); font-size: 0.68rem; }
+
+/* Konflikt-Hinweis je Track: steht nur da, wenn ein fester Ursprung den
+   Baum-Filter gerade aushebelt. */
+.track-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--warn);
+}
+
+/* Erklaerzeile unter der Spurenreihe, einmal je Sequencer-Sektion. */
+.seq-help {
+  margin: 0.7rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
 .mini { display: grid; gap: 0.3rem; }
 .mini-row { display: flex; align-items: center; gap: 0.5rem; }
 .mini-row > span {

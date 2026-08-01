@@ -188,6 +188,17 @@ SEQUENCER_TRACK_FIELDS = ["noteValue", "repeatCount", "energy",
 # RemoteControlledIntParameter keine Aufzaehlung kann - im UI steht der Name.
 TREE_LABELS = ["alle", "vorn", "hinten", "rechts", "links"]
 
+# Erklaerung zum Baum-Filter, einmal je Sequencer-Sektion. Sie steht HIER und
+# nicht sechsmal in app.js: derselbe Satz unter jedem der sechs Tracks waere
+# Rauschen, und der Vorrang von originStripeOverride ist eine inhaltliche
+# Aussage ueber die Java-Seite (OriginSequencer.advanceOrigin), die hier
+# pruefbar bleibt.
+TREE_HELP = ("Baum: schraenkt den Ursprungs-Stripe eines Tracks auf einen der "
+             "vier Baeume ein. „alle“ = kein Filter, der Track "
+             "wuerfelt aus allen Stripes. Der Filter wirkt nur, solange "
+             "„Ursprung“ auf „zufall“ steht – ein "
+             "fest gesetzter Stripe (originStripeOverride) hat Vorrang.")
+
 # Speed-Klassen aus SpeedQuantizer.MULTIPLIERS, gleiche Reihenfolge.
 # Adress-Suffix und Anzeigename; das Suffix spiegelt die Java-Seite (Punkt
 # vermieden, siehe Kommentar dort).
@@ -261,6 +272,7 @@ def build_sequencer(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, An
         "noteValues": [{"value": v, "symbol": s, "name": n}
                        for v, s, n in NOTE_VALUES],
         "treeLabels": list(TREE_LABELS),
+        "treeHelp": TREE_HELP,
     }
 
 
