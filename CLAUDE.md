@@ -196,7 +196,7 @@ Kopfzeile, Statuszeile und Preset-Sektion stehen bewusst **über** der
 Tab-Leiste: sie gelten für alle Tabs, und ein Preset-Feld, das nur auf einem
 Tab sichtbar wäre, wäre eine Falle.
 
-**Vier Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
+**Fünf Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
 flache Liste aus 38 Sequencer-Reglern unbedienbar wäre. Der Server liefert
 dafür Struktur statt einer Reglerliste (`build_sequencer`,
 `build_speed_classes`, `sc_param_groups` in `server.py`), das Aussehen macht
@@ -211,9 +211,12 @@ dafür Struktur statt einer Reglerliste (`build_sequencer`,
   normiert zeigt; die Gewichte selbst summieren sich bewusst nicht auf 100.
 - **Sound (SuperCollider)** — die `/klangnetz/param/*`-Adressen, die
   **nicht** durch `remoteSettings.txt` laufen.
-- **Palette** — die Farbpalette im Farben-Tab, siehe unten. Als einzige
-  braucht sie keine Adresse aus `remoteSettings.txt` und ist deshalb
-  bedingungslos da.
+- **Palette** — die Farbpalette im Farben-Tab, siehe unten.
+- **Mitschnitt** — der Aufnahmeknopf ganz oben im Sound-Tab, siehe unten.
+
+Palette und Mitschnitt brauchen als einzige keine Adresse aus
+`remoteSettings.txt` und sind deshalb bedingungslos da; die anderen drei lassen
+sich ohne ihre Parameter nicht bauen.
 
 **Der Baum-Filter je Track ist ein Auswahlbalken, kein 0..4-Schieber.** Fünf
 Klartext-Zustände (`alle`/`vorn`/`hinten`/`rechts`/`links`), gleiche Bauform
@@ -249,6 +252,35 @@ eine Sammlung wiederverwendbarer Farben. Dieselbe Swatch-Reihe steht unter
 - **Kein Preset-Ersatz.** Sie hält nur Farbwerte, nicht welche Karte welche
   Farbe trägt — das können die Presets schon.
 
+**Der Aufnahmeknopf** (Sektion „Mitschnitt (4 Kanaele)", ganz oben im
+Sound-Tab) startet und stoppt den Vierkanal-Mitschnitt von SuperCollider
+(siehe „Klangseite"). Vier Routen — `GET /api/record/status`, `POST
+/api/record/{start,stop,toggle}` — schicken je **eine argumentlose**
+OSC-Nachricht `/klangnetz/record/*` an sclang auf **8002**; dafür kann
+`build_osc_message(addr, None)` seit diesem Feature auch den leeren Typtag
+`,`. Geschrieben wird die WAV-Datei ausschliesslich von sclang. Fünf Dinge:
+
+- **Der einzige Rückkanal im ganzen UI.** `RecordStatusListener` hört auf
+  `127.0.0.1:8003` (`--record-status-port`, muss zu `~recordStatusPort` in der
+  `.scd` passen) auf `/klangnetz/record/status`. Für einen Regler wäre
+  fire-and-forget richtig — ein Aufnahmeknopf hat dagegen einen Zustand, den
+  auch ein Skript, die IDE oder ein zweiter Browser ändern kann, und ein
+  Knopf, der nur zeigt, was zuletzt geklickt wurde, wäre im Zweifel eine
+  Aufnahme, die gar nicht läuft. Genau der Fehler, der beim Dreh erst in der
+  Nachbearbeitung auffällt.
+- **Der gemeldete Zustand kommt immer von sclang, nie vom Kommando.** Ein
+  zweites `/start` wird dort ignoriert und meldet trotzdem „läuft".
+- **Frisch oder alt entscheidet ein Zähler**, kein Wertvergleich: der Endpoint
+  merkt sich den Stand vor dem Senden und wartet bis zu 400 ms auf eine
+  Erhöhung. Zweimal „läuft nicht" hintereinander sähe sonst aus wie keine
+  Antwort. Bleibt sie aus, steht `answered: false` in der Antwort und der Knopf
+  sagt „kein Kontakt zu sclang" — statt Erfolg zu behaupten.
+- **`known` ist nicht `recording`**: „noch nie gehört" und „läuft gerade nicht"
+  werden verschieden angezeigt, und bei unbekanntem Zustand schickt ein Klick
+  `toggle` statt zu raten.
+- **Ein fehlgeschlagenes Bind auf 8003 verhindert den Start des UI nicht** —
+  der Knopf sendet weiter und zeigt nur keinen Zustand mehr.
+
 Vier Dinge, die man beim Ändern kennen muss:
 
 - **`sequencer_addresses()` nimmt die Adressen der Spezial-Sektionen aus dem
@@ -258,9 +290,10 @@ Vier Dinge, die man beim Ändern kennen muss:
 - **`SC_PARAMS` ist eine handgepflegte Kopie der `~registerParam`-Registry
   aus der `.scd`** und geht über einen **zweiten** `OscSender` auf Port
   **8002**. Zwei Tests vergleichen die Tabelle in beide Richtungen mit der
-  Datei, damit sie nicht abdriftet. Es gibt **keinen Rückkanal**: die
-  angezeigten Werte sind die `.scd`-Defaults, nicht der Live-Zustand — die
-  Sektion sagt das selbst im Warnhinweis.
+  Datei, damit sie nicht abdriftet. Für die **Werte** gibt es **keinen
+  Rückkanal**: die angezeigten sind die `.scd`-Defaults, nicht der
+  Live-Zustand — die Sektion sagt das selbst im Warnhinweis. (Der Rückkanal
+  auf 8003 trägt ausschliesslich den Aufnahmezustand, keine Parameterwerte.)
 - **Die Rasteranzeige je Track ist die Uhr des Browsers**, gerechnet aus BPM
   und Notenwert, **nicht** eine Rückmeldung aus dem Sketch: dafür gäbe es
   keinen Kanal, imPulse sendet nur an 8002 und dort hört SuperCollider. Sie
@@ -953,6 +986,50 @@ ergänzt, bekommt ihn ohne weiteres Zutun in die Presets — die Liste wird aus
 `~params` gelesen, nicht gepflegt. (Die handgepflegte Kopie im Web-UI,
 `SC_PARAMS` in `webui/server.py`, muss dann allerdings nachgezogen werden;
 zwei Tests halten das nach.)
+
+**Vierkanal-Mitschnitt auf Platte** (seit 2026-08-01, für Videodrehs):
+`/klangnetz/record/{start,stop,toggle,query}` auf `~oscListenPort` (**8002**,
+derselbe Port wie die Sound-Parameter), alle vier **ohne Argument**.
+Geschrieben wird `recordings/klangnetz_YYYY-MM-DD_HH-MM-SS.wav` im **Repo-Root**
+(nicht neben der `.scd` wie `~presetDir` — Sound-Presets gehören zum Patch,
+Mitschnitte nicht), WAV/int24, Ordner wird beim ersten Start angelegt, liegt in
+`.gitignore`. Details und der Ablauf zum Verifizieren von Hand:
+`supercollider/klangnetz_bells.README.md`.
+
+Sechs Dinge:
+
+- **Aufgenommen wird Bus 0, nicht `~quadBus`** — also das fertige Signal nach
+  Panning, Hall, `masterVolume`, Limiter und Kanal-Permutation. Auf `~quadBus`
+  stehen die Stimmen *vor* `\masterReverb`; ein Mitschnitt davon klänge anders
+  als das, was im Raum zu hören ist.
+- **Der Recorder muss hinter `\masterReverb` im Node-Baum hängen.**
+  `s.record(path, 0, chans, s.defaultGroup)` hängt ihn an das Ende dieser
+  Gruppe, in der `~voices` und `~masterReverbSyn` beide liegen. Davor gelesen
+  bliebe die Datei still. Die Argumente stehen bewusst **positionell** statt
+  als Keywords: einen falsch geschriebenen Keyword-Namen verschluckt sclang mit
+  einer blossen Warnung und nimmt den Default — die Aufnahme hätte dann still
+  zwei Kanäle statt vier, und das fiele erst beim Abhören auf.
+- **Weder Samplerate noch Kanalzahl stehen als Literal im Code**: die Rate
+  kommt vom laufenden Server, die Kanalzahl aus
+  `s.options.numOutputBusChannels`.
+- **`~recordActive` ist die einzige Quelle der Wahrheit.** `s.isRecording` wäre
+  eine zweite und könnte davon abweichen (etwa nach `s.reboot`) — zwei
+  Zustände, in denen Start und Stop sich gegenseitig blockieren, wären
+  schlimmer als einer, der einmal falsch steht. Doppelter Start und Stop ohne
+  laufende Aufnahme werden ignoriert und geloggt, nie ein zweiter Recorder.
+- **Der Abräumblock in `waitForBoot` ruft `~recordStop` vor `~voices.free`.**
+  Ein Re-Evaluieren der Datei schliesst eine laufende Aufnahme also sauber ab,
+  mit dem letzten Klang darin. Aus demselben Grund legt der Zustandsblock
+  `~recordActive` nur an, wenn es ihn noch nicht gibt (`?? { }`) — ein
+  bedingungsloses `= false` würde die laufende Aufnahme dort vergessen und die
+  WAV-Datei bliebe ohne fertigen Header liegen.
+- **Status geht an einen dritten Port.** `/klangnetz/record/status <0|1:int>
+  <pfad:string>` an `127.0.0.1:~recordStatusPort` (**8003**) — nicht 8001
+  (imPulse), nicht 8002 (sclang selbst). Gesendet bei **jedem** Start, Stop,
+  `query` und auch bei einem ignorierten Doppel-Start, damit eine Gegenstelle,
+  die ihren Zustand verloren hat, die Wahrheit bekommt. Fire-and-forget: läuft
+  das Web-UI nicht, geht das Datagramm ins Leere. Dort hängt der Aufnahmeknopf
+  (siehe „Web-UI").
 
 Zwei Dinge, die man kennen muss, bevor man dort etwas anfasst:
 

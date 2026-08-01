@@ -476,9 +476,78 @@ input[type=color] {
 
 /* Kurzerklaerung unter einem Regler, wo die Adresse allein nicht reicht. */
 .help { margin: 0.2rem 0 0; font-size: 0.69rem; line-height: 1.35; color: var(--muted); }
+.help.warn { color: var(--warn); }
+
+/* ---------------------------------------------------------------------------
+   Vierkanal-Mitschnitt.
+
+   Ein grosser Knopf, weil er waehrend eines Drehs im Vorbeigehen und oft auf
+   einem Telefon getroffen werden muss. Der Zustand haengt an Farbe UND Form
+   (gefuellter, pulsierender Punkt gegen hohlen Ring) -- dieselbe Regel wie
+   beim Sequencer-Not-Aus darueber.
+   --------------------------------------------------------------------------- */
+
+.rec { margin: 0 1rem 1rem; }
+
+.rec-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.8rem 1rem;
+  padding: 0.7rem 0.8rem;
+}
+
+.rec-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1.1rem;
+  min-height: 2.8rem;
+  background: var(--panel-hi);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+.rec-button:disabled { opacity: 0.6; cursor: progress; }
+.rec-button .dot {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  border: 2px solid var(--err);
+  background: transparent;
+}
+.rec-button.on { border-color: var(--err); color: var(--err); }
+.rec-button.on .dot {
+  background: var(--err);
+  box-shadow: 0 0 0.55rem var(--err);
+  animation: recblink 1.4s ease-in-out infinite;
+}
+.rec-button.unknown { border-color: var(--warn); }
+.rec-button.unknown .dot { border-color: var(--warn); }
+
+@keyframes recblink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.rec-state { display: grid; gap: 0.15rem; min-width: 0; }
+.rec-line { font-size: 0.82rem; letter-spacing: 0.04em; }
+.rec-line.rec-on { color: var(--err); font-weight: 600; }
+.rec-line.rec-unknown { color: var(--warn); }
+.rec-file {
+  font: 0.72rem/1.3 ui-monospace, "Consolas", monospace;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Der Hilfetext steht direkt in der Sektion, nicht in einem .param -- ohne
+   eigenes Polster klebte er am Rand. */
+.rec .help { padding: 0 0.8rem 0.7rem; }
 
 @media (max-width: 600px) {
-  .seq, .sc { margin-left: 0.6rem; margin-right: 0.6rem; }
+  .seq, .sc, .rec { margin-left: 0.6rem; margin-right: 0.6rem; }
   .seq-tracks { grid-template-columns: 1fr; padding: 0.6rem; }
   .mini-row > span { flex-basis: 4.4rem; }
 }

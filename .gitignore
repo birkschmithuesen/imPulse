@@ -15,3 +15,8 @@ webui/.venv/
 # (OscMessageDistributor.dumpParameterInfo) -- reine Momentaufnahme, keine
 # Quelle der Wahrheit, verursacht nur wiederkehrende Merge-Konflikte.
 data/remoteSettings.txt
+
+# Vierkanal-Mitschnitte, von sclang geschrieben (/klangnetz/record/start).
+# Rohmaterial eines Drehtages: mehrere hundert MB je Datei, gehoert nicht
+# in die Historie. Den Ordner legt der erste Start selbst an.
+recordings/

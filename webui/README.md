@@ -77,9 +77,9 @@ hat keine kuratierte Auswahl, weil `TAB_PRIMARY` auf Adressen arbeitet und
 bei Farbkarten nicht greift — ohne das Flag bestuende der ganze Tab aus einem
 zugeklappten `Erweitert`.
 
-### Vier Spezial-Sektionen
+### Fuenf Spezial-Sektionen
 
-Vier Bereiche bekommen ein handgebautes Bedienfeld statt generischer Regler —
+Fuenf Bereiche bekommen ein handgebautes Bedienfeld statt generischer Regler —
 38 Sequencer-Parameter als flache Liste waeren unbedienbar. Der Server
 liefert dafuer Struktur (`build_sequencer`, `build_speed_classes`,
 `sc_param_groups`), das Aussehen macht `static/app.js`.
@@ -106,8 +106,15 @@ liefert dafuer Struktur (`build_sequencer`, `build_speed_classes`,
   normiert als Prozente zeigt. Die Gewichte selbst muessen sich nicht auf 100
   summieren — normalisiert wird auf der Java-Seite (`SpeedQuantizer.pick`).
 - **Sound (SuperCollider)**: siehe unten, eigener Port.
+- **Mitschnitt**: der Aufnahme-Knopf ganz oben im Sound-Tab, siehe unten,
+  eigener Abschnitt.
 
-Die Adressen dieser drei Sektionen nimmt `sequencer_addresses()` aus dem
+Palette und Mitschnitt sind als einzige **bedingungslos** da: sie haengen an
+keiner Adresse aus `remoteSettings.txt` und koennen deshalb — anders als
+Sequencer und Speed-Klassen — nicht daran scheitern, dass ein aelterer
+imPulse-Stand ihre Parameter noch nicht schreibt.
+
+Die Adressen der uebrigen Sektionen nimmt `sequencer_addresses()` aus dem
 generischen Rendering heraus. Ohne das stuende jeder Regler zweimal auf der
 Seite — zwei Bedienelemente fuer denselben Parameter, die auseinanderlaufen
 koennen.
@@ -144,6 +151,76 @@ Zwei Dinge, die man dabei kennen muss:
 
 Jede Aenderung geht **sofort** raus (erste Bewegung direkt, danach hoechstens
 alle 150 ms eine Nachricht, der letzte Wert in jedem Fall) — kein Speichern-Knopf.
+
+## Vierkanal-Mitschnitt (der einzige Rueckkanal im UI)
+
+Ganz oben im Tab **Sound** sitzt der Knopf **Mitschnitt (4 Kanaele)**. Er
+schneidet den fertigen Vierkanal-Ausgang von SuperCollider als
+`recordings/klangnetz_<zeitstempel>.wav` mit (WAV/int24, Samplerate des
+Interfaces). Geschrieben wird die Datei **ausschliesslich von sclang** —
+dieses UI schickt drei Datagramme. Details zur Aufnahme selbst:
+`supercollider/klangnetz_bells.README.md`.
+
+Oben, weil ein Mitschnitt der erste und der letzte Griff eines Drehtages ist
+— nichts, das man unter „Erweitert" sucht, waehrend die Kamera laeuft.
+
+**Vier Endpoints**, jeder schickt genau eine argumentlose OSC-Nachricht an
+sclang auf Port **8002**:
+
+| Route | OSC an 8002 |
+|---|---|
+| `GET /api/record/status`   | `/klangnetz/record/query` (aendert nichts) |
+| `POST /api/record/start`   | `/klangnetz/record/start` |
+| `POST /api/record/stop`    | `/klangnetz/record/stop` |
+| `POST /api/record/toggle`  | `/klangnetz/record/toggle` |
+
+Vier Routen statt einer mit Aktion im Body: eine Adresse pro Kommando ist im
+Log und in der Browser-Konsole direkt lesbar, und ein Tippfehler wird zu einem
+404 statt zu einem stillen Nichtstun. Argumentlose Nachrichten kann der
+eingebaute Encoder seit diesem Feature auch (`build_osc_message(addr, None)`
+schreibt den Typtag `,`) — es sind Befehle, keine Werte.
+
+**Anders als alles andere hier ist das nicht fire-and-forget.** sclang meldet
+seinen Zustand als `/klangnetz/record/status <0|1> <pfad>` zurueck, und
+`RecordStatusListener` in `server.py` hoert dafuer auf
+**`127.0.0.1:8003`** (`--record-status-port`, muss zu `~recordStatusPort` in
+der `.scd` passen). Zwei Tests halten fest, dass Adressen und Ports auf beiden
+Seiten uebereinstimmen.
+
+Der Rueckkanal ist hier kein Luxus. Ein Regler, den man geschickt hat, steht
+danach — bei einem Aufnahme-Knopf reicht das nicht: sein Zustand kann von
+woanders geaendert werden (Skript, IDE, zweiter Browser), und ein Knopf, der
+nur zeigt, was zuletzt geklickt wurde, waere im Zweifel eine Aufnahme, die gar
+nicht laeuft. Genau der Fehler, der beim Dreh erst in der Nachbearbeitung
+auffaellt.
+
+Daraus folgt der Rest:
+
+- **Der gemeldete Zustand kommt immer von sclang, nie vom Kommando.** Ein
+  zweites `/start` bei laufender Aufnahme wird dort ignoriert und meldet
+  trotzdem „laeuft" — der Knopf zeigt danach die Wahrheit, nicht das, was der
+  Klick gemeint hat.
+- **Jeder Endpoint wartet bis zu 400 ms** (`RECORD_STATUS_TIMEOUT_S`) auf die
+  Antwort und meldet sonst `answered: false`. Beides laeuft ueber Loopback;
+  kommt in 400 ms nichts, laeuft sclang nicht. Lieber ein ehrliches „kein
+  Kontakt" als ein Knopf, der Erfolg behauptet.
+- **Frisch oder alt** unterscheidet ein Zaehler, nicht ein Wertvergleich: der
+  Endpoint merkt sich den Stand vor dem Senden und wartet auf eine Erhoehung.
+  Zweimal „laeuft nicht" hintereinander saehe sonst aus wie keine Antwort.
+- **Drei Zustaende**, in Farbe *und* Form unterschieden (Bedienung im
+  Dunkeln): *laeuft* (roter Punkt, pulsierend), *bereit* (hohler Punkt),
+  *unbekannt* (kein Kontakt). Bei **unbekannt** schickt ein Klick `toggle`
+  statt `start`/`stop` — raten waere schlechter, und verliert das UI den
+  Kontakt waehrend einer Aufnahme, bringt ein Klick sie so trotzdem zu Ende.
+- **`known` ist nicht `recording`.** „noch nie gehoert" und „laeuft gerade
+  nicht" sind zwei verschiedene Dinge und werden verschieden angezeigt.
+- **Ein fehlgeschlagenes Bind auf 8003 verhindert den Start des UI nicht.**
+  Dann bleibt der Zustand „unbekannt", der Knopf sendet trotzdem und sagt es
+  dazu. Haeufigster Fall: ein zweites, vergessenes `server.py` auf derselben
+  Maschine.
+- **Polling alle 2 s**, aber nie waehrend eines laufenden Kommandos — dessen
+  Antwort ist die frischere, und zwei Abfragen koennten sich in der Anzeige
+  ueberholen. Genau **ein** Timer, auch nach mehrfachem „Neu laden".
 
 ## Presets
 
@@ -329,6 +406,12 @@ Parameterdatei mitgeben.
 | `--osc-port` / `IMPULSE_OSC_PORT`         | `8001`                      |
 | `--host` / `IMPULSE_WEBUI_HOST`           | `0.0.0.0`                   |
 | `--port` / `IMPULSE_WEBUI_PORT`           | `8080`                      |
+| `--record-status-port` / `IMPULSE_RECORD_STATUS_PORT` | `8003` (nur `127.0.0.1`) |
+
+`--record-status-port` ist der UDP-Port, auf dem
+`/klangnetz/record/status` von sclang erwartet wird — er muss zu
+`~recordStatusPort` in `supercollider/klangnetz_bells.scd` passen und
+braucht **keine** Firewall-Freigabe: gebunden wird nur auf `127.0.0.1`.
 
 Beispiel:
 
@@ -401,6 +484,17 @@ Adresse in genau einem Tab, die Farb-Adressen in „Farben" und die
 Physik-Adressen weiterhin in „Impuls-Verhalten" (die Farb-Regeln stehen vor
 den allgemeinen, greifen sie zu breit, leert sich der Physik-Tab lautlos),
 und dass **keine** Gruppe aus allen Tabs herausfaellt.
+
+Dazu der Mitschnitt: der OSC-Encoder **und der neue Decoder** byteweise
+(Nachricht ohne Argument, Rundlauf mit int/float/String, nicht unterstuetzter
+Typ als Fehler statt als falscher Wert), die vier Endpoints gegen ein
+**gefaktes sclang** an einem freien Port (Start meldet den Zustand aus der
+Antwort, zweites Start oeffnet keine zweite Datei, Stop behaelt den fertigen
+Dateinamen, Stop ohne Aufnahme ist kein Fehler, ein fremdes Datagramm aendert
+nichts, eine alte Antwort gilt nicht als frische, Schweigen ergibt
+„unbekannt"), die Lage der Sektion (Sound-Tab, erste Sektion) und der
+Abgleich mit der `.scd`: alle vier Kommandoadressen, die Statusadresse und
+**beide** Ports stehen dort genauso.
 
 Dazu die Palette: Parser (Kommentare, kaputte Zeilen, Klemmung auf `0..1`,
 doppelter Name gewinnt zuletzt), das Dateiformat (Tabulatoren, Dezimalpunkt),

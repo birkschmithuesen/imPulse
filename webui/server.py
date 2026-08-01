@@ -552,6 +552,42 @@ TAB_PRIMARY: Dict[str, List[str]] = {
 
 SC_OSC_PORT = 8002
 SC_PARAM_PREFIX = "/klangnetz/param/"
+
+# ---------------------------------------------------------------------------
+# Vierkanal-Mitschnitt (SuperCollider schreibt die WAV-Datei, nicht dieses UI)
+#
+# Die drei Kommandos gehen an denselben Port wie die Sound-Parameter (8002),
+# tragen aber KEIN Argument -- es sind Befehle, keine Werte.
+#
+# Als einziges Feature im ganzen UI gibt es hier einen RUECKKANAL: sclang
+# schickt bei jedem Start/Stop und auf /klangnetz/record/query eine
+# /klangnetz/record/status-Meldung an RECORD_STATUS_PORT. Ohne den waere der
+# Knopf blind -- er zeigte, was zuletzt geklickt wurde, nicht was wirklich
+# laeuft, und eine per Skript gestartete Aufnahme bliebe unsichtbar.
+# ---------------------------------------------------------------------------
+
+RECORD_PREFIX = "/klangnetz/record/"
+RECORD_START = RECORD_PREFIX + "start"
+RECORD_STOP = RECORD_PREFIX + "stop"
+RECORD_TOGGLE = RECORD_PREFIX + "toggle"
+RECORD_QUERY = RECORD_PREFIX + "query"
+RECORD_STATUS = RECORD_PREFIX + "status"
+
+# Eigener Port, nicht 8001 (imPulse) und nicht 8002 (dort hoert sclang
+# selbst). Muss zu ~recordStatusPort in klangnetz_bells.scd passen.
+DEFAULT_RECORD_STATUS_PORT = 8003
+# Nur auf dem Loopback: die Meldung kommt von sclang auf derselben Maschine,
+# und ein zusaetzlich nach aussen offener UDP-Port waere ein Angebot ohne
+# Abnehmer (und unter Windows eine weitere Firewall-Nachfrage).
+DEFAULT_RECORD_STATUS_HOST = "127.0.0.1"
+
+# So lange wartet ein Record-Endpoint auf die Antwort von sclang, bevor er
+# "unbekannt" meldet. Beides laeuft auf demselben Rechner ueber Loopback --
+# kommt in 400 ms nichts, laeuft sclang nicht (oder auf einem anderen Port).
+# Lieber ein ehrliches "kein Kontakt" als ein Knopf, der Erfolg behauptet.
+RECORD_STATUS_TIMEOUT_S = 0.4
+RECORD_STATUS_POLL_S = 0.01
+
 SC_PARAMS: List[Dict[str, Any]] = [
     {"name": "masterVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
      "group": "Master", "description": "Gain nach dem Panning, vor dem Limiter."},
@@ -653,6 +689,12 @@ def build_tabs(groups: List[Dict[str, Any]],
     # deshalb bedingungslos da -- anders als Sequencer und Speed-Klassen, die
     # ohne ihre Parameter nicht gebaut werden koennen.
     by_tab[TAB_COLORS]["sections"].append("palette")
+    # Der Aufnahmeknopf steht GANZ OBEN im Sound-Tab, aus demselben Grund
+    # bedingungslos: er gehoert zu sclang wie die Regler darunter, hat aber
+    # keine Adresse in remoteSettings.txt. Oben, weil ein Mitschnitt der
+    # erste und der letzte Griff eines Drehtages ist -- nicht etwas, das man
+    # unter "Erweitert" sucht, waehrend die Kamera laeuft.
+    by_tab[TAB_SOUND]["sections"].insert(0, "record")
     if split:
         by_tab[TAB_NOTES]["sections"].append("split")
 
@@ -791,12 +833,16 @@ def _osc_string(text: str) -> bytes:
 
 
 def build_osc_message(address: str, value: Any) -> bytes:
-    """Baut ein OSC-Paket mit genau einem Argument.
+    """Baut ein OSC-Paket mit hoechstens einem Argument.
 
     int -> 'i', float -> 'f', str -> 's'. Der String-Zweig wird fuer die
     Preset-Kommandos gebraucht (``/preset/load <name>``), die als einziges
-    Argument einen Namen tragen.
+    Argument einen Namen tragen; ``None`` erzeugt eine Nachricht ganz OHNE
+    Argument (Typtag nur ",") fuer die Record-Kommandos, die reine Befehle
+    ohne Wert sind.
     """
+    if value is None:
+        return _osc_string(address) + _osc_string(",")
     if isinstance(value, bool):
         raise TypeError("bool ist kein gueltiges OSC-Argument")
     if isinstance(value, int):
@@ -806,6 +852,48 @@ def build_osc_message(address: str, value: Any) -> bytes:
     if isinstance(value, str):
         return _osc_string(address) + _osc_string(",s") + _osc_string(value)
     raise TypeError("nicht unterstuetzter OSC-Argumenttyp: %r" % type(value))
+
+
+def _read_osc_string(data: bytes, offset: int) -> Tuple[str, int]:
+    """Liest einen OSC-String ab ``offset`` und liefert (Text, neuer Offset)."""
+    end = data.index(b"\x00", offset)          # ValueError, wenn kein Nullbyte
+    text = data[offset:end].decode("utf-8", "replace")
+    # Auf das naechste Vielfache von 4 aufgefuellt, mindestens ein Nullbyte --
+    # dieselbe Regel wie in _osc_string(), nur rueckwaerts.
+    return text, offset + (((end - offset) // 4) + 1) * 4
+
+
+def parse_osc_message(data: bytes) -> Tuple[str, List[Any]]:
+    """Zerlegt ein OSC-Datagramm in Adresse und Argumente.
+
+    Gegenstueck zu ``build_osc_message`` und aus demselben Grund selbst
+    geschrieben: die Tests sollen ohne python-osc laufen (siehe
+    test_webui.py). Unterstuetzt genau die drei Typen, die hier vorkommen
+    ('i', 'f', 's') -- alles andere ist ein ValueError, statt still ein
+    falsches Argument zu liefern.
+    """
+    address, offset = _read_osc_string(data, 0)
+    if not address.startswith("/"):
+        raise ValueError("keine OSC-Adresse: %r" % address)
+    if offset >= len(data):
+        return address, []          # Nachricht ohne Typtag
+    tags, offset = _read_osc_string(data, offset)
+    if not tags.startswith(","):
+        raise ValueError("kein OSC-Typtag: %r" % tags)
+    args: List[Any] = []
+    for tag in tags[1:]:
+        if tag == "i":
+            args.append(struct.unpack_from(">i", data, offset)[0])
+            offset += 4
+        elif tag == "f":
+            args.append(struct.unpack_from(">f", data, offset)[0])
+            offset += 4
+        elif tag == "s":
+            text, offset = _read_osc_string(data, offset)
+            args.append(text)
+        else:
+            raise ValueError("nicht unterstuetzter OSC-Typ %r" % tag)
+    return address, args
 
 
 class OscSender:
@@ -833,6 +921,12 @@ class OscSender:
                   "OSC-Encoder" % exc, file=sys.stderr)
 
     def send(self, address: str, value: Any) -> None:
+        """``value=None`` schickt eine Nachricht ohne Argument.
+
+        Beide Wege koennen das: python-osc baut aus ``None`` eine leere
+        Argumentliste, der eingebaute Encoder schreibt den Typtag ",". Das
+        brauchen die Record-Kommandos, die reine Befehle ohne Wert sind.
+        """
         with self._lock:
             if self._client is not None and address.startswith("/"):
                 self._client.send_message(address, value)
@@ -843,6 +937,121 @@ class OscSender:
     def close(self) -> None:
         with self._lock:
             self._socket.close()
+
+
+class RecordStatusListener:
+    """Hoert auf ``/klangnetz/record/status`` von sclang.
+
+    Der EINZIGE Rueckkanal im ganzen Web-UI. Alles andere hier ist
+    fire-and-forget (siehe /api/sc), und das ist fuer einen Regler richtig:
+    ein Wert, den man geschickt hat, steht danach. Ein Aufnahmeknopf ist
+    etwas anderes -- er hat einen Zustand, den auch jemand anderes aendern
+    kann (Skript, IDE, zweiter Browser), und ein Knopf, der nur zeigt, was
+    zuletzt geklickt wurde, waere im Zweifel eine Aufnahme, die gar nicht
+    laeuft. Genau der Fehler, der beim Videodreh erst in der Nachbearbeitung
+    auffiele.
+
+    Ein fehlgeschlagenes Bind ist deshalb KEIN Grund, das UI nicht zu
+    starten: dann bleibt der Zustand "unbekannt", der Knopf schickt trotzdem
+    und sagt es dazu. Der haeufige Fall dafuer ist ein zweites, vergessenes
+    server.py auf derselben Maschine.
+    """
+
+    def __init__(self, host: str, port: int) -> None:
+        self.host = host
+        self.port = port
+        self.error: Optional[str] = None
+        self._lock = threading.Lock()
+        self._recording: Optional[bool] = None
+        self._path = ""
+        # Zaehlt jede empfangene Meldung. Ein Endpoint merkt sich den Stand
+        # VOR dem Senden und wartet auf eine Erhoehung -- damit kann er eine
+        # frische Antwort nicht mit einer alten verwechseln, was ein
+        # Vergleich der Werte allein nicht leistet (zweimal "laeuft nicht"
+        # hintereinander sieht sonst aus wie keine Antwort).
+        self._seq = 0
+        self._socket: Optional[socket.socket] = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind((host, port))
+            self._socket = sock
+            # Port 0 heisst "irgendeinen freien nehmen" -- dann steht die
+            # echte Nummer erst nach dem Bind fest. Im Betrieb ist der Port
+            # fest (8003), die Tests nutzen 0, um nicht mit einem laufenden
+            # Web-UI auf derselben Maschine zu kollidieren.
+            self.port = sock.getsockname()[1]
+        except OSError as exc:
+            self.error = "Status-Port %s:%d nicht nutzbar (%s)" % (host, port, exc)
+            print("[webui] %s -- der Aufnahmeknopf zeigt keinen Zustand"
+                  % self.error, file=sys.stderr)
+            return
+        self._thread = threading.Thread(target=self._loop, daemon=True,
+                                        name="record-status")
+        self._thread.start()
+
+    @property
+    def active(self) -> bool:
+        return self._socket is not None
+
+    def _loop(self) -> None:  # pragma: no cover - Thread, per Endpoint geprueft
+        sock = self._socket
+        assert sock is not None
+        while True:
+            try:
+                data, _sender = sock.recvfrom(4096)
+            except OSError:
+                return                      # close() -- geregeltes Ende
+            try:
+                address, args = parse_osc_message(data)
+            except (ValueError, struct.error):
+                continue                    # kein OSC/fremdes Format: ignorieren
+            if address != RECORD_STATUS:
+                continue
+            with self._lock:
+                if args:
+                    self._recording = bool(args[0])
+                if len(args) > 1:
+                    self._path = str(args[1])
+                self._seq += 1
+
+    def sequence(self) -> int:
+        with self._lock:
+            return self._seq
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                # None heisst "noch nie gehoert" und ist etwas anderes als
+                # False ("laeuft gerade nicht") -- das Frontend zeigt beides
+                # verschieden an.
+                "known": self._recording is not None,
+                "recording": bool(self._recording),
+                "path": self._path,
+                "listening": self._socket is not None,
+                "statusPort": self.port,
+                "error": self.error,
+            }
+
+    def wait_for_update(self, since: int,
+                        timeout: float = RECORD_STATUS_TIMEOUT_S) -> bool:
+        """Wartet, bis eine Meldung NACH ``since`` eingetroffen ist.
+
+        Pollen statt Condition-Variable: die Wartezeit ist kurz und der
+        Empfangsthread soll nichts ueber seine Leser wissen muessen.
+        """
+        if self._socket is None:
+            return False
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.sequence() != since:
+                return True
+            time.sleep(RECORD_STATUS_POLL_S)
+        return self.sequence() != since
+
+    def close(self) -> None:
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
 
 
 # ---------------------------------------------------------------------------
@@ -1582,7 +1791,10 @@ def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Para
 
 
 def create_app(settings_path: str, osc_host: str, osc_port: int,
-               presets_path: str, palette_path: Optional[str] = None):
+               presets_path: str, palette_path: Optional[str] = None,
+               sc_port: int = SC_OSC_PORT,
+               record_status_host: str = DEFAULT_RECORD_STATUS_HOST,
+               record_status_port: int = DEFAULT_RECORD_STATUS_PORT):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
@@ -1593,12 +1805,15 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
     # Zweiter Sender fuer die Sound-Parameter: die /klangnetz/param/*-Adressen
     # gehoeren zur SC-Registry und hoeren auf 8002, nicht auf 8001. Derselbe
     # Host -- SuperCollider laeuft auf derselben Maschine wie imPulse und
-    # dieses UI.
-    sc_sender = OscSender(osc_host, SC_OSC_PORT)
+    # dieses UI. ``sc_port`` ist nur fuer die Tests da (dort haengt ein
+    # gefaktes sclang an einem freien Port); im Betrieb bleibt es 8002.
+    sc_sender = OscSender(osc_host, sc_port)
+    record_status = RecordStatusListener(record_status_host, record_status_port)
 
     app.config["IMPULSE_STORE"] = store
     app.config["IMPULSE_SENDER"] = sender
     app.config["IMPULSE_SC_SENDER"] = sc_sender
+    app.config["IMPULSE_RECORD_STATUS"] = record_status
 
     # Vorgabe erst hier aufloesen, nicht in der Signatur: sie haengt am
     # settings_path, ein Default-Argument wuerde einmal beim Import
@@ -1618,6 +1833,22 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         sender.send(param.address, payload)
         store.store(param.address, coerced)
         return Applied(param.address, coerced, payload)
+
+    def record_command(address: str) -> Dict[str, Any]:
+        """Ein Record-Kommando schicken und die Antwort von sclang abwarten.
+
+        Der zurueckgemeldete Zustand kommt IMMER von sclang, nie aus dem
+        Kommando: ein zweites /start bei laufender Aufnahme wird dort
+        ignoriert und meldet trotzdem "laeuft" -- der Knopf zeigt danach also
+        die Wahrheit und nicht das, was der Klick gemeint hat.
+        """
+        before = record_status.sequence()
+        sc_sender.send(address, None)
+        answered = record_status.wait_for_update(before)
+        payload = record_status.snapshot()
+        payload.update({"ok": True, "address": address, "answered": answered,
+                        "port": sc_port})
+        return payload
 
     def preset_file(name: str) -> str:
         return os.path.join(presets_path, name + ".txt")
@@ -1646,6 +1877,18 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                 },
                 "presets": preset_list_payload(),
                 "palette": palette_payload(),
+                # Nur die Verdrahtung, KEIN Zustand: den holt app.js sich
+                # sofort per /api/record/status. Ein Zustand im Bootstrap
+                # kostete jeden Seitenaufruf die Wartezeit auf sclang und
+                # waere beim ersten Blick auf die Seite trotzdem schon alt.
+                "record": {
+                    "port": sc_port,
+                    # Der GEBUNDENE Port, nicht der gewuenschte -- bei 0
+                    # sucht sich der Listener einen freien (Tests).
+                    "statusPort": record_status.port,
+                    "listening": record_status.active,
+                    "error": record_status.error,
+                },
             }),
         )
 
@@ -1680,6 +1923,38 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         address = SC_PARAM_PREFIX + name
         sc_sender.send(address, value)
         return jsonify({"ok": True, "address": address, "value": value})
+
+    # ---- Vierkanal-Mitschnitt -------------------------------------------
+    # Vier Endpoints statt eines mit Aktion im Body: eine Adresse pro
+    # Kommando ist im Log und in der Konsole des Browsers direkt lesbar, und
+    # ein Tippfehler wird zu einem 404 statt zu einem stillen Nichtstun.
+    #
+    # start/stop sind der Normalfall (das UI kennt den Zustand aus dem
+    # Rueckkanal); /toggle ist fuer den Fall, dass es ihn NICHT kennt --
+    # dieselbe Aufteilung wie auf der SC-Seite. Geschrieben wird die Datei
+    # ausschliesslich von sclang; dieses UI schickt drei Datagramme.
+
+    @app.route("/api/record/status")
+    def api_record_status():
+        """Aktueller Zustand, per /klangnetz/record/query frisch erfragt.
+
+        Fragt bei JEDEM Aufruf nach, statt nur den letzten Stand
+        auszuliefern: nur so faellt auf, wenn sclang zwischendurch beendet
+        wurde. Die Abfrage aendert nichts an einer laufenden Aufnahme.
+        """
+        return jsonify(record_command(RECORD_QUERY))
+
+    @app.route("/api/record/start", methods=["POST"])
+    def api_record_start():
+        return jsonify(record_command(RECORD_START))
+
+    @app.route("/api/record/stop", methods=["POST"])
+    def api_record_stop():
+        return jsonify(record_command(RECORD_STOP))
+
+    @app.route("/api/record/toggle", methods=["POST"])
+    def api_record_toggle():
+        return jsonify(record_command(RECORD_TOGGLE))
 
     @app.route("/api/set", methods=["POST"])
     def api_set():
@@ -1838,6 +2113,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--port", type=int,
                         default=int(os.environ.get("IMPULSE_WEBUI_PORT", DEFAULT_HTTP_PORT)),
                         help="Port des Webservers (Vorgabe: %(default)s)")
+    parser.add_argument("--record-status-port", type=int,
+                        default=int(os.environ.get("IMPULSE_RECORD_STATUS_PORT",
+                                                   DEFAULT_RECORD_STATUS_PORT)),
+                        help="UDP-Port, auf dem /klangnetz/record/status von "
+                             "sclang erwartet wird; muss zu ~recordStatusPort "
+                             "in klangnetz_bells.scd passen (Vorgabe: %(default)s)")
     parser.add_argument("--debug", action="store_true",
                         help="Flask-Debugmodus (Autoreload)")
     args = parser.parse_args(argv)
@@ -1848,12 +2129,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     palette_path = (os.path.abspath(args.palette) if args.palette
                     else default_palette_path(settings_path))
     app = create_app(settings_path, args.osc_host, args.osc_port, presets_path,
-                     palette_path)
+                     palette_path,
+                     record_status_port=args.record_status_port)
 
     print("[webui] remoteSettings: %s" % settings_path)
     print("[webui] Presets:        %s" % presets_path)
     print("[webui] Palette:        %s" % palette_path)
     print("[webui] OSC-Ziel:       %s:%d" % (args.osc_host, args.osc_port))
+    print("[webui] Sound (sclang): %s:%d" % (args.osc_host, SC_OSC_PORT))
+    print("[webui] Record-Status:  %s:%d (Rueckkanal von sclang)"
+          % (DEFAULT_RECORD_STATUS_HOST, args.record_status_port))
     print("[webui] HTTP:           http://%s:%d" % (args.host, args.port))
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
     return 0
