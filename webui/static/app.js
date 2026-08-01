@@ -462,6 +462,13 @@ function buildColorCard(control, values) {
     components.appendChild(buildParam(param, values[param.address]));
   });
   wrap.appendChild(components);
+  wrap.appendChild(paletteRowFor(control));
+
+  // Merkt sich die zuletzt angefasste Karte -- die Quelle fuer "Farbe
+  // uebernehmen". Ohne das muesste der Knopf raten, welche der sieben Karten
+  // gemeint ist.
+  wrap.addEventListener('pointerdown', () => { activeColorCard = control; });
+  wrap.addEventListener('focusin', () => { activeColorCard = control; });
 
   const card = { base: control.base, input: picker, components: control.components };
   colorCards.push(card);
@@ -487,12 +494,246 @@ function buildColorCard(control, values) {
 }
 
 // ---------------------------------------------------------------------------
+// Farbpalette
+//
+// Eine Sammlung wiederverwendbarer Farben, die unter JEDER Farbwaehler-Karte
+// als Reihe steht: ein Klick setzt Hue/Sat/Bright genau dieser Karte. Der
+// Versand laeuft ueber denselben queueSendMany-Weg wie der Farbwaehler
+// darueber -- kein Sonderpfad, damit Entprellung und Fehlerbehandlung
+// dieselben bleiben.
+//
+// Gehalten wird sie SERVER-seitig (data/colorPalettes.txt), nicht im
+// localStorage: sie soll einen Neustart ueberleben und auf jedem Geraet
+// dieselbe sein.
+// ---------------------------------------------------------------------------
+
+let paletteEntries = (bootstrap.palette && bootstrap.palette.entries) || [];
+const paletteRows = [];        // { element, control } -- eine je Farbkarte
+let paletteBarEl = null;       // die Leiste im Farben-Tab
+let activeColorCard = null;    // zuletzt angefasste Karte, Quelle fuer "+"
+
+function paletteSwatchColor(entry) {
+  return hsbToHex(entry.hue, entry.sat, entry.bright);
+}
+
+/* Setzt eine Karte auf einen Paletteneintrag. Gerundet wird auf das Raster
+ * der Regler, genau wie im Farbwaehler -- sonst laufen angezeigter und
+ * gesendeter Wert auseinander. */
+function applyPaletteEntry(control, entry) {
+  const updates = [
+    { address: control.components.hue.address,
+      value: roundToStep(entry.hue, control.components.hue) },
+    { address: control.components.sat.address,
+      value: roundToStep(entry.sat, control.components.sat) },
+    { address: control.components.bright.address,
+      value: roundToStep(entry.bright, control.components.bright) },
+  ];
+  updates.forEach((u) => controls.get(u.address).set(u.value, true));
+  // Das Farbfeld der Karte zieht nicht von selbst nach: es haengt am
+  // input-Ereignis seines eigenen Waehlers, und set(..., true) loest keins
+  // aus (dieselbe Regel wie beim Preset-Laden).
+  const card = colorCards.find((c) => c.base === control.base);
+  if (card) { syncColorCard(card); }
+  queueSendMany('color:' + control.base, updates);
+  setStatus('Palette „' + entry.name + '“ auf ' + control.base
+    + ' angewendet', 'ok');
+}
+
+/* Baut die Swatch-Reihe einer Karte neu. Wird bei jeder Palette-Aenderung
+ * fuer ALLE Karten gerufen -- eine neue Farbe soll ueberall sofort da sein,
+ * nicht erst nach einem Neuladen. */
+function fillPaletteRow(row) {
+  row.element.innerHTML = '';
+  if (!paletteEntries.length) {
+    const hint = document.createElement('span');
+    hint.className = 'palette-empty';
+    hint.textContent = 'Palette leer';
+    row.element.appendChild(hint);
+    return;
+  }
+  paletteEntries.forEach((entry) => {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'swatch';
+    swatch.style.background = paletteSwatchColor(entry);
+    swatch.title = entry.name + ' auf ' + row.control.base + ' anwenden';
+    swatch.setAttribute('aria-label', entry.name);
+    swatch.addEventListener('click', () => applyPaletteEntry(row.control, entry));
+    row.element.appendChild(swatch);
+  });
+}
+
+function renderPaletteRows() {
+  paletteRows.forEach(fillPaletteRow);
+  if (paletteBarEl) { fillPaletteBar(); }
+}
+
+/* Die komplette Palette an den Server schicken (Voll-Liste: er ersetzt die
+ * Datei durch genau das, was hier steht). */
+async function savePalette(next, what) {
+  const previous = paletteEntries;
+  paletteEntries = next;
+  renderPaletteRows();
+  try {
+    const response = await fetch('/api/palette', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries: next }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || ('HTTP ' + response.status));
+    }
+    paletteEntries = payload.entries || [];
+    renderPaletteRows();
+    setStatus(what, 'ok');
+  } catch (err) {
+    // Zurueckrollen: sonst zeigt das UI eine Farbe, die in der Datei nicht
+    // steht, und der naechste Neustart schluckt sie kommentarlos.
+    paletteEntries = previous;
+    renderPaletteRows();
+    setStatus('Palette nicht gespeichert: ' + err.message, 'err');
+  }
+}
+
+function paletteRowFor(control) {
+  const element = document.createElement('div');
+  element.className = 'palette-row';
+  const row = { element: element, control: control };
+  paletteRows.push(row);
+  fillPaletteRow(row);
+  return element;
+}
+
+/* Die Leiste im Farben-Tab: alle Farben mit Namen, je ein Loesch-Kreuz,
+ * darunter Namensfeld und Uebernehmen-Knopf. */
+function fillPaletteBar() {
+  paletteBarEl.innerHTML = '';
+  if (!paletteEntries.length) {
+    const hint = document.createElement('p');
+    hint.className = 'palette-empty';
+    hint.textContent = 'Noch keine Farbe in der Palette. Eine Farbkarte '
+      + 'weiter unten anfassen, Namen eintragen, „Farbe uebernehmen“.';
+    paletteBarEl.appendChild(hint);
+    return;
+  }
+  paletteEntries.forEach((entry) => {
+    const chip = document.createElement('span');
+    chip.className = 'palette-chip';
+
+    const dot = document.createElement('span');
+    dot.className = 'palette-dot';
+    dot.style.background = paletteSwatchColor(entry);
+
+    const label = document.createElement('span');
+    label.textContent = entry.name;
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'palette-remove';
+    remove.textContent = '×';
+    remove.title = entry.name + ' aus der Palette entfernen';
+    remove.addEventListener('click', () => {
+      savePalette(paletteEntries.filter((e) => e.name !== entry.name),
+        'Farbe „' + entry.name + '“ entfernt');
+    });
+
+    chip.appendChild(dot);
+    chip.appendChild(label);
+    chip.appendChild(remove);
+    paletteBarEl.appendChild(chip);
+  });
+}
+
+function buildPaletteSection(host) {
+  const section = document.createElement('section');
+  section.className = 'palette';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Palette';
+  section.appendChild(title);
+
+  const note = document.createElement('p');
+  note.className = 'palette-note';
+  note.textContent = 'Wiederverwendbare Farben. Sie liegen in '
+    + 'data/colorPalettes.txt auf dem imPulse-Rechner, gelten also fuer '
+    + 'jeden Browser und ueberleben einen Neustart. Unter jeder Farbkarte '
+    + 'steht dieselbe Reihe – ein Klick setzt die Karte auf diese Farbe. '
+    + 'Welche Karte welche Farbe traegt, halten weiterhin die Presets fest.';
+  section.appendChild(note);
+
+  paletteBarEl = document.createElement('div');
+  paletteBarEl.className = 'palette-bar';
+  section.appendChild(paletteBarEl);
+  fillPaletteBar();
+
+  const row = document.createElement('div');
+  row.className = 'palette-add';
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.placeholder = 'Name der Farbe';
+  nameInput.maxLength = 32;
+  nameInput.autocomplete = 'off';
+  nameInput.setAttribute('aria-label', 'Name der neuen Palette-Farbe');
+
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.textContent = 'Farbe uebernehmen';
+  add.title = 'Nimmt die Farbe der zuletzt angefassten Farbkarte';
+
+  function addCurrent() {
+    if (!activeColorCard) {
+      setStatus('Erst eine Farbkarte anfassen – die Palette weiss sonst '
+        + 'nicht, welche Farbe gemeint ist', 'warn');
+      return;
+    }
+    const name = nameInput.value.trim();
+    if (!name) {
+      setStatus('Bitte einen Namen fuer die Farbe eingeben', 'warn');
+      nameInput.focus();
+      return;
+    }
+    const entry = {
+      name: name,
+      hue: controls.get(activeColorCard.components.hue.address).get(),
+      sat: controls.get(activeColorCard.components.sat.address).get(),
+      bright: controls.get(activeColorCard.components.bright.address).get(),
+    };
+    // Gleicher Name ersetzt -- dieselbe Regel wie in der Datei, wo die
+    // letzte Zeile gewinnt. Der Server lehnt einen doppelten Namen ab, ein
+    // blindes concat() liefe also in einen Fehler.
+    const next = paletteEntries.filter((e) => e.name !== name).concat([entry]);
+    const base = activeColorCard.base;
+    nameInput.value = '';
+    savePalette(next, 'Farbe „' + name + '“ aus ' + base + ' uebernommen');
+  }
+
+  add.addEventListener('click', addCurrent);
+  nameInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { addCurrent(); }
+  });
+
+  row.appendChild(nameInput);
+  row.appendChild(add);
+  section.appendChild(row);
+
+  host.appendChild(section);
+}
+
+// ---------------------------------------------------------------------------
 // Aufbau der Seite
 // ---------------------------------------------------------------------------
 
 function render(data) {
   controls.clear();
   colorCards.length = 0;
+  // Die Palette-Registrierungen zeigen nach einem Neuaufbau auf Elemente,
+  // die nicht mehr im Dokument stehen -- ohne das Zuruecksetzen wuechsen
+  // paletteRows bei jedem "Neu laden" an.
+  paletteRows.length = 0;
+  paletteBarEl = null;
+  activeColorCard = null;
 
   // Alle Tabs vollstaendig bauen (siehe buildTabs: die controls-Map muss
   // komplett sein, auch fuer inaktive Tabs).
@@ -684,7 +925,7 @@ function trackColor(index) {
 /* Kompakter Regler fuer die Track-Karten: Beschriftung, Schieber, Zahl.
  * Bewusst nicht buildSlider(): dort gehoert eine Adresszeile mit Range dazu,
  * das waere in einer Karte mit fuenf Reglern nur Rauschen. */
-function miniSlider(labelText, param, initial, format) {
+function miniSlider(labelText, param, initial, format, onChange) {
   const row = document.createElement('label');
   row.className = 'mini-row';
 
@@ -715,6 +956,7 @@ function miniSlider(labelText, param, initial, format) {
     range.value = next;
     out.textContent = fmt(next);
     if (!silent) { queueSend(param.address, next); }
+    if (onChange) { onChange(next); }
   }
 
   range.addEventListener('input', () => apply(range.value, false));
@@ -794,6 +1036,76 @@ function noteBar(param, initial, noteValues, onPick) {
       const active = buttons.find((entry) =>
         entry.button.getAttribute('aria-pressed') === 'true');
       return active ? active.value : noteValues[0].value;
+    },
+    flash: () => {},
+  };
+  controls.set(param.address, handle);
+  return handle;
+}
+
+/* Baum-Filter als Auswahlbalken.
+ *
+ * Bewusst kein Schieber und auch kein Schalter-plus-Dropdown: der Parameter
+ * hat fuenf gleichrangige Zustaende, von denen "alle" (=0) einer ist. Ein
+ * Balken zeigt alle fuenf gleichzeitig, jeder ist einen Klick entfernt, und
+ * es gibt keinen verborgenen "zuletzt gewaehlter Baum"-Zustand, der nach
+ * einem Preset-Laden gegenueber dem Sketch falsch stehen koennte. Gleiche
+ * Bauform wie noteBar() eine Karte weiter oben.
+ *
+ * Der Wertebereich bleibt der rohe int 0..4 von RemoteControlledIntParameter
+ * -- hier wird nur beschriftet. */
+function treeBar(param, initial, labels, onPick) {
+  const bar = document.createElement('div');
+  bar.className = 'tree-bar';
+  const buttons = [];
+
+  function clampIndex(raw) {
+    const v = Math.round(Number(raw));
+    if (!isFinite(v)) { return 0; }
+    return Math.max(0, Math.min(labels.length - 1, v));
+  }
+
+  function mark(value) {
+    buttons.forEach((entry) => {
+      entry.button.setAttribute('aria-pressed',
+        entry.value === value ? 'true' : 'false');
+    });
+  }
+
+  labels.forEach((label, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.title = index === 0
+      ? 'Kein Filter – der Track wuerfelt aus allen Stripes ('
+        + param.address + ' = 0)'
+      : 'Nur Stripes am Baum "' + label + '" (' + param.address
+        + ' = ' + index + ')';
+    button.addEventListener('click', () => {
+      mark(index);
+      queueSend(param.address, index);
+      if (onPick) { onPick(index); }
+    });
+    buttons.push({ value: index, button: button });
+    bar.appendChild(button);
+  });
+
+  const start = clampIndex(initial);
+  mark(start);
+  if (onPick) { onPick(start); }
+
+  const handle = {
+    element: bar,
+    set: (value, silent) => {
+      const index = clampIndex(value);
+      mark(index);
+      if (!silent) { queueSend(param.address, index); }
+      if (onPick) { onPick(index); }
+    },
+    get: () => {
+      const active = buttons.find((entry) =>
+        entry.button.getAttribute('aria-pressed') === 'true');
+      return active ? active.value : 0;
     },
     flash: () => {},
   };
@@ -986,29 +1298,66 @@ function buildSequencer(data, host) {
       mini.appendChild(miniSlider('Swing', fields.swingJitter,
         data.values[fields.swingJitter.address]).element);
     }
+    // Baum-Filter und fester Ursprung haengen zusammen: ein gesetzter
+    // Ursprung schlaegt den Filter (OriginSequencer.advanceOrigin). Diese
+    // Zeile sagt es genau dann, wenn es zutrifft -- ein statischer Satz je
+    // Track waere sechsmal dasselbe und stuende auch dann da, wenn kein
+    // Konflikt vorliegt.
+    let treeValue = 0;
+    let originValue = -1;
+    const conflict = document.createElement('p');
+    conflict.className = 'track-note';
+    conflict.hidden = true;
+
+    function refreshConflict() {
+      const shadowed = treeValue > 0 && originValue >= 0;
+      conflict.hidden = !shadowed;
+      if (shadowed) {
+        conflict.textContent = 'Fester Ursprung S' + originValue
+          + ' – der Baum-Filter wirkt nicht.';
+      }
+    }
+
     if (fields.originTreeFilter) {
       const labels = seq.treeLabels || ['alle'];
-      mini.appendChild(miniSlider('Baum', fields.originTreeFilter,
-        data.values[fields.originTreeFilter.address],
-        // Klartext statt Zahl: "3" verraet niemandem, welcher Baum gemeint
-        // ist. Die Reihenfolge spiegelt StripeTreeStore.TREE_NAMES.
-        (v) => labels[Math.max(0, Math.min(labels.length - 1, Math.round(v)))]
-      ).element);
+      const caption = document.createElement('span');
+      caption.className = 'mini-caption';
+      caption.textContent = 'Baum';
+      mini.appendChild(caption);
+      // Klartext statt Zahl: "3" verraet niemandem, welcher Baum gemeint
+      // ist. Die Reihenfolge spiegelt StripeTreeStore.TREE_NAMES.
+      const bar = treeBar(fields.originTreeFilter,
+        data.values[fields.originTreeFilter.address], labels,
+        (v) => { treeValue = v; refreshConflict(); });
+      mini.appendChild(bar.element);
     }
     if (fields.originStripeOverride) {
       mini.appendChild(miniSlider('Ursprung', fields.originStripeOverride,
         data.values[fields.originStripeOverride.address],
         // -1 heisst "zufaellig" - als Zahl waere das ein Raetsel. Steht hier
         // ein Stripe, hat er Vorrang vor dem Baum-Filter darueber (siehe
-        // OriginSequencer.advanceOrigin).
-        (v) => (Math.round(v) < 0 ? 'zufall' : 'S' + Math.round(v))).element);
+        // OriginSequencer.advanceOrigin); refreshConflict sagt das dann auch.
+        (v) => (Math.round(v) < 0 ? 'zufall' : 'S' + Math.round(v)),
+        (v) => { originValue = Math.round(v); refreshConflict(); }).element);
     }
     card.appendChild(mini);
+    card.appendChild(conflict);
 
     grid.appendChild(card);
   });
 
   section.appendChild(grid);
+
+  // Erklaerung zum Baum-Filter: einmal unter der Spurenreihe statt sechsmal
+  // in den Karten. Der Text kommt vom Server (TREE_HELP in server.py), weil
+  // er eine Aussage ueber die Java-Seite trifft und dort pruefbar ist.
+  if (seq.treeHelp) {
+    const help = document.createElement('p');
+    help.className = 'seq-help';
+    help.textContent = seq.treeHelp;
+    section.appendChild(help);
+  }
+
   host.appendChild(section);
 }
 
@@ -1324,6 +1673,7 @@ function buildTabs(data) {
     (tab.sections || []).forEach((name) => {
       if (name === 'sequencer') { buildSequencer(data, panel); }
       if (name === 'speedClasses') { buildSpeedClasses(data, panel); }
+      if (name === 'palette') { buildPaletteSection(panel); }
     });
 
     // 2. Kuratierte Regler direkt sichtbar
@@ -1343,14 +1693,14 @@ function buildTabs(data) {
     }
     buildScParams(scPrimary, panel, (data.scParams || {}).port, true);
 
-    // 3. Alles Uebrige eingeklappt -- dasselbe <details>-Muster wie die
-    //    bisherige Advanced-Gruppe.
+    // 3. Alles Uebrige. Normalerweise eingeklappt -- dasselbe
+    //    <details>-Muster wie die bisherige Advanced-Gruppe. Ausnahme: der
+    //    Server markiert einen Tab als "expanded" (Farben-Tab). Dort gibt es
+    //    keine kuratierte Auswahl, weil Farbkarten keine eigene Adresse
+    //    tragen -- der ganze Tab bestuende sonst aus einem zugeklappten
+    //    <details>.
     const hasRest = (tab.groups || []).length || scRest.length;
     if (hasRest) {
-      const details = document.createElement('details');
-      const summary = document.createElement('summary');
-      summary.textContent = 'Erweitert';
-      details.appendChild(summary);
       const body = document.createElement('div');
       body.className = 'tab-extra';
       (tab.groups || []).forEach((group) => {
@@ -1358,8 +1708,16 @@ function buildTabs(data) {
       });
       buildScParams(scRest, body, (data.scParams || {}).port,
         scPrimary.length === 0);
-      details.appendChild(body);
-      panel.appendChild(details);
+      if (tab.expanded) {
+        panel.appendChild(body);
+      } else {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = 'Erweitert';
+        details.appendChild(summary);
+        details.appendChild(body);
+        panel.appendChild(details);
+      }
     }
 
     tabPanelsEl.appendChild(panel);
