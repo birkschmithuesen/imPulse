@@ -236,6 +236,71 @@ Presets fest.
 Regel muesste der Knopf raten, welche der sieben Karten gemeint ist; deshalb
 meldet er auch, wenn noch keine angefasst wurde, statt still nichts zu tun.
 
+## Automatische Sicherung der Live-Daten
+
+Presets, Farbpaletten und Kalibrierdateien werden im laufenden Betrieb
+geaendert, aber niemand committet sie — nachgezogen wurde das bisher von Hand
+(„X-Preset vom Live-Betrieb nachgezogen" in der Historie). Wird ein Rechner
+neu aufgesetzt, bevor jemand daran denkt, ist die Live-Arbeit weg.
+
+Der Server bringt dafuer einen Hintergrund-Thread mit (`webui/autocommit.py`):
+alle **10 Minuten** prueft er die unten stehenden Pfade und macht einen
+**lokalen Git-Commit** — aber nur, wenn sich tatsaechlich etwas geaendert hat.
+Kein leerer Commit, keine feste Taktung unabhaengig vom Zustand.
+
+**Gepusht wird nicht.** Der Commit bleibt im Checkout des jeweiligen Rechners;
+uebertragen wird von Hand mit `git push`, wenn Birk das fuer richtig haelt.
+Mehrere Checkouts arbeiten parallel am selben Remote (Live-Laptop,
+Test-Deploy, Worktrees) — ein automatischer Push waere eine Fernwirkung ohne
+Entscheidung. Dieselbe Regel, die CLAUDE.md fuer Merges und Force-Pushes
+aufstellt.
+
+Ueberwacht wird genau das:
+
+| Pfad | warum |
+|---|---|
+| `data/presets/*.txt` | vom UI ausgeloest, vom Sketch geschrieben |
+| `supercollider/presets/*.txt` | ein Preset ist **ein Name, zwei Dateien** — nur die Licht-Haelfte zu sichern hiesse, die Szene kaeme spaeter optisch zurueck und klanglich nicht |
+| `data/colorPalettes.txt` | im UI editierbar |
+| `data/energyLevels.txt` | im UI editierbar |
+| `data/stripeTrees.txt` | Best-Guess, von Hand korrigiert |
+| `data/nodeCrossings.txt` | Node-Kalibrierung, nur auf Tastendruck `S` geschrieben |
+| `data/ledPositions.txt` | Positions-Kalibrierung, ebenfalls nur auf `S` |
+
+Ein Muster, das in diesem Checkout auf nichts passt, ist kein Fehler — die
+Farbpaletten und die Energie-Level kommen erst mit ihren Feature-Branches.
+
+**Bewusst nicht dabei:** `data/remoteSettings.txt` (steht in `.gitignore`,
+Boot-Snapshot bei jedem Sketch-Start) und `data/songStructureState.txt` (wird
+vom Sketch bei jedem Levelwechsel neu geschrieben). Die Trennlinie ist nicht,
+*wer* die Datei schreibt, sondern *wann sie sich aendert*: aendert sie sich nur,
+wenn ein Mensch etwas entschieden hat, ist sie Konfiguration; aendert sie sich
+von selbst waehrend der Show, ist sie Laufzeitstatus und gehoert nicht in einen
+Commit.
+
+**Uebersprungen wird**, ohne einzugreifen und ohne den Server zu stoeren:
+
+- ein offener Merge, Rebase, Cherry-Pick, Revert oder Bisect (erkannt an
+  `MERGE_HEAD` und Geschwistern im `.git`-Verzeichnis)
+- ein Merge-Konflikt in einer der ueberwachten Dateien
+- ein **detached HEAD** — ein Commit ohne Branch waere nach dem naechsten
+  Checkout nur noch im Reflog, also ein Sicherungsnetz, das nicht haelt
+- jeder Git-Fehler: wird geloggt und in der Statuszeile angezeigt, der
+  naechste Versuch laeuft in 10 Minuten
+
+Sichtbar ist der Zustand in der Zeile unter der Statusleiste („Automatische
+Sicherung: alle 10 min lokal committet (kein Push) — zuletzt gesichert vor
+3 Minuten"), maschinenlesbar unter `GET /api/autocommit`. Nur lesend: es gibt
+bewusst keinen Knopf, der aus dem Browser heraus Git-Zustand aendert.
+
+Abschalten fuer ein Entwickler-Checkout:
+
+```bash
+python3 server.py --no-autocommit
+IMPULSE_AUTOCOMMIT=0 python3 server.py
+python3 server.py --autocommit-interval 3600   # oder nur seltener
+```
+
 ## Normalisierung (der Fallstrick)
 
 `RemoteControlledFloatParameter.digestMessage` mappt eingehende Floats selbst:
@@ -330,6 +395,8 @@ Parameterdatei mitgeben.
 | `--osc-port` / `IMPULSE_OSC_PORT`         | `8001`                      |
 | `--host` / `IMPULSE_WEBUI_HOST`           | `0.0.0.0`                   |
 | `--port` / `IMPULSE_WEBUI_PORT`           | `8080`                      |
+| `--no-autocommit` / `IMPULSE_AUTOCOMMIT=0` | an (siehe „Automatische Sicherung") |
+| `--autocommit-interval` / `IMPULSE_AUTOCOMMIT_INTERVAL` | `600` Sekunden |
 
 Beispiel:
 
@@ -413,6 +480,30 @@ Flask und werden sonst uebersprungen — wie schon der python-osc-Gegentest.
 ```bash
 python3 webui/test_webui.py
 ```
+
+Die automatische Sicherung hat eine **eigene** Suite, ebenfalls ohne
+Fremdabhaengigkeiten:
+
+```bash
+python3 webui/test_autocommit.py
+```
+
+Sie prueft den Porcelain-Parser, das Pfad-Matching, die Commit-Message und die
+Ablauflogik gegen einen eingesetzten Git-Runner (ohne echten Prozess) — und
+dazu zwei Dinge, die nicht verhandelbar sind:
+
+- **Ein Grep ueber alle `webui/*.py`**, dass nirgends `git add -A`,
+  `git add .`, `git commit -a` oder ein `git push` steht. Mit Gegenprobe, dass
+  die Muster tatsaechlich anschlagen — ein Test, der nie ausloest, prueft
+  nichts.
+- **Ein Integrationstest gegen ein echtes, temporaeres Repository**: eine
+  geaenderte Preset-Datei *und* eine geaenderte, nicht ueberwachte Datei, die
+  obendrein von Hand gestaged ist. Erwartet wird genau ein Commit, der nur die
+  Preset-Datei enthaelt, waehrend die fremde Aenderung danach noch schmutzig
+  ist. Der Grep prueft die Schreibweise, dieser das Verhalten.
+
+Fehlt `git` auf dem Rechner, wird der Integrationsteil uebersprungen statt zu
+scheitern.
 
 **Fuer die UI-Schicht selbst gibt es kein Testgeruest im Repo.** `webui/` soll
 ohne Node/npm auskommen (siehe oben), und ein jsdom-Test wuerde genau das

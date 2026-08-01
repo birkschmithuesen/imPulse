@@ -34,6 +34,11 @@ except ImportError as _flask_error:  # Tests laufen ohne Flask, siehe test_webui
 else:
     _FLASK_IMPORT_ERROR = None
 
+# Liegt neben dieser Datei. Wird beim direkten Start ueber das Skript-
+# Verzeichnis gefunden, beim Import aus den Tests ueber deren sys.path-Eintrag.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import autocommit  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Voreinstellungen (alle per Umgebungsvariable und Kommandozeile ueberschreibbar)
 # ---------------------------------------------------------------------------
@@ -1724,7 +1729,7 @@ def coupled_values(store: ParameterStore, speed: float) -> Tuple[List[Tuple[Para
 
 def create_app(settings_path: str, osc_host: str, osc_port: int,
                presets_path: str, palette_path: Optional[str] = None,
-               state_path: Optional[str] = None):
+               state_path: Optional[str] = None, autocommit_scheduler=None):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
@@ -1772,6 +1777,11 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         return {"ok": True, "presets": names, "dir": presets_path,
                 "error": error}
 
+    def autocommit_payload() -> Dict[str, Any]:
+        if autocommit_scheduler is None:
+            return dict(autocommit.DISABLED_STATUS)
+        return autocommit_scheduler.status()
+
     @app.route("/")
     def index() -> str:
         store.refresh()
@@ -1792,8 +1802,19 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                 "presets": preset_list_payload(),
                 "palette": palette_payload(),
                 "songState": read_song_state(state_path),
+                "autocommit": autocommit_payload(),
             }),
         )
+
+    @app.route("/api/autocommit")
+    def api_autocommit():
+        """Zustand der automatischen lokalen Sicherung.
+
+        Nur lesend: ausgeloest wird ausschliesslich vom Takt im Server. Ein
+        Knopf, der aus dem Browser heraus Git-Zustand aendert, waere eine
+        zweite Ausloeseart mit eigenen Fehlerfaellen und ohne Anlass.
+        """
+        return jsonify(autocommit_payload())
 
     @app.route("/api/parameters")
     def api_parameters():
@@ -2026,6 +2047,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Port des Webservers (Vorgabe: %(default)s)")
     parser.add_argument("--debug", action="store_true",
                         help="Flask-Debugmodus (Autoreload)")
+    # Voreinstellung ist AN: der Ausloeser des Features ist ein Rechner, an dem
+    # niemand daran denkt zu committen. Ein Entwickler-Checkout, der das nicht
+    # will, schaltet es ab -- das ist der seltenere Fall und der, in dem
+    # jemand hinschaut.
+    parser.add_argument("--no-autocommit", action="store_true",
+                        default=os.environ.get("IMPULSE_AUTOCOMMIT", "1") == "0",
+                        help="die automatische lokale Sicherung der "
+                             "Daten-Dateien abschalten")
+    parser.add_argument("--autocommit-interval", type=float,
+                        default=float(os.environ.get(
+                            "IMPULSE_AUTOCOMMIT_INTERVAL",
+                            autocommit.DEFAULT_INTERVAL_S)),
+                        help="Sekunden zwischen zwei Sicherungslaeufen "
+                             "(Vorgabe: %(default)s)")
     args = parser.parse_args(argv)
 
     settings_path = os.path.abspath(args.settings)
@@ -2036,8 +2071,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     state_path = (os.path.abspath(args.state) if args.state
                   else os.path.join(os.path.dirname(settings_path),
                                     DEFAULT_STATE_FILENAME))
+
+    # Der Auto-Commit arbeitet auf dem Checkout, in dem dieser Server liegt --
+    # nicht auf dem Ordner von --settings. Zeigt --settings woanders hin, ist
+    # das ein Testaufbau und die Sicherung gehoert trotzdem hierher.
+    scheduler = None
+    if not args.no_autocommit:
+        scheduler = autocommit.AutoCommitScheduler(
+            autocommit.AutoCommitter(REPO_ROOT),
+            interval_s=args.autocommit_interval)
+        scheduler.start()
+
     app = create_app(settings_path, args.osc_host, args.osc_port, presets_path,
-                     palette_path, state_path)
+                     palette_path, state_path, autocommit_scheduler=scheduler)
 
     print("[webui] remoteSettings: %s" % settings_path)
     print("[webui] Presets:        %s" % presets_path)
@@ -2045,6 +2091,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("[webui] Song-Zustand:   %s" % state_path)
     print("[webui] OSC-Ziel:       %s:%d" % (args.osc_host, args.osc_port))
     print("[webui] HTTP:           http://%s:%d" % (args.host, args.port))
+    if scheduler is None:
+        print("[webui] Auto-Commit:    aus")
+    else:
+        print("[webui] Auto-Commit:    alle %.0f s in %s, nur lokal (kein Push)"
+              % (scheduler.interval_s, REPO_ROOT))
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
     return 0
 
