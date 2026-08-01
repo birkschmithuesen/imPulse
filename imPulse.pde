@@ -72,6 +72,7 @@ float ledPitchM = stripeLengthM / numLedsPerStripe;   // 0.0166667 m
 int paneX = 10, paneY = 10, paneW = 525, paneH = 300;
 
 LedAnchorStore ledAnchorStore;
+StripeTreeStore stripeTreeStore;
 LedPositionMap ledPositionMap;
 LedPositionCalibration ledPositionCalibration;
 boolean positionMode = false;
@@ -202,6 +203,18 @@ void setup() {
   //initialize visual effects
   ledNetworkTransportEffect = new LedNetworkTransportEffect("1", numLeds, numStripes, numLedsPerStripe, ledNetInfo, listOfNodes, ledPositionMap, oscP5, oscOutput);
   ledNetworkNodeEffects = new LedNetworkNodeEffects("1", numLeds, ledNetInfo, listOfNodes);
+
+  // Baum-Zuordnung fuer den Origin-Filter der Sequencer-Tracks. Fehlt die
+  // Datei, laeuft die Show ohne Filter weiter - ein Baum-Filter ist
+  // Gestaltung, keine Betriebsvoraussetzung.
+  stripeTreeStore = new StripeTreeStore(numStripes);
+  if (stripeTreeStore.load(dataPath("stripeTrees.txt"))) {
+    System.out.println(stripeTreeStore.lastMessage());
+  } else {
+    System.out.println("WARNUNG: " + stripeTreeStore.lastMessage()
+        + " - /net/sequencer/track*/originTreeFilter bleibt wirkungslos");
+  }
+  ledNetworkTransportEffect.setStripeTrees(stripeTreeStore);
 
   mixer = new Mixer(numLeds);
   mixer.addEffect(ledNetworkTransportEffect);

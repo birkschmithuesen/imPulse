@@ -179,7 +179,14 @@ SEQUENCER_TRACK_COUNT = 6
 # Reihenfolge im Track-Panel. noteValue steht bewusst vorn: er bestimmt, wie
 # dicht der Track ueberhaupt laeuft.
 SEQUENCER_TRACK_FIELDS = ["noteValue", "repeatCount", "energy",
-                          "swingJitter", "originStripeOverride"]
+                          "swingJitter", "originTreeFilter",
+                          "originStripeOverride"]
+
+# Klartext je Wert von originTreeFilter. Index 0 = kein Filter, 1..4 = die
+# vier Baeume in derselben Reihenfolge wie StripeTreeStore.TREE_NAMES auf der
+# Java-Seite. Der Parameter traegt eine Zahl, weil
+# RemoteControlledIntParameter keine Aufzaehlung kann - im UI steht der Name.
+TREE_LABELS = ["alle", "vorn", "hinten", "rechts", "links"]
 
 # Speed-Klassen aus SpeedQuantizer.MULTIPLIERS, gleiche Reihenfolge.
 # Adress-Suffix und Anzeigename; das Suffix spiegelt die Java-Seite (Punkt
@@ -253,6 +260,7 @@ def build_sequencer(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, An
         "tracks": tracks,
         "noteValues": [{"value": v, "symbol": s, "name": n}
                        for v, s, n in NOTE_VALUES],
+        "treeLabels": list(TREE_LABELS),
     }
 
 

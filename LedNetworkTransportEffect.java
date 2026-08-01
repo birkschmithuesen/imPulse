@@ -145,6 +145,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledFloatParameter[] trackEnergy = new RemoteControlledFloatParameter[OriginSequencer.TRACK_COUNT];
   RemoteControlledFloatParameter[] trackSwingJitter = new RemoteControlledFloatParameter[OriginSequencer.TRACK_COUNT];
   RemoteControlledIntParameter[] trackOriginOverride = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  // 0 = kein Filter, 1..4 = nur Stripes des jeweiligen Baums (siehe
+  // StripeTreeStore.TREE_NAMES). Wirkt nur, wenn originStripeOverride == -1;
+  // ein ausdruecklich gesetzter Stripe hat Vorrang.
+  RemoteControlledIntParameter[] trackOriginTree = new RemoteControlledIntParameter[OriginSequencer.TRACK_COUNT];
+  // Die Baum-Zuordnung. Wird von aussen gesetzt (setStripeTrees), damit der
+  // Effekt die Datei nicht selbst liest - dieselbe Trennung wie bei
+  // LedPositionMap.
+  StripeTreeStore stripeTrees;
   final MusicalClock musicalClock = new MusicalClock();
   OriginSequencer originSequencer;
   // Wiederverwendet statt in jedem Frame neu angelegt - drawMe() laeuft mit
@@ -242,6 +250,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       trackSwingJitter[i]= new RemoteControlledFloatParameter(base+"swingJitter", 0f, 0f, 1f);
       // -1 = zufaelliger Ursprung (Normalfall), sonst fixer Stripe.
       trackOriginOverride[i]= new RemoteControlledIntParameter(base+"originStripeOverride", -1, -1, nStripes-1);
+      trackOriginTree[i]= new RemoteControlledIntParameter(base+"originTreeFilter", 0, 0, StripeTreeStore.TREE_NAMES.length);
       trackConfigs[i]= new TrackConfig();
     }
 
@@ -707,6 +716,13 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     return SplitVariance.jitter(speed, speedQuantizeJitter.getValue(), Math.random());
   }
 
+  // Die Baum-Zuordnung nachreichen. Aus setup() zu rufen, nachdem
+  // data/stripeTrees.txt geladen ist. Bleibt sie ungesetzt, wirkt jeder
+  // originTreeFilter wie 0 - die Show laeuft dann ohne Filter weiter.
+  void setStripeTrees(StripeTreeStore store) {
+    stripeTrees=store;
+  }
+
   // Strukturierter Spawn-Layer, siehe /net/sequencer/* in CLAUDE.md. Laeuft
   // unabhaengig neben spawnRandomImpulses() - beide Layer sind gleichzeitig
   // aktivierbar, der eine ist der chaotische Ambient-Teppich, der andere die
@@ -728,6 +744,12 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       c.energy=trackEnergy[i].getValue();
       c.swingJitter=trackSwingJitter[i].getValue();
       c.originStripeOverride=trackOriginOverride[i].getValue();
+      // Baum-Filter: der erlaubte Stripe-Vorrat. null = kein Filter, und
+      // genau das liefert der Store auch fuer Filterwert 0, fuer einen
+      // ungueltigen Wert und fuer einen Baum ohne Stripes - der Track
+      // spawnt dann wie bisher, statt still zu verstummen.
+      c.originPool=(stripeTrees == null)
+          ? null : stripeTrees.stripesFor(trackOriginTree[i].getValue());
     }
     int[] firing=originSequencer.update(musicalClock.beats(), trackConfigs, mathRandom);
     if (firing.length == 0) {

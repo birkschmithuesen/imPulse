@@ -272,6 +272,118 @@ public class OriginSequencerTest {
       }
     }
 
+    // ---- originPool: die Ziehung bleibt im Pool ----
+    // Der Baum-Filter (Feature 7) reicht den erlaubten Stripe-Vorrat als
+    // Array herein. Der Sequencer kennt keine Baeume - er zieht nur aus dem,
+    // was er bekommt.
+    OriginSequencer s15 = new OriginSequencer(30);
+    TrackConfig[] pool = single(on(16));
+    pool[0].repeatCount = 1;               // bei jedem Treffer neu wuerfeln
+    pool[0].originPool = new int[] { 3, 7, 11 };
+    s15.update(0.0, pool, new FixedRandom(0.0, 0.2, 0.5, 0.8, 0.99));
+    int treffer15 = 0;
+    for (int i = 1; i <= 400; i++) {
+      if (s15.update(i*0.05, pool, new FixedRandom(0.0, 0.2, 0.5, 0.8, 0.99)).length > 0) {
+        int o = s15.originOf(0);
+        Check.that("gezogener Stripe liegt im Pool",
+            o == 3 || o == 7 || o == 11);
+        treffer15++;
+      }
+    }
+    Check.that("es wurde ueberhaupt gefeuert", treffer15 > 0);
+
+    // Alle Pool-Eintraege sind erreichbar, nicht nur der erste
+    OriginSequencer s16 = new OriginSequencer(30);
+    TrackConfig[] alle = single(on(16));
+    alle[0].repeatCount = 1;
+    alle[0].originPool = new int[] { 3, 7, 11 };
+    boolean sah3 = false, sah7 = false, sah11 = false;
+    FixedRandom r16 = new FixedRandom(0.0, 0.5, 0.99);
+    s16.update(0.0, alle, r16);
+    for (int i = 1; i <= 300; i++) {
+      if (s16.update(i*0.05, alle, r16).length > 0) {
+        int o = s16.originOf(0);
+        sah3 |= (o == 3);
+        sah7 |= (o == 7);
+        sah11 |= (o == 11);
+      }
+    }
+    Check.that("der erste Pool-Eintrag kommt vor", sah3);
+    Check.that("der mittlere auch", sah7);
+    Check.that("und der letzte auch", sah11);
+
+    // Ein Pool mit genau einem Stripe liefert immer denselben
+    OriginSequencer s17 = new OriginSequencer(30);
+    TrackConfig[] einer = single(on(8));
+    einer[0].repeatCount = 1;
+    einer[0].originPool = new int[] { 23 };
+    s17.update(0.0, einer, new FixedRandom(0.0, 0.5, 0.99));
+    for (int i = 1; i <= 200; i++) {
+      if (s17.update(i*0.05, einer, new FixedRandom(0.0, 0.5, 0.99)).length > 0) {
+        Check.eq("einelementiger Pool liefert immer denselben Stripe",
+            23, s17.originOf(0));
+      }
+    }
+
+    // Ein leerer Pool zaehlt wie kein Pool - sonst schwiege der Track still.
+    // StripeTreeStore liefert dafuer zwar null, aber der Sequencer soll das
+    // auch abfangen, wenn ihn jemand anders fuellt.
+    OriginSequencer s18 = new OriginSequencer(8);
+    TrackConfig[] leer = single(on(4));
+    leer[0].originPool = new int[0];
+    s18.update(0.0, leer, new FixedRandom(0.5));
+    Check.eq("leerer Pool feuert trotzdem",
+        1, s18.update(1.0, leer, new FixedRandom(0.5)).length);
+    Check.that("und liefert einen gueltigen Stripe",
+        s18.originOf(0) >= 0 && s18.originOf(0) < 8);
+
+    // null-Pool = kein Filter, exakt das bisherige Verhalten
+    OriginSequencer s19 = new OriginSequencer(8);
+    TrackConfig[] ohne = single(on(4));
+    ohne[0].originPool = null;
+    ohne[0].repeatCount = 1;
+    s19.update(0.0, ohne, new FixedRandom(0.0));
+    s19.update(1.0, ohne, new FixedRandom(0.0));
+    Check.eq("ohne Pool zieht Zufall 0.0 den Stripe 0", 0, s19.originOf(0));
+
+    // originStripeOverride schlaegt den Pool -- die Vorrangregel aus dem Brief
+    OriginSequencer s20 = new OriginSequencer(30);
+    TrackConfig[] beides = single(on(4));
+    beides[0].originPool = new int[] { 3, 7, 11 };
+    beides[0].originStripeOverride = 25;
+    s20.update(0.0, beides, new FixedRandom(0.5));
+    for (int i = 1; i <= 200; i++) {
+      if (s20.update(i*0.05, beides, new FixedRandom(0.5)).length > 0) {
+        Check.eq("expliziter Stripe schlaegt den Baum-Pool",
+            25, s20.originOf(0));
+      }
+    }
+
+    // Der Pool gilt AUCH beim Nachwuerfeln nach Ablauf von repeatCount
+    OriginSequencer s21 = new OriginSequencer(30);
+    TrackConfig[] wdh = single(on(8));
+    wdh[0].repeatCount = 2;
+    wdh[0].originPool = new int[] { 5, 9 };
+    FixedRandom r21 = new FixedRandom(0.0, 0.99);
+    s21.update(0.0, wdh, r21);
+    List<Integer> folge21 = new ArrayList<Integer>();
+    for (int i = 1; i <= 400; i++) {
+      if (s21.update(i*0.05, wdh, r21).length > 0) {
+        folge21.add(Integer.valueOf(s21.originOf(0)));
+      }
+    }
+    Check.that("mehrere Treffer", folge21.size() >= 6);
+    for (int i = 0; i < folge21.size(); i++) {
+      int o = folge21.get(i).intValue();
+      Check.that("auch nach dem Nachwuerfeln bleibt es im Pool",
+          o == 5 || o == 9);
+    }
+    Check.eq("Treffer 1 und 2 teilen den Ursprung",
+        folge21.get(0).intValue(), folge21.get(1).intValue());
+    Check.that("Treffer 3 hat neu gewuerfelt",
+        folge21.get(2).intValue() != folge21.get(1).intValue()
+        || folge21.size() < 3);
+
     System.exit(Check.report("OriginSequencerTest"));
   }
 }

@@ -9,6 +9,7 @@ remoteSettings.txt und dem OSC-Paket schiefgehen kann:
 """
 
 import os
+import re
 import shutil
 import struct
 import sys
@@ -635,6 +636,7 @@ class SequencerSectionTest(unittest.TestCase):
                 "float\t%senergy\tx\t0.6\t0\t1" % base,
                 "float\t%sswingJitter\tx\t0\t0\t1" % base,
                 "int\t%soriginStripeOverride\tx\t-1\t-1\t29" % base,
+                "int\t%soriginTreeFilter\tx\t0\t0\t4" % base,
             ]
         lines += [
             "int\t/net/impulse/speedQuantize/enabled\tx\t0\t0\t1",
@@ -658,6 +660,28 @@ class SequencerSectionTest(unittest.TestCase):
             self.assertEqual(sorted(track["fields"]),
                              sorted(server.SEQUENCER_TRACK_FIELDS),
                              "Track %d" % track["index"])
+
+    def test_tree_labels_cover_no_filter_plus_four_trees(self):
+        seq = server.build_sequencer(self._params())
+        # Index 0 ist "kein Filter", 1..4 die vier Baeume - dieselbe
+        # Reihenfolge wie StripeTreeStore.TREE_NAMES auf der Java-Seite.
+        self.assertEqual(len(seq["treeLabels"]), 5)
+        self.assertEqual(seq["treeLabels"][0], "alle")
+        self.assertEqual(seq["treeLabels"][1:],
+                         ["vorn", "hinten", "rechts", "links"])
+
+    def test_tree_labels_match_the_java_constant(self):
+        """Driftet TREE_NAMES in StripeTreeStore.java, faellt es hier auf."""
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "StripeTreeStore.java")
+        if not os.path.exists(path):
+            self.skipTest("StripeTreeStore.java nicht gefunden")
+        with open(path, encoding="utf-8") as handle:
+            java = handle.read()
+        match = re.search(r"TREE_NAMES\s*=\s*\{([^}]*)\}", java)
+        self.assertIsNotNone(match, "TREE_NAMES nicht gefunden")
+        names = re.findall(r'"([^"]+)"', match.group(1))
+        self.assertEqual(names, server.TREE_LABELS[1:])
 
     def test_note_values_carry_symbol_and_name(self):
         seq = server.build_sequencer(self._params())

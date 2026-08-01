@@ -16,6 +16,18 @@ class TrackConfig {
   float energy;             // Spawn-Energie, vom Sequencer nur durchgereicht
   float swingJitter;        // 0 = exakt periodisch
   int originStripeOverride; // -1 = zufaellig, sonst fixer Stripe
+
+  // Erlaubter Vorrat an Ursprungs-Stripes, oder null = alle.
+  //
+  // Gefuellt vom Effekt aus StripeTreeStore (Baum-Filter, siehe
+  // /net/sequencer/track<N>/originTreeFilter). Der Sequencer kennt keine
+  // Baeume -- er zieht nur aus dem, was er bekommt. Damit haengt seine
+  // Pruefbarkeit nicht an einer Datei, und der Store bleibt fuer sich
+  // pruefbar.
+  //
+  // Eine REFERENZ auf das im Store gecachte Array, keine Kopie: das hier
+  // wird in jedem Frame gesetzt.
+  int[] originPool;
 }
 
 // Entscheidet, welche Tracks in diesem Frame feuern und von welchem Stripe.
@@ -132,7 +144,7 @@ class OriginSequencer {
       return;
     }
     if (repeatsLeft[track] <= 0) {
-      origin[track] = pickStripe(rnd);
+      origin[track] = pickStripe(rnd, c.originPool);
       int rc = c.repeatCount;
       if (rc < 1) {
         rc = 1;
@@ -142,13 +154,40 @@ class OriginSequencer {
     repeatsLeft[track]--;
   }
 
-  private int pickStripe(RandomSource rnd) {
+  // Zieht einen Ursprungs-Stripe. Ist ein Pool gesetzt, wird daraus gezogen,
+  // sonst aus allen Stripes.
+  //
+  // Ein LEERER Pool zaehlt bewusst wie kein Pool: der Track soll dann wie
+  // ohne Filter feuern, statt still zu verstummen. StripeTreeStore liefert
+  // fuer einen leeren Baum zwar schon null, aber die Regel steht hier
+  // nochmal - ein Aufrufer, der den Pool anders fuellt, soll denselben
+  // Ausfallschutz bekommen.
+  private int pickStripe(RandomSource rnd, int[] pool) {
     double r = rnd.next();
     if (Double.isNaN(r) || r < 0.0) {
       r = 0.0;
     }
     if (r >= 1.0) {
       r = 0.999999;
+    }
+    if (pool != null && pool.length > 0) {
+      int idx = (int) (r*pool.length);
+      if (idx < 0) {
+        idx = 0;
+      }
+      if (idx >= pool.length) {
+        idx = pool.length - 1;
+      }
+      int s = pool[idx];
+      // Ein Pool-Eintrag ausserhalb des Netzes waere ein Datenfehler; hier
+      // geklemmt statt einen Index-Fehler bis in den LED-Puffer zu tragen.
+      if (s < 0) {
+        s = 0;
+      }
+      if (s >= nStripes) {
+        s = nStripes - 1;
+      }
+      return s;
     }
     int s = (int) (r*nStripes);
     if (s < 0) {

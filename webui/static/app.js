@@ -1011,10 +1011,21 @@ function buildSequencer(data) {
       mini.appendChild(miniSlider('Swing', fields.swingJitter,
         data.values[fields.swingJitter.address]).element);
     }
+    if (fields.originTreeFilter) {
+      const labels = seq.treeLabels || ['alle'];
+      mini.appendChild(miniSlider('Baum', fields.originTreeFilter,
+        data.values[fields.originTreeFilter.address],
+        // Klartext statt Zahl: "3" verraet niemandem, welcher Baum gemeint
+        // ist. Die Reihenfolge spiegelt StripeTreeStore.TREE_NAMES.
+        (v) => labels[Math.max(0, Math.min(labels.length - 1, Math.round(v)))]
+      ).element);
+    }
     if (fields.originStripeOverride) {
       mini.appendChild(miniSlider('Ursprung', fields.originStripeOverride,
         data.values[fields.originStripeOverride.address],
-        // -1 heisst "zufaellig" - als Zahl waere das ein Raetsel.
+        // -1 heisst "zufaellig" - als Zahl waere das ein Raetsel. Steht hier
+        // ein Stripe, hat er Vorrang vor dem Baum-Filter darueber (siehe
+        // OriginSequencer.advanceOrigin).
         (v) => (Math.round(v) < 0 ? 'zufall' : 'S' + Math.round(v))).element);
     }
     card.appendChild(mini);
