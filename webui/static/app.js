@@ -1451,14 +1451,14 @@ function buildTabs(data) {
     }
     buildScParams(scPrimary, panel, (data.scParams || {}).port, true);
 
-    // 3. Alles Uebrige eingeklappt -- dasselbe <details>-Muster wie die
-    //    bisherige Advanced-Gruppe.
+    // 3. Alles Uebrige. Normalerweise eingeklappt -- dasselbe
+    //    <details>-Muster wie die bisherige Advanced-Gruppe. Ausnahme: der
+    //    Server markiert einen Tab als "expanded" (Farben-Tab). Dort gibt es
+    //    keine kuratierte Auswahl, weil Farbkarten keine eigene Adresse
+    //    tragen -- der ganze Tab bestuende sonst aus einem zugeklappten
+    //    <details>.
     const hasRest = (tab.groups || []).length || scRest.length;
     if (hasRest) {
-      const details = document.createElement('details');
-      const summary = document.createElement('summary');
-      summary.textContent = 'Erweitert';
-      details.appendChild(summary);
       const body = document.createElement('div');
       body.className = 'tab-extra';
       (tab.groups || []).forEach((group) => {
@@ -1466,8 +1466,16 @@ function buildTabs(data) {
       });
       buildScParams(scRest, body, (data.scParams || {}).port,
         scPrimary.length === 0);
-      details.appendChild(body);
-      panel.appendChild(details);
+      if (tab.expanded) {
+        panel.appendChild(body);
+      } else {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = 'Erweitert';
+        details.appendChild(summary);
+        details.appendChild(body);
+        panel.appendChild(details);
+      }
     }
 
     tabPanelsEl.appendChild(panel);

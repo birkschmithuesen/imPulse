@@ -338,6 +338,7 @@ TAB_SOUND = "sound"
 TAB_SPAWN = "spawn"
 TAB_NOTES = "noten"
 TAB_PHYSICS = "physik"
+TAB_COLORS = "farben"
 
 TAB_TITLES: List[Tuple[str, str]] = [
     (TAB_MIXER, "Mixer"),
@@ -345,6 +346,10 @@ TAB_TITLES: List[Tuple[str, str]] = [
     (TAB_SPAWN, "Spawn-Verhalten"),
     (TAB_NOTES, "Noten-Verhalten"),
     (TAB_PHYSICS, "Impuls-Verhalten"),
+    # Haengt hinten an: die Kern-Reihenfolge der fuenf Themen-Tabs bleibt,
+    # wie sie ist. Farbe ist Gestaltung und wird am Stueck angefasst, nicht
+    # zwischen Physik-Reglern verstreut.
+    (TAB_COLORS, "Farben"),
 ]
 
 # Reihenfolge zaehlt: die erste passende Regel gewinnt.
@@ -353,12 +358,27 @@ TAB_RULES: List[Tuple[str, str]] = [
     ("Master/", TAB_MIXER),
     # speedQuantize VOR /net/impulse/, sonst faengt die Physik-Regel es ab.
     ("/net/impulse/speedQuantize/", TAB_NOTES),
+    # Dieselbe Falle bei den Farben: /net/impulse/color/* wuerde sonst von
+    # der Physik-Regel eingesammelt, /nodes/colors/* von der Node-Regel.
+    # fadeOut steht bewusst dabei -- es ist der Nachleucht-Farbfaktor des
+    # Impulses und teilt sich mit color/* ohnehin schon eine Gruppe
+    # (SPLIT_GROUP_PREFIXES); eine Gruppe geht als GANZES in einen Tab.
+    ("/net/impulse/color/", TAB_COLORS),
+    ("/net/impulse/fadeOut/", TAB_COLORS),
+    ("/nodes/colors/", TAB_COLORS),
     ("/net/sequencer/", TAB_SPAWN),
     ("/net/randomSpawn/", TAB_SPAWN),
     ("/net/activate", TAB_SPAWN),
     ("/net/impulse/", TAB_PHYSICS),
     ("/nodes/", TAB_PHYSICS),
 ]
+
+# Tabs, deren Gruppen direkt sichtbar sind statt hinter "Erweitert".
+# Gedacht fuer Tabs ohne kuratierte Auswahl: eine Farbkarte traegt keine
+# eigene Adresse (kind == "color", drei Adressen darunter), TAB_PRIMARY kann
+# sie also gar nicht nach oben holen -- der Farben-Tab bestuende sonst
+# ausschliesslich aus einem zugeklappten <details>.
+TAB_EXPANDED = {TAB_COLORS}
 
 # Kuratierte SC-Parameter je Tab (Namen, nicht Adressen). Der Rest desselben
 # Tabs landet im Erweitert-Bereich.
@@ -504,6 +524,7 @@ def build_tabs(groups: List[Dict[str, Any]],
             "primary": [],
             "groups": [],
             "scParams": [],
+            "expanded": tab_id in TAB_EXPANDED,
         }
 
     # Spezial-Sektionen
@@ -511,6 +532,10 @@ def build_tabs(groups: List[Dict[str, Any]],
         by_tab[TAB_SPAWN]["sections"].append("sequencer")
     if speed:
         by_tab[TAB_NOTES]["sections"].append("speedClasses")
+    # Die Palette-Leiste braucht keine Adresse aus remoteSettings.txt und ist
+    # deshalb bedingungslos da -- anders als Sequencer und Speed-Klassen, die
+    # ohne ihre Parameter nicht gebaut werden koennen.
+    by_tab[TAB_COLORS]["sections"].append("palette")
 
     # SC-Parameter je Eintrag, nicht je Gruppe: masterVolume gehoert in den
     # Mixer, brightness ins Sound Design, obwohl beide "Master"/"Glocke"
@@ -532,7 +557,20 @@ def build_tabs(groups: List[Dict[str, Any]],
     # Generische Gruppen
     for group in groups:
         controls = group.get("controls") or []
-        addresses = [c.get("address") for c in controls if c.get("address")]
+        addresses = []
+        for control in controls:
+            if control.get("address"):
+                addresses.append(control["address"])
+            elif control.get("kind") == "color" and control.get("base"):
+                # Eine Farbkarte traegt KEINE eigene Adresse, sondern drei
+                # darunter (<basis>/Hue|Sat|Bright). Ohne diesen Zweig hat
+                # eine Gruppe aus lauter Farbkarten gar keine Adresse, faellt
+                # durch das "if not addresses: continue" und landet in KEINEM
+                # Tab -- genau das ist mit /nodes/colors passiert: 18 Werte,
+                # sechs Karten, seit dem Tab-Umbau im UI unerreichbar, ohne
+                # Fehlermeldung. Der Test haelt es fest.
+                addresses.append("%s/%s" % (control["base"],
+                                            COLOR_COMPONENTS[0]))
         if not addresses:
             continue
         tab_id = tab_for_address(addresses[0])

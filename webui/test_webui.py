@@ -778,6 +778,15 @@ class TabLayoutTest(unittest.TestCase):
             "float\t/net/impulse/splitSpeedJitter\tx\t0\t0\t1",
             "float\t/net/impulse/splitLifetimeJitter\tx\t0\t0\t1",
             "float\t/net/impulse/color/r\tx\t1\t0\t1",
+            "float\t/net/impulse/color/g\tx\t1\t0\t1",
+            "float\t/net/impulse/color/b\tx\t1\t0\t1",
+            "float\t/net/impulse/color/gamma\tx\t1\t0\t4",
+            "int\t/net/impulse/color/useRemoteCol\tx\t0\t0\t1",
+            "float\t/net/impulse/fadeOut/r\tx\t0.97\t0\t1",
+            "float\t/nodes/colors/central/fired/Hue\tx\t0\t0\t1",
+            "float\t/nodes/colors/central/fired/Sat\tx\t1\t0\t1",
+            "float\t/nodes/colors/central/fired/Bright\tx\t1\t0\t1",
+            "float\t/nodes/radius/central\tx\t2\t0\t20",
             "float\t/net/impulse/speed/randomize/period\tx\t30\t1\t300",
             "int\t/net/impulse/oscMaxCount\tx\t32\t0\t256",
             "int\t/net/randomSpawn/enabled\tx\t1\t0\t1",
@@ -805,10 +814,62 @@ class TabLayoutTest(unittest.TestCase):
         store.refresh(force=True)
         return store.snapshot()
 
-    def test_five_tabs_in_the_briefed_order(self):
+    def test_six_tabs_in_the_briefed_order(self):
         tabs = self._snapshot()["tabs"]
+        # Die fuenf Kern-Tabs behalten ihre Reihenfolge, "farben" haengt
+        # hinten an -- die Struktur aus dem Fuenf-Tab-Umbau wird nicht
+        # umsortiert, nur ergaenzt.
         self.assertEqual([t["id"] for t in tabs],
-                         ["mixer", "sound", "spawn", "noten", "physik"])
+                         ["mixer", "sound", "spawn", "noten", "physik",
+                          "farben"])
+
+    def test_colour_addresses_land_in_the_colour_tab(self):
+        for address in ("/net/impulse/color/r",
+                        "/net/impulse/color/gamma",
+                        "/net/impulse/color/useRemoteCol",
+                        "/net/impulse/fadeOut/r",
+                        "/nodes/colors/central/fired/Hue",
+                        "/nodes/colors/outer/waiting/Bright"):
+            self.assertEqual(server.tab_for_address(address),
+                             server.TAB_COLORS, address)
+
+    def test_non_colour_impulse_and_node_addresses_stay_in_physics(self):
+        # Die Farb-Regeln stehen VOR den allgemeinen -- greifen sie zu breit,
+        # leert sich der Physik-Tab, ohne dass irgendwo ein Fehler entsteht.
+        for address in ("/net/impulse/speed", "/net/impulse/lifetime",
+                        "/net/impulse/splitSpeedJitter",
+                        "/nodes/radius/central", "/nodes/times/recover"):
+            self.assertEqual(server.tab_for_address(address),
+                             server.TAB_PHYSICS, address)
+
+    def test_colour_tab_shows_its_groups_without_the_details_fold(self):
+        """Der Farben-Tab hat keine kuratierte Auswahl.
+
+        Farbkarten tragen keine eigene Adresse (kind == "color"), TAB_PRIMARY
+        kann sie also nicht nach oben holen. Ohne das expanded-Flag stuende
+        der ganze Tab eingeklappt hinter "Erweitert" -- ein Tab, dessen
+        Inhalt man erst aufklappen muss.
+        """
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        self.assertTrue(tabs[server.TAB_COLORS]["expanded"])
+        self.assertFalse(tabs[server.TAB_PHYSICS]["expanded"])
+
+    def test_colour_tab_actually_carries_the_colour_controls(self):
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        colour = tabs[server.TAB_COLORS]
+        bases = [c["base"] for group in colour["groups"]
+                 for c in group["controls"] if c.get("kind") == "color"]
+        self.assertIn("/nodes/colors/central/fired", bases)
+        addresses = [c.get("address") for group in colour["groups"]
+                     for c in group["controls"]]
+        self.assertIn("/net/impulse/color/gamma", addresses)
+
+    def test_palette_section_sits_in_the_colour_tab(self):
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        self.assertIn("palette", tabs[server.TAB_COLORS]["sections"])
+        for tab_id, tab in tabs.items():
+            if tab_id != server.TAB_COLORS:
+                self.assertNotIn("palette", tab["sections"], tab_id)
 
     def test_every_control_lands_in_exactly_one_tab(self):
         """Der eigentliche Zweck: kein Regler faellt beim Umbau heraus."""
@@ -849,10 +910,35 @@ class TabLayoutTest(unittest.TestCase):
         self.assertEqual(
             server.tab_for_address("/net/impulse/speedQuantize/weight/8x"), "noten")
         self.assertEqual(server.tab_for_address("/net/impulse/speed"), "physik")
-        self.assertEqual(server.tab_for_address("/net/impulse/color/r"), "physik")
+        # Farbe gehoert zu den Farben, NICHT zur Physik - dieselbe
+        # Reihenfolge-Falle wie bei speedQuantize.
+        self.assertEqual(server.tab_for_address("/net/impulse/color/r"), "farben")
         self.assertEqual(server.tab_for_address("/nodes/times/recover"), "physik")
         # Unbekanntes verschwindet nicht, es landet sichtbar in der Physik
         self.assertEqual(server.tab_for_address("/etwas/ganz/neues"), "physik")
+
+    def test_no_group_falls_out_of_every_tab(self):
+        """Regression: eine Gruppe aus lauter Farbkarten war unerreichbar.
+
+        build_tabs() ordnet eine Gruppe ueber die Adresse ihres ersten
+        Reglers zu. Eine Farbkarte traegt aber keine eigene Adresse, sondern
+        drei darunter -- die Gruppe /nodes/colors (18 Werte, sechs Karten)
+        hatte damit gar keine und fiel aus JEDEM Tab heraus. Kein Fehler,
+        kein Symptom, die Regler waren schlicht nicht da.
+        """
+        snapshot = self._snapshot()
+        primary = {c["address"] for tab in snapshot["tabs"]
+                   for c in tab["primary"]}
+        in_tabs = {group["key"] for tab in snapshot["tabs"]
+                   for group in tab["groups"]}
+        for group in snapshot["groups"]:
+            # Gruppen, deren Regler restlos in die kuratierte Auswahl
+            # gewandert sind, duerfen fehlen -- die stehen ja oben im Tab.
+            remaining = [c for c in group["controls"]
+                         if c.get("address") not in primary]
+            if remaining:
+                self.assertIn(group["key"], in_tabs,
+                              "Gruppe %s steht in keinem Tab" % group["key"])
 
     def test_primary_controls_are_not_repeated_in_the_groups(self):
         for tab in self._snapshot()["tabs"]:
