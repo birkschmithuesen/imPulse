@@ -100,6 +100,15 @@ PresetManager presetManager;
 RemoteControlledIntParameter presetSchedulerEnabled;
 RemoteControlledFloatParameter presetSchedulerInterval;
 
+// Topologiebasierte Melodiekomposition: leitet aus der Kreuzungsliste einen
+// Graphen ab und weist jedem Knoten eine Skalenstufe relativ zu seinem
+// BFS-Elternknoten zu. Berechnet wird nur auf /net/melody/recompute, beim
+// Start wird die Datei data/nodeMelody_<modus>.txt nur GELESEN - die
+// Zuordnung soll reproduzierbar sein, nicht jeden Abend neu gewuerfelt.
+// Gelesen wird sie von der Klangseite; imPulse schreibt sie nur.
+MelodyGraph melodyGraph;
+MelodyManager melodyManager;
+
 // Das Sicherheitsventil der Testbilder steht seit 2026-07-31 nicht mehr hier,
 // sondern als TestPatterns.PATTERN_LEVEL in den Mustern selbst - siehe die
 // Begruendung dort. Der Kalibriermodus laeuft dadurch auf demselben Fader wie
@@ -226,6 +235,15 @@ void setup() {
   presetSchedulerInterval = new RemoteControlledFloatParameter("/preset/scheduler/interval", 600f, 5f, 3600f);
   presetManager = new PresetManager(dataPath("presets"), oscP5, oscOutput);
 
+  // Der Graph haengt an derselben Kreuzungsliste wie die Node-Objekte. Er
+  // wird hier gebaut, nachdem crossingStore geladen ist, und NICHT bei jedem
+  // R in der Kalibrierung neu - eine Zuordnung, die zur alten Topologie
+  // gehoert, bleibt gueltig, bis jemand ausdruecklich neu rechnet. Nach einer
+  // Kalibriersitzung meldet der Startbericht die abweichende Knotenzahl.
+  melodyGraph = MelodyGraph.fromCrossings(crossingStore.crossings(), numLedsPerStripe);
+  melodyManager = new MelodyManager(dataPath(""), melodyGraph, oscP5, oscOutput);
+  System.out.println(melodyManager.startupReport());
+
   // Start-Preset: Sketch-Argument hat Vorrang, sonst die Umgebungsvariable.
   // Beide Wege, weil processing-java die Weitergabe von Argumenten nicht
   // zusichert, eine Umgebungsvariable aus einer .bat dagegen immer geht.
@@ -254,6 +272,9 @@ void draw() {
   presetManager.update(System.currentTimeMillis(),
       presetSchedulerEnabled.getValue() != 0,
       presetSchedulerInterval.getValue());
+  // Rechnet nur, wenn /net/melody/recompute eingetroffen ist - sonst kostet
+  // der Aufruf einen Vergleich.
+  melodyManager.update();
   //createRandomPipeTrigger();  // for test purpose create random activations (instead of hitting a pipe)
   if (calibrationMode) {
     nodeCalibration.update();

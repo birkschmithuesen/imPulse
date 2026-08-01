@@ -137,6 +137,33 @@ public class PresetStoreTest {
     }
     Check.that("keine Scheduler-Adresse im Snapshot", !schedulerFound);
 
+    // ---- Die Melodie-Parameter sind ebenfalls Transport, nicht Inhalt ----
+    // Sie verstellen keinen Klangwert, sondern beschreiben, wie die Zuordnung
+    // beim naechsten /net/melody/recompute gerechnet wird. Ein Preset kann
+    // zwischen "alte Zuordnung" und "neue Zuordnung" nicht ueberblenden.
+    List<PresetTarget> melodyTargets = new ArrayList<PresetTarget>();
+    melodyTargets.add(new FakeParameter("float", "/master/level", 0.1f, 0f, 1f));
+    String[] melodyAddresses = {
+        "/net/melody/mode", "/net/melody/startNode",
+        "/net/melody/rootMidiNote", "/net/melody/numOctaves" };
+    for (int i = 0; i < melodyAddresses.length; i++) {
+      melodyTargets.add(new FakeParameter("int", melodyAddresses[i], 1f, 0f, 100f));
+    }
+    List<String[]> melodySnapshot = PresetStore.snapshot(melodyTargets);
+    Check.eq("nur der Nicht-Melodie-Parameter im Snapshot", 1, melodySnapshot.size());
+    for (int i = 0; i < melodySnapshot.size(); i++) {
+      Check.that("keine Melodie-Adresse im Snapshot",
+          !melodySnapshot.get(i)[PresetStore.COL_ADDRESS].startsWith("/net/melody/"));
+    }
+    // Und beim Laden werden sie uebergangen statt angewendet - ein
+    // handkopiertes remoteSettings.txt darf die Zuordnung nicht verstellen.
+    List<String[]> withMelody = new ArrayList<String[]>();
+    withMelody.add(new String[] { "int", "/net/melody/startNode", "d", "42", "0", "100" });
+    PresetApplyReport melodyReport = PresetStore.apply(withMelody, melodyTargets);
+    Check.eq("Melodie-Adresse wird nicht angewendet", 0, melodyReport.applied);
+    Check.that("und nicht als unbekannt gemeldet",
+        melodyReport.unknown.indexOf("/net/melody/startNode") < 0);
+
     // ---- Anwenden ----
     List<String[]> toApply = new ArrayList<String[]>();
     toApply.add(new String[] { "float", "/master/level", "d", "0.7", "0", "1" });
