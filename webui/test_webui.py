@@ -1284,6 +1284,22 @@ class AddressLabelTest(unittest.TestCase):
         self.assertEqual(unlabelled, [],
                          "ohne sprechenden Titel im UI: %s" % unlabelled)
 
+    def test_group_headings_are_not_raw_address_prefixes(self):
+        """Eine Ueberschrift "/net/randomSpawn" ist derselbe Einwand wie ein
+        Regler namens "nodeDeadTime": ein Verweis, keine Beschriftung."""
+        path = os.path.join(server.REPO_ROOT, "data", "presets", "random1.txt")
+        if not os.path.exists(path):
+            self.skipTest("data/presets/random1.txt fehlt")
+        store = ParameterStore(path=path)
+        store.refresh(force=True)
+        raw = []
+        for tab in store.snapshot()["tabs"]:
+            for group in tab["groups"]:
+                if group["title"].startswith("/"):
+                    raw.append(group["key"])
+        self.assertEqual(raw, [],
+                         "Gruppe ohne Klartext-Titel: %s" % raw)
+
     def test_sequencer_legend_explains_the_compact_track_sliders(self):
         """Die Track-Karten sind kompakt beschriftet ("Wdh.") -- die Erklaerung
         steht einmal darunter, nicht 36-mal in den Karten."""

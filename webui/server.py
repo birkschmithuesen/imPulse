@@ -1861,11 +1861,26 @@ def group_sort_key(key: str) -> Tuple[int, str]:
         return (len(GROUP_ORDER), key.lower())
 
 
-# Menschenlesbare Titel fuer Gruppen, die keinen sprechenden Adress-Praefix
-# als Titel hergeben (z.B. "net/impulse/color" statt "/net/impulse/color").
+# Menschenlesbare Titel fuer die Gruppen-Ueberschriften. Ohne Eintrag steht
+# dort der rohe Adress-Praefix ("/net/randomSpawn") -- derselbe Einwand wie
+# bei den Reglern selbst: das ist ein Hinweis darauf, wo man nachschlagen
+# muesste, keine Ueberschrift. Der Praefix ist an der Adresszeile jedes
+# Reglers darunter weiterhin abzulesen.
 GROUP_TITLE_OVERRIDES = {
+    "Master": "Ebenen und Nachleuchten",
+    "master": "Gesamt-Helligkeit",
+    "net/impulse": "Impuls-Physik",
     "net/impulse/color": "Impuls-Farbe",
     "net/impulse/randomize": "Impuls-Randomizer (Sinus)",
+    "net/impulse/split": "Split-Verhalten",
+    "net/randomSpawn": "Zufalls-Spawns",
+    "net/sequencer": "Sequencer",
+    "net": "Direkt-Trigger",
+    "nodes": "Knoten",
+    "nodes/colors": "Knoten-Farben",
+    "nodes/radius": "Knoten-Groessen",
+    "nodes/times": "Knoten-Zeiten",
+    "preset/scheduler": "Preset-Wechsler",
 }
 
 
