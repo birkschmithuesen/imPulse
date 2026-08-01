@@ -1035,5 +1035,192 @@ class ScParamTest(unittest.TestCase):
                          "in der .scd registriert, fehlt aber in SC_PARAMS")
 
 
+class PaletteFileTest(unittest.TestCase):
+    """data/colorPalettes.txt: Parser, Schreiber, Validierung.
+
+    Dieselben Regeln wie bei data/stripeTrees.txt: von Hand editierbar,
+    Kommentare mit '#', und bei doppeltem Namen gewinnt die LETZTE Zeile --
+    die natuerliche Handkorrektur ist eine angehaengte Zeile am Ende.
+    """
+
+    def test_parses_name_and_three_components(self):
+        entries, warnings = server.parse_palette(
+            "warm\t0.08\t0.9\t1.0\nkalt\t0.55\t0.7\t0.8\n")
+        self.assertEqual(warnings, [])
+        self.assertEqual([e["name"] for e in entries], ["warm", "kalt"])
+        self.assertAlmostEqual(entries[0]["hue"], 0.08)
+        self.assertAlmostEqual(entries[1]["bright"], 0.8)
+
+    def test_comments_and_blank_lines_are_skipped_without_warning(self):
+        entries, warnings = server.parse_palette(
+            "# Kopf\n\n   \nwarm\t0.08\t0.9\t1.0\n# Ende\n")
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(warnings, [])
+
+    def test_broken_line_is_reported_not_fatal(self):
+        entries, warnings = server.parse_palette(
+            "warm\t0.08\t0.9\t1.0\nkaputt\t0.5\nnochwas\ta\tb\tc\n")
+        self.assertEqual([e["name"] for e in entries], ["warm"])
+        self.assertEqual(len(warnings), 2)
+
+    def test_values_are_clamped_to_zero_one(self):
+        entries, _warnings = server.parse_palette("weit\t-3\t7\t0.5\n")
+        self.assertEqual(entries[0]["hue"], 0.0)
+        self.assertEqual(entries[0]["sat"], 1.0)
+
+    def test_duplicate_name_last_line_wins(self):
+        # Wie StripeTreeStore: die Handkorrektur wird angehaengt, "erste
+        # gewinnt" wuerde sie still verschlucken. Gemeldet wird sie trotzdem.
+        entries, warnings = server.parse_palette(
+            "warm\t0.08\t0.9\t1.0\nwarm\t0.10\t0.5\t0.5\n")
+        self.assertEqual(len(entries), 1)
+        self.assertAlmostEqual(entries[0]["hue"], 0.10)
+        self.assertEqual(len(warnings), 1)
+
+    def test_round_trip_through_the_file_format(self):
+        entries = [{"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0},
+                   {"name": "kalt", "hue": 0.55, "sat": 0.7, "bright": 0.8}]
+        again, warnings = server.parse_palette(server.format_palette(entries))
+        self.assertEqual(warnings, [])
+        self.assertEqual(again, entries)
+
+    def test_written_numbers_use_a_decimal_point(self):
+        # Dieselbe Falle wie Locale.US in LedAnchorStore: ein Komma machte
+        # die Datei fuer den eigenen Parser unlesbar.
+        text = server.format_palette(
+            [{"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0}])
+        body = [l for l in text.splitlines() if l and not l.startswith("#")]
+        self.assertIn(".", body[0])
+        self.assertNotIn(",", body[0])
+
+    def test_columns_are_separated_by_tabs(self):
+        text = server.format_palette(
+            [{"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0}])
+        body = [l for l in text.splitlines() if l and not l.startswith("#")]
+        self.assertEqual(len(body[0].split("\t")), 4)
+
+    def test_missing_file_is_an_empty_palette_not_an_error(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        entries, warnings = server.load_palette(
+            os.path.join(directory, "gibtsnicht.txt"))
+        self.assertEqual(entries, [])
+        self.assertEqual(warnings, [])
+
+    def test_save_then_load_returns_the_same_palette(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, server.PALETTE_FILENAME)
+        entries = [{"name": "warm", "hue": 0.08, "sat": 0.9, "bright": 1.0}]
+        server.save_palette(path, entries)
+        loaded, warnings = server.load_palette(path)
+        self.assertEqual(loaded, entries)
+        self.assertEqual(warnings, [])
+
+    def test_save_replaces_instead_of_appending(self):
+        # Kein Anhaengen, genau wie NodeCrossingStore.save(): zweimal
+        # speichern darf die Palette nicht verdoppeln.
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, server.PALETTE_FILENAME)
+        server.save_palette(path, [{"name": "a", "hue": 0.1, "sat": 1,
+                                    "bright": 1}])
+        server.save_palette(path, [{"name": "b", "hue": 0.2, "sat": 1,
+                                    "bright": 1}])
+        loaded, _warnings = server.load_palette(path)
+        self.assertEqual([e["name"] for e in loaded], ["b"])
+
+    def test_save_leaves_no_temp_file_behind(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, server.PALETTE_FILENAME)
+        server.save_palette(path, [])
+        self.assertEqual(os.listdir(directory), [server.PALETTE_FILENAME])
+
+    def test_validate_rejects_a_non_list(self):
+        entries, error = server.validate_palette({"name": "warm"})
+        self.assertIsNone(entries)
+        self.assertIsNotNone(error)
+
+    def test_validate_rejects_an_unnamed_entry(self):
+        entries, error = server.validate_palette(
+            [{"name": "  ", "hue": 0.1, "sat": 1, "bright": 1}])
+        self.assertIsNone(entries)
+        self.assertIn("Namen", error)
+
+    def test_validate_rejects_characters_that_would_break_the_file(self):
+        for name in ("wa\trm", "wa\nrm", "#warm"):
+            entries, error = server.validate_palette(
+                [{"name": name, "hue": 0.1, "sat": 1, "bright": 1}])
+            self.assertIsNone(entries, name)
+            self.assertIsNotNone(error, name)
+
+    def test_validate_rejects_nan_and_infinity(self):
+        for bad in (float("nan"), float("inf")):
+            entries, error = server.validate_palette(
+                [{"name": "warm", "hue": bad, "sat": 1, "bright": 1}])
+            self.assertIsNone(entries)
+            self.assertIsNotNone(error)
+
+    def test_validate_rejects_a_missing_component(self):
+        entries, error = server.validate_palette(
+            [{"name": "warm", "hue": 0.1, "sat": 1}])
+        self.assertIsNone(entries)
+        self.assertIn("bright", error)
+
+    def test_validate_rejects_a_duplicate_name(self):
+        entries, error = server.validate_palette(
+            [{"name": "warm", "hue": 0.1, "sat": 1, "bright": 1},
+             {"name": "warm", "hue": 0.2, "sat": 1, "bright": 1}])
+        self.assertIsNone(entries)
+        self.assertIsNotNone(error)
+
+    def test_validate_rejects_more_than_the_maximum(self):
+        raw = [{"name": "f%d" % i, "hue": 0.1, "sat": 1, "bright": 1}
+               for i in range(server.PALETTE_MAX_ENTRIES + 1)]
+        entries, error = server.validate_palette(raw)
+        self.assertIsNone(entries)
+        self.assertIsNotNone(error)
+
+    def test_validate_accepts_exactly_the_maximum(self):
+        raw = [{"name": "f%d" % i, "hue": 0.1, "sat": 1, "bright": 1}
+               for i in range(server.PALETTE_MAX_ENTRIES)]
+        entries, error = server.validate_palette(raw)
+        self.assertIsNone(error)
+        self.assertEqual(len(entries), server.PALETTE_MAX_ENTRIES)
+
+    def test_validate_clamps_and_normalises(self):
+        entries, error = server.validate_palette(
+            [{"name": " warm ", "hue": 2, "sat": -1, "bright": "0.5"}])
+        self.assertIsNone(error)
+        self.assertEqual(entries, [{"name": "warm", "hue": 1.0, "sat": 0.0,
+                                    "bright": 0.5}])
+
+    def test_empty_list_is_allowed(self):
+        # Die letzte Farbe zu entfernen muss moeglich sein.
+        entries, error = server.validate_palette([])
+        self.assertIsNone(error)
+        self.assertEqual(entries, [])
+
+    def test_default_path_sits_next_to_the_settings_file(self):
+        path = server.default_palette_path(
+            os.path.join("a", "data", "remoteSettings.txt"))
+        self.assertEqual(os.path.basename(path), server.PALETTE_FILENAME)
+        self.assertEqual(os.path.basename(os.path.dirname(path)), "data")
+
+    def test_the_repo_file_parses_without_warnings(self):
+        """Gegenprobe an der echten data/colorPalettes.txt."""
+        path = os.path.join(server.REPO_ROOT, "data", server.PALETTE_FILENAME)
+        if not os.path.exists(path):
+            self.skipTest("data/colorPalettes.txt fehlt")
+        entries, warnings = server.load_palette(path)
+        self.assertEqual(warnings, [])
+        self.assertLessEqual(len(entries), server.PALETTE_MAX_ENTRIES)
+        for entry in entries:
+            for key in server.PALETTE_COMPONENTS:
+                self.assertGreaterEqual(entry[key], 0.0)
+                self.assertLessEqual(entry[key], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

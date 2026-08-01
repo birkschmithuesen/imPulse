@@ -974,6 +974,201 @@ def wait_for_preset_file(path: str, previous_mtime: Optional[float],
         time.sleep(step)
 
 
+# ---------------------------------------------------------------------------
+# Farbpalette
+#
+# Eine kleine Sammlung wiederverwendbarer Farben, die an JEDER
+# Farbwaehler-Karte per Klick anwendbar ist. Sie liegt server-seitig in
+# data/colorPalettes.txt und nicht im localStorage des Browsers: sie soll
+# einen Neustart ueberleben und auf jedem Geraet dieselbe sein -- genau das
+# meint "eine Palette, die von allen gewaehlt werden kann".
+#
+# Format wie data/stripeTrees.txt: Tab-getrennte Spalten, '#' leitet einen
+# Kommentar ein, von Hand editierbar. Vier Spalten:
+#
+#     name<TAB>hue<TAB>sat<TAB>bright     (die drei Werte in 0..1, wie LedColor)
+#
+# Bei doppeltem Namen gewinnt die LETZTE Zeile -- dieselbe Regel und derselbe
+# Grund wie bei StripeTreeStore: die natuerliche Handkorrektur ist eine
+# angehaengte Zeile am Ende, "erste gewinnt" wuerde sie still verschlucken.
+#
+# Ein Preset ist das hier ausdruecklich NICHT: die Palette haelt nur
+# Farbwerte, nicht welche Karte welche Farbe traegt. Was wo steht, ist
+# Aufgabe der Presets, die es schon gibt.
+# ---------------------------------------------------------------------------
+
+PALETTE_FILENAME = "colorPalettes.txt"
+PALETTE_COMPONENTS = ("hue", "sat", "bright")
+# Deckel gegen eine Palette, die sich unbemerkt aufblaeht: die Swatch-Reihe
+# steht unter JEDER Farbkarte, ab ein paar Dutzend Farben ist sie hoeher als
+# die Karte selbst.
+PALETTE_MAX_ENTRIES = 24
+PALETTE_NAME_MAX_LENGTH = 32
+
+PALETTE_HEADER = (
+    "# Farbpalette fuer das Web-UI (Sektion \"Farben\").\n"
+    "#\n"
+    "# Format: name<TAB>hue<TAB>sat<TAB>bright -- die drei Werte in 0..1.\n"
+    "# '#' leitet einen Kommentar ein. Bei doppeltem Namen gewinnt die\n"
+    "# LETZTE Zeile (eine angehaengte Handkorrektur schlaegt den alten\n"
+    "# Eintrag), genau wie in data/stripeTrees.txt.\n"
+    "#\n"
+    "# Wird vom Web-UI geschrieben und ist von Hand editierbar.\n")
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def parse_palette(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Parst den Inhalt von colorPalettes.txt.
+
+    Kaputte Zeilen werden gemeldet und uebersprungen, nicht als Abbruch
+    weitergereicht -- dasselbe Verhalten wie parse_settings() und wie die
+    Store-Klassen auf der Java-Seite: eine einzelne unerwartete Zeile soll
+    das UI nicht lahmlegen.
+    """
+    entries: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    by_name: Dict[str, int] = {}
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = raw.rstrip("\r\n").split("\t")
+        if len(fields) < 4:
+            warnings.append("Zeile %d uebersprungen (%d Felder statt 4)"
+                            % (lineno, len(fields)))
+            continue
+        name = fields[0].strip()
+        if not name:
+            warnings.append("Zeile %d uebersprungen (leerer Name)" % lineno)
+            continue
+        try:
+            values = [float(fields[i + 1]) for i in range(3)]
+        except ValueError:
+            warnings.append("Zeile %d uebersprungen (unlesbare Zahl)" % lineno)
+            continue
+        if any(v != v for v in values):
+            warnings.append("Zeile %d uebersprungen (keine Zahl)" % lineno)
+            continue
+        entry: Dict[str, Any] = {"name": name[:PALETTE_NAME_MAX_LENGTH]}
+        for key, value in zip(PALETTE_COMPONENTS, values):
+            entry[key] = _clamp01(value)
+        if entry["name"] in by_name:
+            warnings.append("Name %r in Zeile %d ersetzt den frueheren Eintrag"
+                            % (entry["name"], lineno))
+            entries[by_name[entry["name"]]] = entry
+        else:
+            by_name[entry["name"]] = len(entries)
+            entries.append(entry)
+    return entries, warnings
+
+
+def format_palette(entries: List[Dict[str, Any]]) -> str:
+    """Schreibt die Palette im Dateiformat, mit Kopfkommentar."""
+    parts = [PALETTE_HEADER]
+    for entry in entries:
+        # "%.4f" schreibt in Python immer mit Punkt, unabhaengig von der
+        # Systemsprache -- dieselbe Anforderung wie Locale.US auf der
+        # Java-Seite, hier ohne eigenes Zutun erfuellt. Ein Test haelt es
+        # fest, damit es niemand versehentlich aufgibt.
+        parts.append("%s\t%.4f\t%.4f\t%.4f\n"
+                     % (entry["name"], entry["hue"], entry["sat"],
+                        entry["bright"]))
+    return "".join(parts)
+
+
+def load_palette(path: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Liest die Palette. Fehlende Datei = leere Palette, kein Fehler.
+
+    Die Datei entsteht erst beim ersten Speichern -- ein UI, das ohne sie
+    einen Fehler zeigt, waere im Auslieferungszustand kaputt.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return [], []
+    except OSError as exc:
+        return [], ["Palette nicht lesbar: %s" % exc]
+    return parse_palette(text)
+
+
+def save_palette(path: str, entries: List[Dict[str, Any]]) -> None:
+    """Schreibt die Palette atomar (Temp-Datei + Rename).
+
+    Dasselbe Muster wie NodeCrossingStore/LedAnchorStore auf der Java-Seite:
+    ein abgebrochener Schreibvorgang darf keine halbe Datei hinterlassen.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(format_palette(entries))
+    os.replace(temp, path)
+
+
+def validate_palette(raw: Any) -> Tuple[Optional[List[Dict[str, Any]]],
+                                        Optional[str]]:
+    """Prueft und normalisiert eine vom Browser geschickte Palette.
+
+    Rueckgabe: (normalisierte Liste, None) oder (None, Fehlermeldung). Eine
+    leere Liste ist gueltig -- die letzte Farbe zu entfernen muss moeglich
+    sein.
+
+    Anders als beim Parsen wird hier NICHT stillschweigend uebersprungen: was
+    aus dem Browser kommt, ist keine handgepflegte Datei, sondern das
+    Ergebnis eines Klicks. Ein still verschluckter Eintrag saehe im UI aus
+    wie ein Speichern, das funktioniert hat.
+    """
+    if not isinstance(raw, list):
+        return None, "Palette ist keine Liste"
+    if len(raw) > PALETTE_MAX_ENTRIES:
+        return None, ("Hoechstens %d Farben in der Palette"
+                      % PALETTE_MAX_ENTRIES)
+    entries: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            return None, "Eintrag %d ist kein Objekt" % index
+        name = item.get("name")
+        name = name.strip() if isinstance(name, str) else ""
+        if not name:
+            return None, "Eintrag %d hat keinen Namen" % index
+        if len(name) > PALETTE_NAME_MAX_LENGTH:
+            return None, ("Name in Eintrag %d ist laenger als %d Zeichen"
+                          % (index, PALETTE_NAME_MAX_LENGTH))
+        # Ein Tabulator im Namen zerlegte die Zeile beim naechsten Lesen in
+        # fuenf Felder, ein Zeilenumbruch machte zwei Zeilen daraus, ein
+        # fuehrendes '#' einen Kommentar: die Datei waere still kaputt.
+        if ("\t" in name or "\n" in name or "\r" in name
+                or name.startswith("#")):
+            return None, ("Name in Eintrag %d enthaelt ein Zeichen, das die "
+                          "Datei zerlegen wuerde (Tabulator, Zeilenumbruch "
+                          "oder fuehrendes #)" % index)
+        if name in seen:
+            return None, "Name %r kommt zweimal vor" % name
+        seen.add(name)
+        entry: Dict[str, Any] = {"name": name}
+        for key in PALETTE_COMPONENTS:
+            try:
+                value = float(item.get(key))
+            except (TypeError, ValueError):
+                return None, "%s in Eintrag %d ist keine Zahl" % (key, index)
+            if value != value or value in (float("inf"), float("-inf")):
+                return None, "%s in Eintrag %d ist keine Zahl" % (key, index)
+            entry[key] = _clamp01(value)
+        entries.append(entry)
+    return entries, None
+
+
+def default_palette_path(settings_path: str) -> str:
+    """Palette neben der Parameterdatei: <dir von settings>/colorPalettes.txt."""
+    return os.path.join(os.path.dirname(os.path.abspath(settings_path)),
+                        PALETTE_FILENAME)
+
+
 def group_key(address: str) -> str:
     """Gruppenschluessel aus dem Adress-Praefix.
 
