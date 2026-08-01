@@ -1148,6 +1148,151 @@ function buildSpeedClasses(data, host) {
   host.appendChild(section);
 }
 
+/* Split-Verhalten: wieviele Zweige eine Kreuzung nimmt, und wie weit sie
+ * zeitlich auseinander starten.
+ *
+ * Gebaut wie die Speed-Klassen daneben, und aus demselben Grund: drei
+ * Gewichte sind eine Verteilung, kein Trio unabhaengiger Zahlen -- ohne den
+ * Balken rechnet der Operator im Kopf, was 40/25/10 eigentlich bedeutet.
+ *
+ * Der Notenwert nimmt die Leiste des Sequencers (noteBar), nicht einen
+ * 1..16-Schieber: der Sketch rastet den Wert beim Lesen auf 1/2/4/8/16, ein
+ * Schieber zeigte also Stellungen an, die es nicht gibt. */
+function buildSplit(data, host) {
+  const split = data.split;
+  if (!split) { return; }
+
+  const section = document.createElement('section');
+  section.className = 'seq';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Split-Verhalten';
+  section.appendChild(title);
+
+  const body = document.createElement('div');
+  body.style.padding = '0.7rem 0.8rem';
+  body.style.display = 'grid';
+  body.style.gap = '0.6rem';
+
+  const bar = document.createElement('div');
+  bar.className = 'dist';
+  body.appendChild(bar);
+
+  const help = document.createElement('p');
+  help.className = 'help';
+  help.textContent = 'Wieviele der moeglichen Zweige eine Kreuzung nimmt. '
+    + 'Welche wegfallen, wird je Aufspaltung gewuerfelt. Die Gewichte werden '
+    + 'normalisiert, sie muessen sich nicht zu 100 summieren.';
+  body.appendChild(help);
+
+  const weightHandles = [];
+
+  function redraw() {
+    const values = weightHandles.map((h) => Math.max(0, h.get()));
+    const total = values.reduce((a, b) => a + b, 0);
+    bar.innerHTML = '';
+    if (total <= 0) {
+      const empty = document.createElement('span');
+      empty.className = 'dist-empty';
+      // Genau das macht SplitFanout.branchCount() bei lauter Nullen: der
+      // Ausfallmodus ist das bisherige Verhalten, nicht Stille.
+      empty.textContent = 'alle Gewichte 0 – es gilt "alle Zweige"';
+      bar.appendChild(empty);
+      return;
+    }
+    split.weights.forEach((weight, i) => {
+      if (values[i] <= 0) { return; }
+      const share = values[i]/total;
+      const seg = document.createElement('span');
+      seg.className = 'dist-seg';
+      seg.style.flexGrow = String(share);
+      seg.style.flexBasis = '0';
+      seg.style.background = trackColor(i);
+      seg.title = weight.label + ': ' + (share*100).toFixed(1) + ' %';
+      seg.textContent = share >= 0.08
+        ? weight.label + ' ' + Math.round(share*100) + '%' : '';
+      bar.appendChild(seg);
+    });
+  }
+
+  const weights = document.createElement('div');
+  weights.className = 'mini';
+  split.weights.forEach((weight, i) => {
+    const handle = miniSlider(weight.label, weight, data.values[weight.address],
+      (v) => v.toFixed(0));
+    handle.element.style.setProperty('--tc', trackColor(i));
+    // Umgehaengt wird die set()-METHODE, nicht nur das input-Event: das Laden
+    // eines Presets ruft control.set(wert, true) und loest bewusst kein input
+    // aus - an einem reinen Event-Listener bliebe der Balken danach auf der
+    // alten Verteilung stehen.
+    const innerSet = handle.set;
+    handle.set = (value, silent) => {
+      innerSet(value, silent);
+      redraw();
+    };
+    controls.set(weight.address, handle);
+    handle.element.querySelector('input[type=range]')
+      .addEventListener('input', redraw);
+    weightHandles.push(handle);
+    weights.appendChild(handle.element);
+  });
+  body.appendChild(weights);
+
+  // Zeitlicher Versatz
+  if (split.staggerEnabled) {
+    const power = document.createElement('label');
+    power.className = 'seq-power';
+    power.style.justifySelf = 'start';
+    power.title = split.staggerEnabled.address
+      + (split.staggerEnabled.help ? ' – ' + split.staggerEnabled.help : '');
+    const powerBox = document.createElement('input');
+    powerBox.type = 'checkbox';
+    const powerDot = document.createElement('span');
+    powerDot.className = 'dot';
+    const powerText = document.createElement('span');
+    power.appendChild(powerBox);
+    power.appendChild(powerDot);
+    power.appendChild(powerText);
+
+    function applyPower(value, silent) {
+      const on = Number(value) >= 1;
+      powerBox.checked = on;
+      power.classList.toggle('on', on);
+      powerText.textContent = on ? 'Zweige versetzt' : 'Zweige gleichzeitig';
+      if (!silent) { queueSend(split.staggerEnabled.address, on ? 1 : 0); }
+    }
+    powerBox.addEventListener('change',
+      () => applyPower(powerBox.checked ? 1 : 0, false));
+    applyPower(data.values[split.staggerEnabled.address], true);
+    controls.set(split.staggerEnabled.address, {
+      element: power,
+      set: (v, silent) => applyPower(v, silent !== false),
+      get: () => (powerBox.checked ? 1 : 0),
+      flash: () => {},
+    });
+    body.appendChild(power);
+  }
+
+  if (split.staggerNoteValue) {
+    const caption = document.createElement('p');
+    caption.className = 'help';
+    // Der Takt kommt aus /net/sequencer/bpm, auch wenn der Sequencer aus ist:
+    // die Uhr laeuft dort unabhaengig weiter (siehe tickSequencer). Das ist
+    // nicht zu erraten, deshalb steht es hier.
+    caption.textContent = 'Abstand zwischen dem 1., 2. und 3. Zweig einer '
+      + 'Aufspaltung. Das Raster kommt von /net/sequencer/bpm – auch dann, '
+      + 'wenn der Sequencer selbst aus ist.';
+    body.appendChild(caption);
+    const bar2 = noteBar(split.staggerNoteValue,
+      data.values[split.staggerNoteValue.address], split.noteValues);
+    body.appendChild(bar2.element);
+  }
+
+  redraw();
+  section.appendChild(body);
+  host.appendChild(section);
+}
+
 /* SC-Sound-Parameter. Eigener Port (8002), eigene Tabelle, kein Rueckkanal -
  * die Sektion sagt das selbst, sonst haelt man die Anzeige fuer den
  * Live-Zustand von SuperCollider. */
@@ -1320,10 +1465,11 @@ function buildTabs(data) {
     panel.className = 'tab-panel';
     panel.setAttribute('role', 'tabpanel');
 
-    // 1. Spezial-Sektionen (Sequencer-Panel, Speed-Klassen)
+    // 1. Spezial-Sektionen (Sequencer-Panel, Speed-Klassen, Split-Verhalten)
     (tab.sections || []).forEach((name) => {
       if (name === 'sequencer') { buildSequencer(data, panel); }
       if (name === 'speedClasses') { buildSpeedClasses(data, panel); }
+      if (name === 'split') { buildSplit(data, panel); }
     });
 
     // 2. Kuratierte Regler direkt sichtbar
