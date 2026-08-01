@@ -1,4 +1,6 @@
 import java.io.DataOutputStream;
+import java.io.File;
+import java.io.PrintWriter;
 import java.util.List;
 
 import netP5.NetAddress;
@@ -20,6 +22,13 @@ class PresetManager implements OscMessageSink {
 	private final OscP5 oscP5;
 	private final NetAddress soundTarget;
 
+	// Die Song-Struktur-Ebene. Beide duerfen null sein - dann laeuft alles
+	// genau wie vor diesem Feature.
+	private final SongStructureDirector director;
+	private final SongStructureParams songParams;
+	private final String statePath;
+	private boolean stateWriteFailed = false;
+
 	// digestMessage() laeuft im Draw-Thread, weil distributeMessages() aus
 	// draw() gerufen wird - eine Synchronisierung braucht es hier also nicht.
 	// Gemerkt statt sofort ausgefuehrt wird trotzdem, damit das Lesen einer
@@ -28,10 +37,15 @@ class PresetManager implements OscMessageSink {
 	private String pendingSave = null;
 	private boolean pendingNext = false;
 
-	PresetManager(String presetDirectory, OscP5 _oscP5, NetAddress _soundTarget) {
+	PresetManager(String presetDirectory, OscP5 _oscP5, NetAddress _soundTarget,
+			SongStructureDirector _director, SongStructureParams _songParams,
+			String _statePath) {
 		store = new PresetStore(presetDirectory);
 		oscP5 = _oscP5;
 		soundTarget = _soundTarget;
+		director = _director;
+		songParams = _songParams;
+		statePath = _statePath;
 		OscMessageDistributor.registerAdress("/preset/load", this);
 		OscMessageDistributor.registerAdress("/preset/save", this);
 		OscMessageDistributor.registerAdress("/preset/next", this);
@@ -75,8 +89,99 @@ class PresetManager implements OscMessageSink {
 		if (pendingNext) {
 			pendingNext = false;
 			switchToNext(nowMillis);
-		} else if (scheduler.isDue(nowMillis, schedulerEnabled, schedulerIntervalSeconds)) {
+			return;
+		}
+		SongStructureConfig cfg = (songParams == null) ? null : songParams.config();
+		if (director != null && cfg != null && cfg.enabled) {
+			updateSongStructure(nowMillis, cfg, schedulerIntervalSeconds);
+			return;
+		}
+		if (scheduler.isDue(nowMillis, schedulerEnabled, schedulerIntervalSeconds)) {
 			switchToNext(nowMillis);
+		}
+	}
+
+	// Die Song-Struktur-Ebene hat Vorrang vor dem alphabetischen Wechsler.
+	//
+	// Zwei Wechsler auf derselben Szene wuerden sich gegenseitig die Presets
+	// wegnehmen - ohne Fehlermeldung, nur mit einem Bild, das oefter springt
+	// als eingestellt. Der alphabetische Scheduler zieht deshalb nur seinen
+	// Timer mit (isDue mit enabled=false), damit ein spaeteres Abschalten der
+	// Song-Struktur nicht sofort einen Wechsel ausloest.
+	private void updateSongStructure(long nowMillis, SongStructureConfig cfg,
+			float schedulerIntervalSeconds) {
+		int wish = songParams.takePendingLevel();
+		if (wish >= 0) {
+			director.requestLevel(wish);
+		}
+		scheduler.isDue(nowMillis, false, schedulerIntervalSeconds);
+		if (!director.isDue(nowMillis, cfg)) {
+			return;
+		}
+		String name = director.nextPreset(nowMillis, cfg, store.list());
+		if (name == null) {
+			System.out.println("Song-Struktur: kein Wechsel moeglich - "
+					+ director.lastMessage());
+			return;
+		}
+		if (director.lastMessage().length() > 0) {
+			System.out.println("Song-Struktur: " + director.lastMessage());
+		}
+		System.out.println("Song-Struktur: Level " + director.currentLevelName()
+				+ " fuer " + (director.dwellMillis()/1000L) + " s, Preset \"" + name + "\"");
+		load(name, nowMillis);
+		writeState(name, nowMillis);
+	}
+
+	// Schreibt den Zustand der Song-Struktur nach data/songStructureState.txt.
+	//
+	// Das ist der einzige Weg, auf dem das Web-UI den Live-Zustand erfaehrt: es
+	// gibt keinen OSC-Rueckkanal dorthin, imPulse sendet nur an Port 8002 und
+	// dort hoert SuperCollider. server.py laeuft auf derselben Maschine und
+	// liest die Datei direkt - dasselbe Muster wie die Preset-Liste, die auch
+	// vom Dateisystem kommt und nicht per OSC.
+	//
+	// Gerufen wird das bei jedem LEVELWECHSEL, also alle paar Minuten, nicht in
+	// jedem Frame. Deshalb ist ein Dateizugriff hier vertretbar.
+	private void writeState(String name, long nowMillis) {
+		if (statePath == null) {
+			return;
+		}
+		File target = new File(statePath);
+		File temp = new File(statePath + ".tmp");
+		PrintWriter writer = null;
+		try {
+			writer = new PrintWriter(temp, "UTF-8");
+			writer.print("level\t" + director.currentLevelName() + "\n");
+			writer.print("levelIndex\t" + director.currentLevel() + "\n");
+			writer.print("preset\t" + name + "\n");
+			writer.print("sinceMillis\t" + nowMillis + "\n");
+			writer.print("dwellSeconds\t" + (director.dwellMillis()/1000L) + "\n");
+			writer.flush();
+		} catch (Exception e) {
+			// Einmal melden, dann nicht mehr: eine Warnung alle paar Minuten
+			// ueber eine ganze Nacht waere ein volles Log ohne neuen Inhalt.
+			// Die Show laeuft weiter, nur die Anzeige im Web-UI steht still.
+			if (!stateWriteFailed) {
+				stateWriteFailed = true;
+				System.out.println("Song-Struktur: Zustandsdatei nicht schreibbar ("
+						+ e + ") - die Anzeige im Web-UI bleibt stehen");
+			}
+			return;
+		} finally {
+			if (writer != null) {
+				writer.close();
+			}
+		}
+		// renameTo ist auf Windows nur auf ein nicht existierendes Ziel
+		// verlaesslich, deshalb vorher loeschen - wie in PresetStore.write().
+		if (target.exists() && !target.delete()) {
+			return;
+		}
+		if (!temp.renameTo(target) && !stateWriteFailed) {
+			stateWriteFailed = true;
+			System.out.println("Song-Struktur: Zustandsdatei nicht ersetzbar: "
+					+ target.getPath());
 		}
 	}
 
@@ -100,6 +205,14 @@ class PresetManager implements OscMessageSink {
 		}
 		PresetApplyReport report = PresetStore.apply(entries, OscMessageDistributor.presetTargets());
 		scheduler.noteLoaded(name, nowMillis);
+		// Auch bei einem manuellen /preset/load: sonst liefe die Verweildauer
+		// des alten Levels weiter und der naechste faellige Wechsel
+		// ueberschriebe den Eingriff womoeglich Sekunden spaeter - der Eingriff
+		// waere sinnlos, ohne dass das jemand sehen koennte.
+		if (director != null) {
+			director.noteLoaded(name, nowMillis,
+					(songParams == null) ? null : songParams.config());
+		}
 		System.out.println("Preset \"" + name + "\" geladen: " + report.summary());
 		forwardToSound("/sc/preset/load", name);
 		return true;

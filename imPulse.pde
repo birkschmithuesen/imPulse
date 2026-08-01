@@ -100,6 +100,15 @@ PresetManager presetManager;
 RemoteControlledIntParameter presetSchedulerEnabled;
 RemoteControlledFloatParameter presetSchedulerInterval;
 
+// Song-Struktur-Ebene: die Dramaturgie ueber eine ganze Nacht. Sitzt oberhalb
+// des Preset-Schedulers und ersetzt nicht dessen Zeitlogik, sondern die
+// Namensquelle, die er bedient. Ihre 25 Parameter sind wie die zwei
+// Scheduler-Parameter von jedem Preset ausgeschlossen (siehe
+// PresetStore.EXCLUDED_PREFIXES).
+EnergyLevelStore energyLevelStore;
+SongStructureParams songStructureParams;
+SongStructureDirector songStructureDirector;
+
 // Das Sicherheitsventil der Testbilder steht seit 2026-07-31 nicht mehr hier,
 // sondern als TestPatterns.PATTERN_LEVEL in den Mustern selbst - siehe die
 // Begruendung dort. Der Kalibriermodus laeuft dadurch auf demselben Fader wie
@@ -224,7 +233,35 @@ void setup() {
   // mitlaufender Wechsler wuerde sie nach zehn Minuten wegnehmen.
   presetSchedulerEnabled = new RemoteControlledIntParameter("/preset/scheduler/enabled", 0, 0, 1);
   presetSchedulerInterval = new RemoteControlledFloatParameter("/preset/scheduler/interval", 600f, 5f, 3600f);
-  presetManager = new PresetManager(dataPath("presets"), oscP5, oscOutput);
+
+  // Energie-Level der Presets. Fehlt die Datei, laeuft die Show vollstaendig
+  // weiter - dann gilt jedes Preset als "mittel" und die Dramaturgie ist flach,
+  // aber nichts bleibt stehen. Ein Baum-Filter-artiger Fall: Gestaltung, keine
+  // Betriebsvoraussetzung.
+  energyLevelStore = new EnergyLevelStore();
+  if (energyLevelStore.load(dataPath("energyLevels.txt"))) {
+    System.out.println(energyLevelStore.report());
+    int untagged = energyLevelStore.untaggedCount(new PresetStore(dataPath("presets")).list());
+    if (untagged > 0) {
+      System.out.println("WARNUNG: " + untagged + " Preset(s) ohne Energie-Level"
+          + " - sie zaehlen zu \"" + EnergyLevelStore.nameOf(EnergyLevelStore.FALLBACK_LEVEL)
+          + "\", siehe data/energyLevels.txt");
+    }
+  } else {
+    System.out.println("WARNUNG: " + energyLevelStore.lastMessage()
+        + " - jedes Preset gilt als \"mittel\", die Song-Struktur wandert dann"
+        + " nicht mehr zwischen den Leveln");
+  }
+  songStructureParams = new SongStructureParams();
+  // Der Zufall wird hereingereicht, damit SongStructureDirector ohne
+  // Sketch-Laufzeit pruefbar bleibt - dasselbe Muster wie beim Sequencer.
+  songStructureDirector = new SongStructureDirector(energyLevelStore, new RandomSource() {
+    public double next() { return Math.random(); }
+  });
+
+  presetManager = new PresetManager(dataPath("presets"), oscP5, oscOutput,
+      songStructureDirector, songStructureParams,
+      dataPath("songStructureState.txt"));
 
   // Start-Preset: Sketch-Argument hat Vorrang, sonst die Umgebungsvariable.
   // Beide Wege, weil processing-java die Weitergabe von Argumenten nicht
