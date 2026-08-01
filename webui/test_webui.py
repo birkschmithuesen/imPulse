@@ -811,7 +811,7 @@ class TabLayoutTest(unittest.TestCase):
             "float\t/net/impulse/color/g\tx\t1\t0\t1",
             "float\t/net/impulse/color/b\tx\t1\t0\t1",
             "float\t/net/impulse/color/gamma\tx\t1\t0\t4",
-            "int\t/net/impulse/color/useRemoteCol\tx\t0\t0\t1",
+            "int\t/net/impulse/color/useSpecificColor\tx\t0\t0\t1",
             "float\t/net/impulse/fadeOut/r\tx\t0.97\t0\t1",
             "float\t/nodes/colors/central/fired/Hue\tx\t0\t0\t1",
             "float\t/nodes/colors/central/fired/Sat\tx\t1\t0\t1",
@@ -871,7 +871,7 @@ class TabLayoutTest(unittest.TestCase):
     def test_colour_addresses_land_in_the_colour_tab(self):
         for address in ("/net/impulse/color/r",
                         "/net/impulse/color/gamma",
-                        "/net/impulse/color/useRemoteCol",
+                        "/net/impulse/color/useSpecificColor",
                         "/net/impulse/fadeOut/r",
                         "/nodes/colors/central/fired/Hue",
                         "/nodes/colors/outer/waiting/Bright"):
@@ -1171,6 +1171,181 @@ class SongStructureSectionTest(unittest.TestCase):
         self.assertIsNone(state["levelIndex"])
 
 
+class ColorSectionTest(unittest.TestCase):
+    """Farbwaehler statt Kanalregler: Impulsfarbe, Modus, acht Stripe-Slots."""
+
+    def full_store(self):
+        path = os.path.join(server.REPO_ROOT, "data", "presets", "random1.txt")
+        if not os.path.exists(path):
+            self.skipTest("data/presets/random1.txt fehlt")
+        store = ParameterStore(path=path)
+        store.refresh(force=True)
+        return store
+
+    def test_impulse_card_collects_the_three_rgb_addresses(self):
+        colors = server.build_colors(self.full_store().by_address)
+        card = colors["impulse"]
+        self.assertEqual(card["kind"], "rgb")
+        self.assertEqual(
+            sorted(c["address"] for c in card["components"].values()),
+            ["/net/impulse/color/b", "/net/impulse/color/g",
+             "/net/impulse/color/r"])
+        self.assertTrue(card["label"])
+
+    def test_mode_carries_both_state_names(self):
+        """Beide Zustaende sind ein Modus -- keiner ist "aus"."""
+        colors = server.build_colors(self.full_store().by_address)
+        self.assertEqual(colors["modeLabels"]["1"], "Spezifische Farbe")
+        self.assertEqual(colors["modeLabels"]["0"], "Stripe-Farben")
+
+    def test_eight_stripe_slots_or_none_at_all(self):
+        """Ein halber Satz Slots waere schlimmer als keiner: der Operator
+        saehe fuenf Farben und wuesste nicht, dass drei fehlen."""
+        rows = ["float\t%s%d/%s\tx\t0.5\t0\t1" % (server.STRIPE_COLOR_PREFIX, i, c)
+                for i in range(server.STRIPE_COLOR_COUNT)
+                for c in ("r", "g", "b")]
+        full = {p.address: p for p in parse_settings("\n".join(rows))}
+        self.assertEqual(len(server.build_colors(full)["stripes"]),
+                         server.STRIPE_COLOR_COUNT)
+
+        partial = {p.address: p for p in parse_settings("\n".join(rows[:-1]))}
+        self.assertEqual(server.build_colors(partial)["stripes"], [])
+
+    def test_colour_addresses_leave_the_generic_rendering(self):
+        """Sonst stuende jeder Kanal zweimal auf der Seite: einmal im
+        Farbwaehler, einmal als Schieber."""
+        store = self.full_store()
+        snapshot = store.snapshot()
+        rendered = set()
+        for tab in snapshot["tabs"]:
+            for control in tab["primary"]:
+                rendered.add(control.get("address"))
+            for group in tab["groups"]:
+                for control in group["controls"]:
+                    rendered.add(control.get("address"))
+        for address in ("/net/impulse/color/r", "/net/impulse/color/g",
+                        "/net/impulse/color/b",
+                        "/net/impulse/color/useSpecificColor",
+                        "/net/impulse/fadeOut/r", "/net/impulse/fadeOut/g",
+                        "/net/impulse/fadeOut/b"):
+            self.assertNotIn(address, rendered)
+
+    def test_gamma_is_not_swallowed_by_the_colour_section(self):
+        """/net/impulse/color/gamma ist keine Farbe und bleibt ein Regler."""
+        store = self.full_store()
+        rendered = set()
+        for tab in store.snapshot()["tabs"]:
+            for group in tab["groups"]:
+                for control in group["controls"]:
+                    rendered.add(control.get("address"))
+        self.assertIn("/net/impulse/color/gamma", rendered)
+
+    def test_stripe_slots_would_fall_into_the_colour_tab(self):
+        """Rueckfall, falls die Sektion einmal nicht gebaut werden kann."""
+        self.assertEqual(
+            server.tab_for_address(server.STRIPE_COLOR_PREFIX + "3/r"),
+            server.TAB_COLORS)
+
+    def test_older_dump_without_stripe_colours_still_builds(self):
+        """Ein aelterer imPulse-Stand kennt die Slots nicht -- die Impulsfarbe
+        soll trotzdem ein Farbwaehler sein."""
+        rows = ["float\t/net/impulse/color/%s\tx\t1\t0\t1" % c
+                for c in ("r", "g", "b")]
+        by_address = {p.address: p for p in parse_settings("\n".join(rows))}
+        colors = server.build_colors(by_address)
+        self.assertIsNotNone(colors["impulse"])
+        self.assertEqual(colors["stripes"], [])
+        self.assertIsNone(colors["mode"])
+
+
+class FadeOutConversionTest(unittest.TestCase):
+    """Zielfarbe + Tempo <-> die drei Zerfallsraten.
+
+    Die Formel steht auf der Server-Seite, weil sie eine Aussage darueber ist,
+    wie der Effekt den LED-Puffer multipliziert -- und weil sie nur hier ohne
+    jsdom pruefbar ist.
+    """
+
+    def test_no_decay_gives_all_ones_whatever_the_colour(self):
+        """Der Grenzfall, der die Potenz-Form erzwingt: 1**x == 1. Eine
+        multiplikative Gewichtung haette hier je Kanal etwas anderes ergeben."""
+        for colour in ((1, 1, 1), (0, 0, 1), (0.3, 0.9, 0.1), (0, 0, 0)):
+            self.assertEqual(server.fade_from_target(*colour, decay=1.0),
+                             (1.0, 1.0, 1.0), colour)
+
+    def test_black_target_decays_all_channels_equally(self):
+        """max(ziel) == 0 -- die Division waere undefiniert. "Welche Farbe
+        bleibt uebrig" hat bei Schwarz keine Antwort, also verfaerbt sich
+        nichts."""
+        self.assertEqual(server.fade_from_target(0, 0, 0, 0.9),
+                         (0.9, 0.9, 0.9))
+
+    def test_strongest_channel_gets_exactly_the_base_decay(self):
+        """Sein Gewicht ist 1, der Exponent also 1. Daran haengt die ganze
+        Kalibrierung: der Fader bedeutet "so schnell verschwindet die Spur"."""
+        rates = server.fade_from_target(0.5, 1.0, 0.25, 0.8)
+        self.assertAlmostEqual(rates[1], 0.8, places=9)
+        self.assertLess(rates[0], rates[1])
+        self.assertLess(rates[2], rates[0])
+
+    def test_weaker_channel_disappears_faster(self):
+        """Die inhaltliche Aussage der ganzen Umrechnung."""
+        red, green, blue = server.fade_from_target(1.0, 0.5, 0.0, 0.95)
+        self.assertGreater(red, green)
+        self.assertGreater(green, blue)
+
+    def test_round_trip_reproduces_the_shipped_default(self):
+        """0.97/0.96/0.56 ist der Auslieferungswert des Sketches. Liesse sich
+        er mit dem neuen Bedienelement nicht mehr einstellen, waere der warme
+        Schweif der Installation unerreichbar -- daran ist MIN_WEIGHT
+        kalibriert, es ist keine geratene Zahl."""
+        red, green, blue, decay = server.fade_to_target(0.97, 0.96, 0.56)
+        self.assertAlmostEqual(decay, 0.97, places=9)
+        back = server.fade_from_target(red, green, blue, decay)
+        for expected, actual in zip((0.97, 0.96, 0.56), back):
+            self.assertAlmostEqual(expected, actual, places=6)
+
+    def test_round_trip_is_stable_across_the_range(self):
+        for target in ((1.0, 0.6, 0.0), (0.2, 1.0, 0.8), (1.0, 1.0, 1.0)):
+            for decay in (0.5, 0.8, 0.97, 0.999):
+                rates = server.fade_from_target(*target, decay=decay)
+                again = server.fade_from_target(*server.fade_to_target(*rates))
+                for expected, actual in zip(rates, again):
+                    self.assertAlmostEqual(expected, actual, places=6,
+                                           msg="%s @ %s" % (target, decay))
+
+    def test_inverse_of_undefined_cases_is_white(self):
+        """Zerfaellt gar nichts, gibt es keine Reihenfolge, in der die Kanaele
+        verschwinden; zerfaellt alles sofort, bleibt keine Farbe uebrig. Weiss
+        behauptet in beiden Faellen keine Faerbung, die es nicht gibt."""
+        self.assertEqual(server.fade_to_target(1.0, 1.0, 1.0)[:3], (1.0, 1.0, 1.0))
+        self.assertEqual(server.fade_to_target(0.0, 0.0, 0.0)[:3], (1.0, 1.0, 1.0))
+
+    def test_every_result_stays_inside_the_parameter_range(self):
+        """Die drei Adressen sind float 0..1 -- ein Wert darueber waere ein
+        Puffer, der pro Frame HELLER wird und nie verschwindet."""
+        for target in ((0, 0, 0), (1, 1, 1), (1, 0, 0), (0.01, 0.5, 1.0)):
+            for decay in (0.0, 0.01, 0.5, 1.0):
+                for rate in server.fade_from_target(*target, decay=decay):
+                    self.assertGreaterEqual(rate, 0.0)
+                    self.assertLessEqual(rate, 1.0)
+
+    def test_build_fade_reads_the_current_values(self):
+        path = os.path.join(server.REPO_ROOT, "data", "presets", "random1.txt")
+        if not os.path.exists(path):
+            self.skipTest("data/presets/random1.txt fehlt")
+        store = ParameterStore(path=path)
+        store.refresh(force=True)
+        fade = store.snapshot()["fade"]
+        self.assertEqual(fade["addresses"],
+                         ["/net/impulse/fadeOut/r", "/net/impulse/fadeOut/g",
+                          "/net/impulse/fadeOut/b"])
+        self.assertIn("decay", fade)
+        for key in ("r", "g", "b"):
+            self.assertGreaterEqual(fade["target"][key], 0.0)
+            self.assertLessEqual(fade["target"][key], 1.0)
+
+
 class AddressLabelTest(unittest.TestCase):
     """ADDRESS_LABELS: sprechende Titel statt des rohen Adresssegments.
 
@@ -1256,6 +1431,9 @@ class AddressLabelTest(unittest.TestCase):
         ]
         addresses += ["/net/sequencer/track%d/originTreeFilter" % i
                       for i in range(server.SEQUENCER_TRACK_COUNT)]
+        addresses += ["%s%d/%s" % (server.STRIPE_COLOR_PREFIX, slot, channel)
+                      for slot in range(server.STRIPE_COLOR_COUNT)
+                      for channel in ("r", "g", "b")]
         missing = [a for a in addresses if server.label_for(a)[0] is None]
         self.assertEqual(missing, [], "ohne Titel in ADDRESS_LABELS: %s" % missing)
 
@@ -1586,6 +1764,60 @@ class PaletteFileTest(unittest.TestCase):
             for key in server.PALETTE_COMPONENTS:
                 self.assertGreaterEqual(entry[key], 0.0)
                 self.assertLessEqual(entry[key], 1.0)
+
+
+class FadeOutEndpointTest(unittest.TestCase):
+    """POST /api/fadeout: Zielfarbe + Tempo rein, drei Zerfallsraten raus.
+
+    Braucht Flask und wird sonst uebersprungen -- dasselbe Muster wie beim
+    Palette-Endpoint darunter.
+    """
+
+    def setUp(self):
+        if server.Flask is None:
+            self.skipTest("Flask nicht installiert")
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.settings = os.path.join(self.directory, "remoteSettings.txt")
+        with open(self.settings, "w", encoding="utf-8") as handle:
+            for channel, value in (("r", 0.97), ("g", 0.96), ("b", 0.56)):
+                handle.write("float\t/net/impulse/fadeOut/%s\tx\t%s\t0\t1\n"
+                             % (channel, value))
+        app = server.create_app(self.settings, "127.0.0.1", 9999,
+                                os.path.join(self.directory, "presets"),
+                                os.path.join(self.directory, "palette.txt"))
+        app.config["TESTING"] = True
+        self.client = app.test_client()
+
+    def test_posts_all_three_channels(self):
+        payload = self.client.post("/api/fadeout",
+                                   json={"r": 1.0, "g": 0.5, "b": 0.0,
+                                         "decay": 0.9}).get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual([a["address"] for a in payload["applied"]],
+                         ["/net/impulse/fadeOut/r", "/net/impulse/fadeOut/g",
+                          "/net/impulse/fadeOut/b"])
+        values = [a["value"] for a in payload["applied"]]
+        self.assertAlmostEqual(values[0], 0.9, places=9)
+        self.assertLess(values[1], values[0])
+        self.assertLess(values[2], values[1])
+
+    def test_rejects_a_missing_field(self):
+        response = self.client.post("/api/fadeout", json={"r": 1, "g": 1})
+        self.assertEqual(response.status_code, 400)
+
+    def test_rejects_a_non_number(self):
+        response = self.client.post("/api/fadeout",
+                                    json={"r": "rot", "g": 1, "b": 1,
+                                          "decay": 0.9})
+        self.assertEqual(response.status_code, 400)
+
+    def test_index_carries_the_fade_block(self):
+        """Ohne den Block koennte der Waehler beim Seitenaufbau nicht auf die
+        Zielfarbe gestellt werden, die gerade tatsaechlich gefahren wird."""
+        payload = self.client.get("/api/parameters").get_json()
+        self.assertIsNotNone(payload["fade"])
+        self.assertAlmostEqual(payload["fade"]["decay"], 0.97, places=6)
 
 
 class PaletteEndpointTest(unittest.TestCase):

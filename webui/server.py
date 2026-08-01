@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import socket
@@ -349,6 +350,237 @@ def build_split(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Farben
+#
+# Alle Farben des UI werden ueber einen nativen Farbwaehler eingestellt, nicht
+# mehr ueber Kanalregler (Birk, 2026-08-01). Der Server liefert dafuer nur die
+# STRUKTUR -- welche drei Adressen eine Karte bilden und in welchem Farbraum
+# --, das Aussehen macht app.js. Dieselbe Aufteilung wie beim Sequencer.
+#
+# Zwei Farbraeume, weil die Java-Seite zwei kennt: die Impuls- und
+# Stripe-Farben liegen als r/g/b (RemoteControlledFloatParameter, 0..1), die
+# Knotenfarben als Hue/Sat/Bright (RemoteControlledColorParameter). Umgerechnet
+# wird im Browser, gesendet werden weiter die Einzelkanaele -- an dem, was bei
+# imPulse ankommt, aendert sich nichts.
+# ---------------------------------------------------------------------------
+
+STRIPE_COLOR_PREFIX = "/net/impulse/stripeColor/"
+# Spiegelt StripeColorDefaults.COUNT auf der Java-Seite. Der Effekt bildet
+# Stripe -> Slot per Modulo ab; bei 30 Stripes wiederholt sich das Muster also
+# alle acht.
+STRIPE_COLOR_COUNT = 8
+RGB_COMPONENTS = ("r", "g", "b")
+
+IMPULSE_COLOR_BASE = "/net/impulse/color"
+
+
+def _rgb_card(by_address: Dict[str, "Parameter"], base: str
+              ) -> Optional[Dict[str, Any]]:
+    """Eine Farbkarte aus <base>/r, <base>/g und <base>/b, oder None.
+
+    None heisst: dieser imPulse-Stand kennt die drei Adressen nicht. Dann
+    faellt das UI auf das generische Rendering zurueck, statt eine Karte ohne
+    Wirkung zu zeigen.
+    """
+    parts = {}
+    for component in RGB_COMPONENTS:
+        param = by_address.get("%s/%s" % (base, component))
+        if param is None:
+            return None
+        parts[component] = param.as_dict()
+    label, help_text = label_for(base)
+    return {
+        "kind": "rgb",
+        "base": base,
+        "label": label or base.rpartition("/")[2],
+        "help": help_text,
+        "components": parts,
+    }
+
+
+def build_colors(by_address: Dict[str, "Parameter"]) -> Dict[str, Any]:
+    """Struktur der Farb-Sektionen: Impulsfarbe, Modus, acht Stripe-Slots.
+
+    Liefert immer ein Objekt (nie None) -- die einzelnen Felder sind None,
+    wenn ihre Adressen fehlen. Anders als beim Sequencer gibt es hier kein
+    Alles-oder-nichts: eine aeltere remoteSettings.txt kennt die
+    Stripe-Farben nicht, die Impulsfarbe aber schon, und dann soll die
+    Impulsfarbe trotzdem als Farbwaehler dastehen.
+    """
+    stripes: List[Dict[str, Any]] = []
+    for slot in range(STRIPE_COLOR_COUNT):
+        card = _rgb_card(by_address, "%s%d" % (STRIPE_COLOR_PREFIX, slot))
+        if card is None:
+            # Teilweise vorhandene Slots gibt es nicht: sie werden in einer
+            # Schleife registriert. Ein fehlender Slot heisst "dieser Stand
+            # kennt das Feature nicht", also gar keine Slot-Reihe.
+            stripes = []
+            break
+        card["slot"] = slot
+        stripes.append(card)
+
+    mode = by_address.get(IMPULSE_COLOR_BASE + "/useSpecificColor")
+    return {
+        "impulse": _rgb_card(by_address, IMPULSE_COLOR_BASE),
+        "mode": mode.as_dict() if mode is not None else None,
+        # Die Beschriftung der zwei Zustaende steht HIER und nicht in app.js:
+        # sie ist die Aussage darueber, was der Schalter auf der Java-Seite
+        # tut, und nur hier pruefbar. "an (1)/aus (0)" war fuer genau diesen
+        # Parameter die schlechteste aller Beschriftungen -- beide Zustaende
+        # sind ein Modus, keiner ist "aus".
+        "modeLabels": {"1": "Spezifische Farbe", "0": "Stripe-Farben"},
+        "stripes": stripes,
+    }
+
+
+def color_addresses(colors: Optional[Dict[str, Any]]) -> Set[str]:
+    """Adressen, die die Farb-Sektionen selbst rendern.
+
+    Ohne das stuenden Impulsfarbe und Stripe-Slots zweimal auf der Seite:
+    einmal als Farbwaehler und einmal als Kanalregler -- zwei Bedienelemente
+    fuer denselben Wert, die auseinanderlaufen koennen.
+    """
+    taken: Set[str] = set()
+    if not colors:
+        return taken
+    cards = list(colors.get("stripes") or [])
+    if colors.get("impulse"):
+        cards.append(colors["impulse"])
+    for card in cards:
+        for entry in card["components"].values():
+            taken.add(entry["address"])
+    if colors.get("mode"):
+        taken.add(colors["mode"]["address"])
+    return taken
+
+
+# ---------------------------------------------------------------------------
+# Nachleuchten: Zielfarbe + Tempo statt drei Zerfallsraten
+#
+# /net/impulse/fadeOut/{r,g,b} sind KEINE Farbe. Der Effekt multipliziert den
+# ganzen LED-Puffer in jedem Frame damit (LedColor.mult in drawMe()) -- es sind
+# drei Zerfallsraten je Kanal. Ein Farbwaehler direkt darauf waere irrefuehrend:
+# die Intuition "heller im Waehler = mehr davon" bedeutet hier "zerfaellt
+# LANGSAMER", also das Gegenteil dessen, was man beim Aufziehen erwartet.
+#
+# Bedient wird deshalb, was ein Operator wirklich fragt: welche Farbe hat die
+# Spur, kurz bevor sie verschwindet, und wie schnell verschwindet sie. Die drei
+# Raten werden daraus gerechnet.
+#
+# Formel:
+#     w_c       = MIN_WEIGHT + (1 - MIN_WEIGHT) * (ziel_c / max(ziel))
+#     fadeOut_c = baseDecay ** (1 / w_c)
+#
+# Der staerkste Kanal der Zielfarbe hat w = 1 und bekommt damit genau
+# baseDecay; jeder schwaechere bekommt einen groesseren Exponenten, zerfaellt
+# also schneller und ist frueher weg. Uebrig bleibt am Ende der Spur die
+# Zielfarbe -- genau das, was der Waehler zeigt.
+#
+# Drei Grenzfaelle, die die Kalibrierung bestimmen:
+#
+# * baseDecay = 1 -> alle Kanaele 1, unabhaengig von der Zielfarbe. Faellt
+#   ohne Sonderfall heraus, weil 1**x == 1 fuer jedes x. Das ist der Grund fuer
+#   die Potenz-Form: eine multiplikative Gewichtung (baseDecay * w_c) haette
+#   hier je Kanal etwas anderes ergeben.
+# * Schwarze Zielfarbe -> max(ziel) == 0, die Division waere undefiniert.
+#   Dann gelten alle Gewichte als 1: die Spur zerfaellt in allen drei Kanaelen
+#   gleich schnell, verfaerbt sich also nicht. Das ist die einzige Antwort, die
+#   ohne willkuerliche Annahme auskommt -- "welche Farbe bleibt uebrig" hat bei
+#   Schwarz keine Antwort.
+# * MIN_WEIGHT > 0 haelt den Exponenten endlich. Bei w = 0 waere er unendlich.
+#
+# MIN_WEIGHT ist NICHT geraten, sondern aus dem Auslieferungswert
+# 0.97/0.96/0.56 zurueckgerechnet: mit baseDecay = 0.97 (der langsamste Kanal)
+# braucht Blau ein Gewicht von ln(0.97)/ln(0.56) = 0.0525, damit die Zahl
+# wieder herauskommt. Ein groesseres MIN_WEIGHT koennte die gelieferte
+# Einstellung gar nicht mehr darstellen -- der warme Schweif der Installation
+# waere mit dem neuen Bedienelement unerreichbar.
+# ---------------------------------------------------------------------------
+
+FADE_PREFIX = "/net/impulse/fadeOut/"
+FADE_ADDRESSES = tuple(FADE_PREFIX + c for c in RGB_COMPONENTS)
+
+MIN_WEIGHT = 0.05
+
+# Ab hier gilt baseDecay als "kein Zerfall": ln(1) ist 0, die Rueckrechnung
+# teilte also durch null. Der Abstand ist grob genug, um auch die Rundung auf
+# vier Stellen in einer Preset-Datei aufzufangen.
+_NO_DECAY_EPSILON = 1e-4
+
+
+def fade_from_target(red: float, green: float, blue: float,
+                     decay: float) -> Tuple[float, float, float]:
+    """(Zielfarbe 0..1, Tempo 0..1) -> die drei Zerfallsraten 0..1."""
+    channels = [_clamp01(float(c)) for c in (red, green, blue)]
+    base = _clamp01(float(decay))
+    strongest = max(channels)
+    result: List[float] = []
+    for value in channels:
+        if strongest <= 0.0:
+            weight = 1.0
+        else:
+            weight = MIN_WEIGHT + (1.0 - MIN_WEIGHT) * (value / strongest)
+        result.append(_clamp01(base ** (1.0 / weight)))
+    return result[0], result[1], result[2]
+
+
+def fade_to_target(red: float, green: float, blue: float
+                   ) -> Tuple[float, float, float, float]:
+    """Die Umkehrung: drei Zerfallsraten -> (Zielfarbe 0..1, Tempo 0..1).
+
+    Gebraucht beim Seitenaufbau und nach jedem Preset-Laden -- das UI kennt
+    dann nur die drei rohen Werte und muss daraus Waehler und Fader stellen.
+
+    Zwei Faelle haben keine eindeutige Antwort und liefern deshalb Weiss:
+    zerfaellt gar nichts (alle Raten 1), gibt es keine Reihenfolge, in der die
+    Kanaele verschwinden; zerfaellt alles sofort (Rate 0), bleibt keine Farbe
+    uebrig. Weiss ist dabei die harmloseste Anzeige: sie behauptet keine
+    Faerbung, die es nicht gibt.
+    """
+    rates = [_clamp01(float(c)) for c in (red, green, blue)]
+    base = max(rates)
+    if base >= 1.0 - _NO_DECAY_EPSILON or base <= 0.0:
+        return 1.0, 1.0, 1.0, base
+    import math
+    log_base = math.log(base)
+    channels: List[float] = []
+    for rate in rates:
+        if rate <= 0.0:
+            # Kanal verschwindet sofort: das ist das Gewicht MIN_WEIGHT, also
+            # der schwaechstmoegliche Anteil an der Zielfarbe.
+            channels.append(0.0)
+            continue
+        exponent = math.log(rate) / log_base
+        if exponent <= 1.0:
+            channels.append(1.0)
+            continue
+        weight = 1.0 / exponent
+        channels.append(_clamp01((weight - MIN_WEIGHT) / (1.0 - MIN_WEIGHT)))
+    return channels[0], channels[1], channels[2], base
+
+
+def build_fade(by_address: Dict[str, "Parameter"],
+               values: Dict[str, float]) -> Optional[Dict[str, Any]]:
+    """Struktur der Sektion "Nachleuchten", oder None wenn unbekannt."""
+    params = [by_address.get(address) for address in FADE_ADDRESSES]
+    if any(p is None for p in params):
+        return None
+    current = [float(values.get(p.address, p.value)) for p in params]
+    red, green, blue, decay = fade_to_target(*current)
+    return {
+        "addresses": list(FADE_ADDRESSES),
+        "target": {"r": red, "g": green, "b": blue},
+        "decay": decay,
+        "raw": {p.address: value for p, value in zip(params, current)},
+    }
+
+
+def fade_addresses(fade: Optional[Dict[str, Any]]) -> Set[str]:
+    """Adressen, die die Nachleucht-Sektion selbst bedient."""
+    return set(fade["addresses"]) if fade else set()
+
+
+# ---------------------------------------------------------------------------
 # Song-Struktur-Ebene
 #
 # Die Dramaturgie ueber eine ganze Nacht: eine Markov-Kette ueber vier
@@ -565,22 +797,38 @@ ADDRESS_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
         "Farbkurve",
         "Wie steil die Helligkeit mit der Energie des Impulses steigt. Unter "
         "1 hebt schwache Impulse an, ueber 1 drueckt sie weg."),
-    "/net/impulse/color/useRemoteCol": (
-        "Feste Impulsfarbe benutzen",
-        "Aus = jeder Impuls behaelt die Farbe seiner Herkunft. An = alle "
-        "Impulse nehmen die drei Farbregler darueber."),
-    # Alle drei tragen denselben Satz: die Regler stehen zwar nebeneinander,
-    # aber "fadeOut" ist von aussen nicht zu erraten, und ein Regler soll fuer
-    # sich allein lesbar sein.
+    # Kein Regler mehr, sondern der Zwei-Zustands-Schalter der Sektion
+    # "Impuls-Farbe" -- der Titel steht trotzdem hier, damit die
+    # Vollstaendigkeitspruefung greift und der Rueckfall stimmt, falls die
+    # Sektion einmal nicht gebaut werden kann.
+    "/net/impulse/color/useSpecificColor": (
+        "Farbquelle der Impulse",
+        "„Spezifische Farbe“ = alle Impulse nehmen die eine Farbe darueber. "
+        "„Stripe-Farben“ = jeder Impuls nimmt die Farbe seines Stripes aus "
+        "den acht Slots."),
+    "/net/impulse/color": (
+        "Impulsfarbe",
+        "Die Farbe, in der ein Impuls durchs Netz laeuft. Wirkt nur im Modus "
+        "„Spezifische Farbe“."),
+    # Die acht Slots des Modus "Stripe-Farben". Der Slot-Titel kommt aus einer
+    # Schleife weiter unten -- acht fast gleiche Zeilen von Hand waeren acht
+    # Gelegenheiten, eine Nummer zu verwechseln.
+    # Die drei fadeOut-Kanaele sind KEINE Farbe, sondern Zerfallsraten je
+    # Kanal. Sie stehen im UI nicht mehr als eigene Regler (die Sektion
+    # "Nachleuchten" rechnet sie aus Zielfarbe und Tempo aus), behalten hier
+    # aber ihren Eintrag: fuer den Rueckfall und die Vollstaendigkeitspruefung.
     "/net/impulse/fadeOut/r": (
-        "Schweiffarbe Rot",
-        "Farbe, in die ein Impuls beim Verloeschen ausblendet."),
+        "Zerfallsrate Rot",
+        "Anteil, den der Rotkanal der Spur je Frame behaelt. Nahe 1 = bleibt "
+        "lange stehen, klein = verschwindet sofort."),
     "/net/impulse/fadeOut/g": (
-        "Schweiffarbe Gruen",
-        "Farbe, in die ein Impuls beim Verloeschen ausblendet."),
+        "Zerfallsrate Gruen",
+        "Anteil, den der Gruenkanal der Spur je Frame behaelt. Nahe 1 = "
+        "bleibt lange stehen, klein = verschwindet sofort."),
     "/net/impulse/fadeOut/b": (
-        "Schweiffarbe Blau",
-        "Farbe, in die ein Impuls beim Verloeschen ausblendet."),
+        "Zerfallsrate Blau",
+        "Anteil, den der Blaukanal der Spur je Frame behaelt. Nahe 1 = bleibt "
+        "lange stehen, klein = verschwindet sofort."),
 
     # --- Zufalls-Spawns ---------------------------------------------------
     "/net/randomSpawn/enabled": (
@@ -735,6 +983,15 @@ SUFFIX_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
     "Sat": ("Saettigung", None),
     "Bright": ("Helligkeit", None),
 }
+
+for _slot in range(STRIPE_COLOR_COUNT):
+    ADDRESS_LABELS["%s%d" % (STRIPE_COLOR_PREFIX, _slot)] = (
+        "Stripe-Slot %d" % _slot,
+        None)
+    for _channel, _channel_name in (("r", "Rot"), ("g", "Gruen"), ("b", "Blau")):
+        ADDRESS_LABELS["%s%d/%s" % (STRIPE_COLOR_PREFIX, _slot, _channel)] = (
+            "Slot %d %s" % (_slot, _channel_name), None)
+del _slot, _channel, _channel_name
 
 for _from_index, _from in enumerate(SONG_LEVEL_NAMES):
     for _to in SONG_LEVEL_NAMES:
@@ -950,6 +1207,11 @@ TAB_RULES: List[Tuple[str, str]] = [
     # (SPLIT_GROUP_PREFIXES); eine Gruppe geht als GANZES in einen Tab.
     ("/net/impulse/color/", TAB_COLORS),
     ("/net/impulse/fadeOut/", TAB_COLORS),
+    # Rueckfall: normalerweise rendert die Sektion "Impuls-Farbe" die acht
+    # Slots selbst und nimmt ihre Adressen aus dem generischen Rendering.
+    # Kann sie nicht gebaut werden (unvollstaendiger Dump), landen die 24
+    # Regler wenigstens im richtigen Tab statt bei der Physik.
+    (STRIPE_COLOR_PREFIX, TAB_COLORS),
     ("/nodes/colors/", TAB_COLORS),
     # Das Split-Verhalten aus demselben Grund, und in denselben Tab: der
     # zeitliche Versatz der Zweige haengt am BPM-Raster, genau wie die
@@ -1150,7 +1412,9 @@ def build_tabs(groups: List[Dict[str, Any]],
                sequencer: Optional[Dict[str, Any]],
                speed: Optional[Dict[str, Any]],
                split: Optional[Dict[str, Any]] = None,
-               song: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+               song: Optional[Dict[str, Any]] = None,
+               colors: Optional[Dict[str, Any]] = None,
+               fade: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Verteilt Gruppen, Spezial-Sektionen und SC-Parameter auf die Tabs.
 
     Eine Gruppe geht als GANZES in einen Tab (bestimmt von ihrem ersten
@@ -1177,6 +1441,14 @@ def build_tabs(groups: List[Dict[str, Any]],
         by_tab[TAB_SPAWN]["sections"].append("sequencer")
     if speed:
         by_tab[TAB_NOTES]["sections"].append("speedClasses")
+    # Reihenfolge im Farben-Tab: erst die Farbe der Impulse selbst mit ihrem
+    # Moduswahlschalter, dann die acht Slots des Gegenmodus (direkt darunter,
+    # weil der Schalter zwischen genau diesen zwei Sektionen umschaltet), dann
+    # das Nachleuchten, dann die wiederverwendbare Palette.
+    if colors and (colors.get("impulse") or colors.get("stripes")):
+        by_tab[TAB_COLORS]["sections"].append("impulseColor")
+    if fade:
+        by_tab[TAB_COLORS]["sections"].append("fade")
     # Die Palette-Leiste braucht keine Adresse aus remoteSettings.txt und ist
     # deshalb bedingungslos da -- anders als Sequencer und Speed-Klassen, die
     # ohne ihre Parameter nicht gebaut werden koennen.
@@ -2039,8 +2311,12 @@ class ParameterStore:
             speed = build_speed_classes(self.by_address)
             split = build_split(self.by_address)
             song = build_song_structure(self.by_address)
+            colors = build_colors(self.by_address)
+            fade = build_fade(self.by_address, self.values)
             taken = sequencer_addresses(sequencer, speed, split)
             taken |= song_structure_addresses(song)
+            taken |= color_addresses(colors)
+            taken |= fade_addresses(fade)
             generic = [p for p in self.parameters if p.address not in taken]
             groups = build_groups(generic)
             return {
@@ -2050,7 +2326,10 @@ class ParameterStore:
                 "speedClasses": speed,
                 "split": split,
                 "songStructure": song,
-                "tabs": build_tabs(groups, sequencer, speed, split, song),
+                "colors": colors,
+                "fade": fade,
+                "tabs": build_tabs(groups, sequencer, speed, split, song,
+                                   colors, fade),
                 "scParams": {
                     "port": SC_OSC_PORT,
                     "groups": sc_param_groups(),
@@ -2294,6 +2573,42 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
             "skipped": skipped,
         })
 
+    @app.route("/api/fadeout", methods=["POST"])
+    def api_fadeout():
+        """Zielfarbe + Tempo -> die drei Zerfallsraten, gesendet und quittiert.
+
+        Eigener Endpoint statt einer Rechnung in app.js: die Umrechnung ist
+        eine inhaltliche Aussage darueber, wie der Effekt den Puffer
+        multipliziert, und nur hier ohne jsdom pruefbar. Das UI kennt nur
+        Zielfarbe und Tempo -- also genau die zwei Dinge, die es anzeigt.
+        """
+        body = request.get_json(silent=True) or {}
+        try:
+            red = float(body.get("r"))
+            green = float(body.get("g"))
+            blue = float(body.get("b"))
+            decay = float(body.get("decay"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False,
+                            "error": "r, g, b und decay muessen Zahlen sein"}), 400
+        for value in (red, green, blue, decay):
+            if value != value or value in (float("inf"), float("-inf")):
+                return jsonify({"ok": False,
+                                "error": "ungueltige Zahl"}), 400
+        rates = fade_from_target(red, green, blue, decay)
+        applied: List[Applied] = []
+        for address, value in zip(FADE_ADDRESSES, rates):
+            param = store.get(address)
+            if param is None:
+                return jsonify({"ok": False,
+                                "error": "unbekannte Adresse: %s" % address}), 400
+            applied.append(apply_value(param, value))
+        return jsonify({
+            "ok": True,
+            "applied": [{"address": a.address, "value": a.value, "sent": a.sent}
+                        for a in applied],
+        })
+
     @app.route("/api/songstructure")
     def api_song_structure():
         """Der Live-Zustand der Song-Struktur, gelesen vom Dateisystem.
@@ -2356,6 +2671,11 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         # selbst, hier werden nur die Regler nachgefuehrt.
         sender.send("/preset/load", name)
         result = apply_preset_entries(store, entries)
+        # Die Nachleucht-Sektion zeigt Zielfarbe und Tempo, nicht die drei
+        # rohen Raten -- sie kann sich also nicht aus "values" nachziehen.
+        # Ohne diesen Block bliebe ihr Farbwaehler nach einem Preset-Wechsel
+        # auf der vorigen Farbe stehen, ohne Fehlermeldung.
+        result["fade"] = build_fade(store.by_address, store.values)
         result.update({"ok": True, "name": name})
         return jsonify(result)
 
