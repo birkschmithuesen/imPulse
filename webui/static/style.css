@@ -71,6 +71,21 @@ button:hover { border-color: var(--accent); }
 .status.warn { color: var(--warn); }
 .status.err { color: var(--err); }
 
+/* Automatische Sicherung: eine ruhige Zeile, die nur bei Fehlern auffaellt.
+   Sie steht ueber der Tab-Leiste, weil sie fuer alle Tabs gilt. */
+.autocommit {
+  margin: 0;
+  padding: 0.35rem 1rem;
+  min-height: 1.6rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  background: #14171b;
+}
+.autocommit[data-level="warn"] { color: var(--warn); }
+.autocommit[data-level="err"] { color: var(--err); }
+.autocommit[data-level="off"] { opacity: 0.7; }
+
 main {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));

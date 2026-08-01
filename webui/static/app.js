@@ -25,6 +25,7 @@ const presetSelectEl = document.getElementById('presetSelect');
 const presetLoadEl = document.getElementById('presetLoad');
 const presetNameEl = document.getElementById('presetName');
 const presetSaveEl = document.getElementById('presetSave');
+const autocommitEl = document.getElementById('autocommit');
 
 let bootstrap = {};
 try {
@@ -1420,6 +1421,66 @@ function startPulseClock() {
   requestAnimationFrame(frame);
 }
 
+// ---------------------------------------------------------------------------
+// Automatische Sicherung
+//
+// Reine Anzeige. Die relative Zeit rechnet der Browser, weil der Server die
+// Uhr des Betrachters nicht kennt -- geliefert werden Unix-Sekunden.
+// ---------------------------------------------------------------------------
+
+const AUTOCOMMIT_POLL_MS = 60000;
+const AUTOCOMMIT_HINT = 'Lokaler Git-Commit auf dem Rechner, auf dem dieses '
+  + 'Web-UI laeuft. Es wird NICHT gepusht – zum Uebertragen weiterhin von '
+  + 'Hand: git push';
+
+function relativeTime(seconds) {
+  if (seconds === null || seconds === undefined) { return null; }
+  const delta = Date.now() / 1000 - seconds;
+  if (delta < 90) { return 'gerade eben'; }
+  const minutes = Math.round(delta / 60);
+  if (minutes < 90) { return 'vor ' + minutes + ' Minuten'; }
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) { return 'vor ' + hours + ' Stunden'; }
+  return 'vor ' + Math.round(hours / 24) + ' Tagen';
+}
+
+function renderAutocommit(state) {
+  if (!autocommitEl) { return; }
+  autocommitEl.title = AUTOCOMMIT_HINT;
+  if (!state || !state.enabled) {
+    autocommitEl.textContent = 'Automatische Sicherung: aus – Aenderungen an '
+      + 'Presets, Farben und Kalibrierung liegen nur auf diesem Rechner, bis '
+      + 'jemand sie von Hand committet.';
+    autocommitEl.dataset.level = 'off';
+    return;
+  }
+  const minutes = Math.max(1, Math.round((state.intervalSeconds || 0) / 60));
+  const parts = ['Automatische Sicherung: alle ' + minutes + ' min lokal '
+    + 'committet (kein Push)'];
+  const last = relativeTime(state.lastCommitAt);
+  parts.push(last ? 'zuletzt gesichert ' + last
+                  : 'seit dem Start gab es nichts zu sichern');
+  let level = 'ok';
+  if (state.lastStatus === 'error') {
+    parts.push('FEHLER: ' + (state.lastDetail || 'unbekannt'));
+    level = 'err';
+  } else if (state.lastStatus === 'skipped') {
+    parts.push('uebersprungen: ' + (state.lastDetail || ''));
+    level = 'warn';
+  }
+  autocommitEl.dataset.level = level;
+  autocommitEl.textContent = parts.join(' – ');
+}
+
+async function pollAutocommit() {
+  try {
+    const response = await fetch('/api/autocommit');
+    if (response.ok) { renderAutocommit(await response.json()); }
+  } catch (err) {
+    /* Die Anzeige ist Beiwerk; ein Netzfehler darf das UI nicht stoeren. */
+  }
+}
+
 presetLoadEl.addEventListener('click', loadPreset);
 presetSaveEl.addEventListener('click', savePreset);
 presetNameEl.addEventListener('keydown', (event) => {
@@ -1440,5 +1501,7 @@ couplingEl.addEventListener('change', () => {
 reloadEl.addEventListener('click', reload);
 
 fillPresets(bootstrap.presets);
+renderAutocommit(bootstrap.autocommit);
+setInterval(pollAutocommit, AUTOCOMMIT_POLL_MS);
 render(bootstrap);
 startPulseClock();

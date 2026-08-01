@@ -23,6 +23,12 @@
 
   <p class="status" id="status" role="status">&nbsp;</p>
 
+  <!-- Zustand der automatischen lokalen Sicherung (webui/autocommit.py).
+       Bewusst nur Anzeige: ausgeloest wird ausschliesslich vom Takt im
+       Server, es gibt keinen Knopf, der aus dem Browser heraus Git-Zustand
+       aendert. -->
+  <p class="autocommit" id="autocommit" role="status">&nbsp;</p>
+
   <section class="presets" id="presets">
     <h2>Presets</h2>
     <div class="preset-rows">
