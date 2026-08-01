@@ -493,34 +493,10 @@ function buildColorCard(control, values) {
 function render(data) {
   controls.clear();
   colorCards.length = 0;
-  groupsEl.innerHTML = '';
 
-  // Zuerst die Spezial-Sektionen: ihre Adressen hat der Server aus
-  // data.groups entfernt, sie muessen sich also selbst in controls eintragen,
-  // bevor irgendwer (Preset-Laden) die Map benutzt.
-  buildSequencer(data);
-  buildScSection(data);
-
-  (data.groups || []).forEach((group) => {
-    // Advanced-Gruppe (Setup-/Sicherheitsparameter) per Default eingeklappt,
-    // damit sie im Alltag nicht zwischen Farbe und Speed steht -- siehe
-    // docs/webui-parameter-review-2026-07-30.md Abschnitt 1.
-    const isAdvanced = group.title === 'Advanced';
-    const section = document.createElement(isAdvanced ? 'details' : 'section');
-    const title = document.createElement(isAdvanced ? 'summary' : 'h2');
-    title.textContent = group.title;
-    section.appendChild(title);
-    group.controls.forEach((control) => {
-      if (control.kind === 'color') {
-        section.appendChild(buildColorCard(control, data.values));
-      } else if (control.kind === 'trigger') {
-        section.appendChild(buildTrigger(control));
-      } else {
-        section.appendChild(buildParam(control, data.values[control.address]));
-      }
-    });
-    groupsEl.appendChild(section);
-  });
+  // Alle Tabs vollstaendig bauen (siehe buildTabs: die controls-Map muss
+  // komplett sein, auch fuer inaktive Tabs).
+  buildTabs(data);
 
   const settings = data.settings || {};
   const osc = data.osc || {};
@@ -692,8 +668,8 @@ async function savePreset() {
 // beim Laden eines Presets automatisch mit, ohne eigenen Sonderweg.
 // ---------------------------------------------------------------------------
 
-const sequencerHostEl = document.getElementById('sequencerHost');
-const scHostEl = document.getElementById('scHost');
+const tabBarEl = document.getElementById('tabBar');
+const tabPanelsEl = document.getElementById('tabPanels');
 
 // Halten den Zustand fuer die Rasteranzeige. Die Uhr laeuft immer, gezeichnet
 // wird nur, wenn der Sequencer eingeschaltet ist.
@@ -825,8 +801,7 @@ function noteBar(param, initial, noteValues, onPick) {
   return handle;
 }
 
-function buildSequencer(data) {
-  sequencerHostEl.innerHTML = '';
+function buildSequencer(data, host) {
   pulseTracks.length = 0;
   pulseRunning = false;
   const seq = data.sequencer;
@@ -1034,9 +1009,7 @@ function buildSequencer(data) {
   });
 
   section.appendChild(grid);
-  sequencerHostEl.appendChild(section);
-
-  buildSpeedClasses(data, sequencerHostEl);
+  host.appendChild(section);
 }
 
 /* Speed-Klassen. Der Verteilungsbalken macht aus fuenf Gewichten ein Bild -
@@ -1178,10 +1151,13 @@ function buildSpeedClasses(data, host) {
 /* SC-Sound-Parameter. Eigener Port (8002), eigene Tabelle, kein Rueckkanal -
  * die Sektion sagt das selbst, sonst haelt man die Anzeige fuer den
  * Live-Zustand von SuperCollider. */
-function buildScSection(data) {
-  scHostEl.innerHTML = '';
-  const sc = data.scParams;
-  if (!sc || !sc.groups || !sc.groups.length) { return; }
+/* Eine Liste von SC-Parametern in einen Container rendern.
+ *
+ * Wird zweimal gerufen: einmal fuer die kuratierten oben im Tab, einmal fuer
+ * den Rest im Erweitert-Bereich. Der Warnhinweis steht nur beim ersten Block
+ * je Tab. */
+function buildScParams(params, host, port, withNote) {
+  if (!params || !params.length) { return; }
 
   const section = document.createElement('section');
   section.className = 'sc';
@@ -1190,25 +1166,19 @@ function buildScSection(data) {
   title.textContent = 'Sound (SuperCollider)';
   section.appendChild(title);
 
-  const note = document.createElement('p');
-  note.className = 'sc-note';
-  note.textContent = 'Geht direkt an sclang auf Port ' + sc.port
-    + ', nicht an imPulse. Es gibt keinen Rueckkanal: die Werte hier sind die '
-    + 'Defaults aus klangnetz_bells.scd, nicht der Live-Zustand – und laeuft '
-    + 'sclang nicht, bleibt eine Aenderung wirkungslos ohne Fehlermeldung.';
-  section.appendChild(note);
+  if (withNote) {
+    const note = document.createElement('p');
+    note.className = 'sc-note';
+    note.textContent = 'Geht direkt an sclang auf Port ' + port
+      + ', nicht an imPulse. Es gibt keinen Rueckkanal: die Werte hier sind die '
+      + 'Defaults aus klangnetz_bells.scd, nicht der Live-Zustand – und laeuft '
+      + 'sclang nicht, bleibt eine Aenderung wirkungslos ohne Fehlermeldung.';
+    section.appendChild(note);
+  }
 
-  sc.groups.forEach((group) => {
-    const heading = document.createElement('div');
-    heading.className = 'param';
-    heading.style.borderBottom = '1px solid var(--line)';
-    const label = document.createElement('div');
-    label.className = 'track-title';
-    label.textContent = group.title;
-    heading.appendChild(label);
-    section.appendChild(heading);
-
-    group.params.forEach((param) => {
+  {
+    {
+      params.forEach((param) => {
       const wrap = document.createElement('div');
       wrap.className = 'param';
 
@@ -1290,10 +1260,134 @@ function buildScSection(data) {
       });
 
       section.appendChild(wrap);
+      });
+    }
+  }
+
+  host.appendChild(section);
+}
+
+/* ---------------------------------------------------------------------------
+ * Tabs
+ *
+ * Fuenf Themen-Tabs statt einer langen Liste. Welcher Parameter in welchen
+ * Tab gehoert, entscheidet der Server (TABS/TAB_RULES in server.py) -- das
+ * ist eine inhaltliche Zuordnung und dort pruefbar.
+ *
+ * WICHTIG: ALLE Panels werden hier vollstaendig gebaut, der Tab-Wechsel setzt
+ * nur `hidden`. Nicht "erst bauen, wenn der Tab geoeffnet wird" -- die
+ * Regler tragen sich beim Bauen in die flache controls-Map ein, und ueber
+ * genau diese Map laufen das Preset-Laden und der applied/echoed-Ruecklauf.
+ * Ein Regler auf einem nie geoeffneten Tab stuende sonst nicht in der Map und
+ * wuerde von einem Preset still nicht angezeigt -- ein Fehler ohne Symptom.
+ * ------------------------------------------------------------------------- */
+
+const TAB_STORAGE_KEY = 'imPulse.activeTab';
+
+function buildTabs(data) {
+  tabBarEl.innerHTML = '';
+  tabPanelsEl.innerHTML = '';
+  const tabs = data.tabs || [];
+  if (!tabs.length) {
+    // Aelterer Server ohne Tab-Daten: alles in einen Block, damit die
+    // Oberflaeche nicht leer bleibt.
+    tabPanelsEl.appendChild(groupsEl);
+    return;
+  }
+
+  const buttons = new Map();
+  const panels = new Map();
+
+  function activate(id) {
+    panels.forEach((panel, key) => { panel.hidden = (key !== id); });
+    buttons.forEach((button, key) => {
+      button.setAttribute('aria-selected', key === id ? 'true' : 'false');
     });
+    try { localStorage.setItem(TAB_STORAGE_KEY, id); } catch (err) { /* egal */ }
+  }
+
+  tabs.forEach((tab) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'tab-button';
+    button.textContent = tab.title;
+    button.setAttribute('role', 'tab');
+    button.addEventListener('click', () => activate(tab.id));
+    tabBarEl.appendChild(button);
+    buttons.set(tab.id, button);
+
+    const panel = document.createElement('div');
+    panel.className = 'tab-panel';
+    panel.setAttribute('role', 'tabpanel');
+
+    // 1. Spezial-Sektionen (Sequencer-Panel, Speed-Klassen)
+    (tab.sections || []).forEach((name) => {
+      if (name === 'sequencer') { buildSequencer(data, panel); }
+      if (name === 'speedClasses') { buildSpeedClasses(data, panel); }
+    });
+
+    // 2. Kuratierte Regler direkt sichtbar
+    const scPrimary = (tab.scParams || []).filter((p) => p.primary);
+    const scRest = (tab.scParams || []).filter((p) => !p.primary);
+    if ((tab.primary || []).length) {
+      const card = document.createElement('section');
+      const title = document.createElement('h2');
+      title.textContent = 'Wichtigste Regler';
+      card.appendChild(title);
+      tab.primary.forEach((control) => {
+        card.appendChild(control.kind === 'trigger'
+          ? buildTrigger(control)
+          : buildParam(control, data.values[control.address]));
+      });
+      panel.appendChild(card);
+    }
+    buildScParams(scPrimary, panel, (data.scParams || {}).port, true);
+
+    // 3. Alles Uebrige eingeklappt -- dasselbe <details>-Muster wie die
+    //    bisherige Advanced-Gruppe.
+    const hasRest = (tab.groups || []).length || scRest.length;
+    if (hasRest) {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = 'Erweitert';
+      details.appendChild(summary);
+      const body = document.createElement('div');
+      body.className = 'tab-extra';
+      (tab.groups || []).forEach((group) => {
+        body.appendChild(buildGroupSection(group, data));
+      });
+      buildScParams(scRest, body, (data.scParams || {}).port,
+        scPrimary.length === 0);
+      details.appendChild(body);
+      panel.appendChild(details);
+    }
+
+    tabPanelsEl.appendChild(panel);
+    panels.set(tab.id, panel);
   });
 
-  scHostEl.appendChild(section);
+  let wanted = null;
+  try { wanted = localStorage.getItem(TAB_STORAGE_KEY); } catch (err) { /* egal */ }
+  activate(panels.has(wanted) ? wanted : tabs[0].id);
+}
+
+/* Eine generische Parametergruppe als Karte -- ausgelagert aus render(),
+ * damit die Tabs sie wiederverwenden koennen. */
+function buildGroupSection(group, data) {
+  const section = document.createElement('section');
+  const title = document.createElement('h2');
+  title.textContent = group.title;
+  section.appendChild(title);
+  group.controls.forEach((control) => {
+    if (control.kind === 'color') {
+      section.appendChild(buildColorCard(control, data.values));
+    } else if (control.kind === 'trigger') {
+      section.appendChild(buildTrigger(control));
+    } else {
+      section.appendChild(buildParam(control, data.values[control.address]));
+    }
+  });
+  return section;
 }
 
 /* Rasteranzeige.

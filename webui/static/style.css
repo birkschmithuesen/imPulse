@@ -439,3 +439,86 @@ input[type=color] {
   .seq-tracks { grid-template-columns: 1fr; padding: 0.6rem; }
   .mini-row > span { flex-basis: 4.4rem; }
 }
+
+/* ---------------------------------------------------------------------------
+   Tab-Leiste und Panels.
+
+   Fuenf Themen-Tabs statt einer langen Liste. Die Leiste klebt unter der
+   Kopfzeile, damit sie beim Scrollen erreichbar bleibt -- im Dunkeln neben
+   der Installation soll niemand erst nach oben scrollen muessen.
+
+   Umgeschaltet wird ueber [hidden] auf dem Panel, NICHT durch Neu-Rendern:
+   die Regler inaktiver Tabs muessen in der controls-Map bleiben, damit ein
+   Preset sie erreicht (siehe buildTabs() in app.js).
+   --------------------------------------------------------------------------- */
+
+.tab-bar {
+  position: sticky;
+  top: 0;
+  z-index: 9;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.tab-button {
+  padding: 0.55rem 1rem;
+  min-height: 2.4rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  /* Der aktive Tab wird ueber Farbe UND eine Unterkante markiert, nicht
+     ueber Farbe allein -- bei starkem Umgebungslicht traegt die Form. */
+  border-bottom: 2px solid transparent;
+}
+.tab-button:hover { color: var(--text); }
+.tab-button[aria-selected=true] {
+  background: var(--panel);
+  color: var(--accent);
+  border-color: var(--line);
+  border-bottom-color: var(--accent);
+  font-weight: 700;
+}
+
+.tab-panel[hidden] { display: none; }
+
+/* Dasselbe Raster wie bisher <main>, nur jetzt je Panel. */
+.tab-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+  align-items: start;
+}
+/* Die grossen Sektionen (Sequencer, Speed-Klassen) und der
+   Erweitert-Block laufen ueber die volle Breite. */
+.tab-panel > .seq,
+.tab-panel > details { grid-column: 1 / -1; }
+.tab-panel > .seq { margin: 0; }
+.tab-panel > .sc { margin: 0; }
+
+/* Innerhalb von "Erweitert" wieder ein Raster, damit die Karten dort nicht
+   als eine endlose Spalte stehen. */
+.tab-extra {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0.8rem;
+  padding: 0.8rem;
+  align-items: start;
+}
+.tab-extra > section, .tab-extra > .sc { margin: 0; }
+
+@media (max-width: 600px) {
+  .tab-bar { padding: 0.4rem 0.6rem 0; }
+  .tab-button { padding: 0.5rem 0.7rem; font-size: 0.78rem; }
+  .tab-panel { grid-template-columns: 1fr; padding: 0.6rem; gap: 0.6rem; }
+  .tab-extra { grid-template-columns: 1fr; padding: 0.6rem; }
+}

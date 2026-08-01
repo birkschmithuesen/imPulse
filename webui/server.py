@@ -308,6 +308,82 @@ def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
 
 
 # ---------------------------------------------------------------------------
+# Tabs
+#
+# Fuenf Themen-Tabs statt einer langen Liste. Die Zuordnung steht HIER und
+# nicht in app.js, weil sie eine inhaltliche Entscheidung ist und hier
+# pruefbar bleibt: test_webui.py stellt sicher, dass jede Adresse aus
+# remoteSettings.txt genau einem Tab gehoert. Im JS waere das nur mit einem
+# jsdom-Test pruefbar, den dieses Projekt bewusst nicht hat.
+#
+# "primary" ist die kuratierte Auswahl, die oben im Tab steht; alles andere
+# desselben Tabs landet im eingeklappten "Erweitert"-Bereich. Faustregel des
+# Briefs: was Birk live tatsaechlich anfasst, gehoert nach oben.
+# ---------------------------------------------------------------------------
+
+TAB_MIXER = "mixer"
+TAB_SOUND = "sound"
+TAB_SPAWN = "spawn"
+TAB_NOTES = "noten"
+TAB_PHYSICS = "physik"
+
+TAB_TITLES: List[Tuple[str, str]] = [
+    (TAB_MIXER, "Mixer"),
+    (TAB_SOUND, "Sound Design"),
+    (TAB_SPAWN, "Spawn-Verhalten"),
+    (TAB_NOTES, "Noten-Verhalten"),
+    (TAB_PHYSICS, "Impuls-Verhalten"),
+]
+
+# Reihenfolge zaehlt: die erste passende Regel gewinnt.
+TAB_RULES: List[Tuple[str, str]] = [
+    ("/master/", TAB_MIXER),
+    ("Master/", TAB_MIXER),
+    # speedQuantize VOR /net/impulse/, sonst faengt die Physik-Regel es ab.
+    ("/net/impulse/speedQuantize/", TAB_NOTES),
+    ("/net/sequencer/", TAB_SPAWN),
+    ("/net/randomSpawn/", TAB_SPAWN),
+    ("/net/activate", TAB_SPAWN),
+    ("/net/impulse/", TAB_PHYSICS),
+    ("/nodes/", TAB_PHYSICS),
+]
+
+# Kuratierte SC-Parameter je Tab (Namen, nicht Adressen). Der Rest desselben
+# Tabs landet im Erweitert-Bereich.
+SC_PRIMARY: Dict[str, List[str]] = {
+    TAB_MIXER: ["masterVolume", "bellVolume", "droneVolume", "reverbMix"],
+    TAB_SOUND: ["travelMix", "brightness", "detune", "regionBiasAmount",
+                "travelRq", "travelGrainRatio"],
+}
+
+# Kuratierte Regler je Tab, in dieser Reihenfolge. Adressen, die es in
+# diesem Dump nicht gibt, werden still uebergangen -- die Liste darf einem
+# aelteren imPulse-Stand vorauseilen.
+TAB_PRIMARY: Dict[str, List[str]] = {
+    TAB_MIXER: [
+        "/master/level",
+        "Master/0/opacity/0.Impulse",
+        "Master/1/opacity/1.Nodes",
+    ],
+    TAB_SOUND: [],
+    TAB_SPAWN: [
+        "/net/randomSpawn/enabled",
+        "/net/randomSpawn/interval",
+        "/net/randomSpawn/energy",
+        "/net/randomSpawn/count",
+    ],
+    TAB_NOTES: [],
+    TAB_PHYSICS: [
+        "/net/impulse/speed",
+        "/net/impulse/lifetime",
+        "/net/impulse/nodeDeadTime",
+        "/net/impulse/splitSpeedJitter",
+        "/net/impulse/splitLifetimeJitter",
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
 # SuperCollider-Sound-Parameter
 #
 # Sie laufen NICHT durch remoteSettings.txt -- das ist die Parameterliste von
@@ -329,57 +405,145 @@ def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
 SC_OSC_PORT = 8002
 SC_PARAM_PREFIX = "/klangnetz/param/"
 SC_PARAMS: List[Dict[str, Any]] = [
-    {"name": "masterVolume", "default": 1.0, "min": 0.0, "max": 1.5,
+    {"name": "masterVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
      "group": "Master", "description": "Gain nach dem Panning, vor dem Limiter."},
-    {"name": "bellVolume", "default": 1.0, "min": 0.0, "max": 1.5,
+    {"name": "bellVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
      "group": "Master", "description":
      "Layer-Fader der Glocken, vor masterVolume. Wirkt auf den naechsten Ton."},
-    {"name": "droneVolume", "default": 1.0, "min": 0.0, "max": 1.5,
+    {"name": "droneVolume", "tab": TAB_MIXER, "default": 1.0, "min": 0.0, "max": 1.5,
      "group": "Master", "description":
      "Layer-Fader der Impuls-Drohnen, vor masterVolume. Wirkt sofort."},
-    {"name": "reverbMix", "default": 0.35, "min": 0.0, "max": 1.0,
+    {"name": "reverbMix", "tab": TAB_MIXER, "default": 0.35, "min": 0.0, "max": 1.0,
      "group": "Master", "description": "Trocken/nass des Halls hinter dem Panning."},
-    {"name": "reverbRoom", "default": 0.5, "min": 0.0, "max": 1.0,
+    {"name": "reverbRoom", "tab": TAB_MIXER, "default": 0.5, "min": 0.0, "max": 1.0,
      "group": "Master", "description": "Gefuehlte Raumgroesse."},
-    {"name": "reverbDamp", "default": 0.5, "min": 0.0, "max": 1.0,
+    {"name": "reverbDamp", "tab": TAB_MIXER, "default": 0.5, "min": 0.0, "max": 1.0,
      "group": "Master", "description": "Hoehendaempfung im Hallschweif."},
-    {"name": "panSharpness", "default": 1.0, "min": 0.1, "max": 8.0,
+    {"name": "panSharpness", "tab": TAB_SOUND, "default": 1.0, "min": 0.1, "max": 8.0,
      "group": "Master", "description": "Schaerfe der Ortung. 1 = Referenz."},
-    {"name": "brightness", "default": 1.0, "min": 0.0, "max": 2.0,
+    {"name": "brightness", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 2.0,
      "group": "Glocke", "description": "Amp der oberen vier Teiltoene."},
-    {"name": "detune", "default": 1.0, "min": 0.0, "max": 1.0,
+    {"name": "detune", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
      "group": "Glocke", "description": "1 = metallisch, 0 = rein harmonisch."},
-    {"name": "regionBiasAmount", "default": 0.6, "min": 0.0, "max": 1.0,
+    {"name": "regionBiasAmount", "tab": TAB_SOUND, "default": 0.6, "min": 0.0, "max": 1.0,
      "group": "Glocke", "description":
      "Klangbias nach Netzregion (vier Quadranten). 0 = aus."},
-    {"name": "droneLpfMult", "default": 6.0, "min": 1.0, "max": 12.0,
+    {"name": "droneLpfMult", "tab": TAB_SOUND, "default": 6.0, "min": 1.0, "max": 12.0,
      "group": "Travel-Sound", "description": "Filter der Tonschicht der Drohne."},
-    {"name": "travelMix", "default": 0.0, "min": 0.0, "max": 1.0,
+    {"name": "travelMix", "tab": TAB_SOUND, "default": 0.0, "min": 0.0, "max": 1.0,
      "group": "Travel-Sound", "description":
      "Crossfade Tondrohne zu Windband. 0 = kein Travel-Sound."},
-    {"name": "travelRq", "default": 0.35, "min": 0.02, "max": 1.0,
+    {"name": "travelRq", "tab": TAB_SOUND, "default": 0.35, "min": 0.02, "max": 1.0,
      "group": "Travel-Sound", "description":
      "Koernerdauer (Anteil von 20 ms). Klein = sandig und kleinteilig."},
-    {"name": "travelGrainRatio", "default": 0.125, "min": 0.01, "max": 2.0,
+    {"name": "travelGrainRatio", "tab": TAB_SOUND, "default": 0.125, "min": 0.01, "max": 2.0,
      "group": "Travel-Sound", "description":
      "Koerner je Sekunde als Vielfaches von travelFreq - traegt die Speed-Klasse."},
-    {"name": "travelAmpScale", "default": 1.0, "min": 0.0, "max": 2.0,
+    {"name": "travelAmpScale", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 2.0,
      "group": "Travel-Sound", "description": "Pegel nur der Rauschschicht."},
-    {"name": "travelFreqBase", "default": 400.0, "min": 50.0, "max": 4000.0,
+    {"name": "travelFreqBase", "tab": TAB_SOUND, "default": 400.0, "min": 50.0, "max": 4000.0,
      "group": "Travel-Sound", "description": "Frequenz bei der 1x-Speed-Klasse."},
-    {"name": "travelSpeedRef", "default": 16.0, "min": 1.0, "max": 1500.0,
+    {"name": "travelSpeedRef", "tab": TAB_SOUND, "default": 16.0, "min": 1.0, "max": 1500.0,
      "group": "Travel-Sound", "description": "Speed in LEDs/s, die als 1x gilt."},
-    {"name": "travelOctavesPerStep", "default": 1.0, "min": 0.25, "max": 3.0,
+    {"name": "travelOctavesPerStep", "tab": TAB_SOUND, "default": 1.0, "min": 0.25, "max": 3.0,
      "group": "Travel-Sound", "description":
      "Oktaven je Verdopplung der Speed. Groesser = Klassen deutlicher getrennt."},
-    {"name": "travelSnap", "default": 1.0, "min": 0.0, "max": 1.0,
+    {"name": "travelSnap", "tab": TAB_SOUND, "default": 1.0, "min": 0.0, "max": 1.0,
      "group": "Travel-Sound", "description":
      "Rastet die Frequenz auf die Speed-Klasse, damit Jitter sie nicht verschmiert."},
-    {"name": "travelFreqMin", "default": 80.0, "min": 20.0, "max": 2000.0,
+    {"name": "travelFreqMin", "tab": TAB_SOUND, "default": 80.0, "min": 20.0, "max": 2000.0,
      "group": "Travel-Sound", "description": "Untere harte Grenze."},
-    {"name": "travelFreqMax", "default": 6000.0, "min": 200.0, "max": 16000.0,
+    {"name": "travelFreqMax", "tab": TAB_SOUND, "default": 6000.0, "min": 200.0, "max": 16000.0,
      "group": "Travel-Sound", "description": "Obere harte Grenze."},
 ]
+
+
+def tab_for_address(address: str) -> str:
+    """Der Tab einer imPulse-Adresse. Unbekanntes landet in der Physik.
+
+    Der Rueckfall ist bewusst ein echter Tab und nicht ein sechster
+    "Sonstiges": ein neuer Parameter soll sichtbar sein, auch wenn hier
+    niemand eine Regel dafuer ergaenzt hat.
+    """
+    for prefix, tab in TAB_RULES:
+        if address.startswith(prefix):
+            return tab
+    return TAB_PHYSICS
+
+
+def build_tabs(groups: List[Dict[str, Any]],
+               sequencer: Optional[Dict[str, Any]],
+               speed: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Verteilt Gruppen, Spezial-Sektionen und SC-Parameter auf die Tabs.
+
+    Eine Gruppe geht als GANZES in einen Tab (bestimmt von ihrem ersten
+    Regler) -- die Gruppenschluessel sind selbst Adress-Praefixe, eine Gruppe
+    kann also nicht ueber zwei Tabs zerfallen. Die kuratierten Regler werden
+    aus ihren Gruppen HERAUSGELOEST, damit kein Parameter zweimal auf der
+    Seite steht.
+    """
+    primary_all = {addr for addrs in TAB_PRIMARY.values() for addr in addrs}
+    by_tab: Dict[str, Dict[str, Any]] = {}
+    for tab_id, title in TAB_TITLES:
+        by_tab[tab_id] = {
+            "id": tab_id,
+            "title": title,
+            "sections": [],
+            "primary": [],
+            "groups": [],
+            "scParams": [],
+        }
+
+    # Spezial-Sektionen
+    if sequencer:
+        by_tab[TAB_SPAWN]["sections"].append("sequencer")
+    if speed:
+        by_tab[TAB_NOTES]["sections"].append("speedClasses")
+
+    # SC-Parameter je Eintrag, nicht je Gruppe: masterVolume gehoert in den
+    # Mixer, brightness ins Sound Design, obwohl beide "Master"/"Glocke"
+    # heissen.
+    for entry in SC_PARAMS:
+        item = dict(entry)
+        item["address"] = SC_PARAM_PREFIX + entry["name"]
+        tab_id = entry.get("tab", TAB_SOUND)
+        item["primary"] = entry["name"] in SC_PRIMARY.get(tab_id, [])
+        by_tab[tab_id]["scParams"].append(item)
+    # Kuratierte SC-Regler in die Reihenfolge der Liste bringen, der Rest
+    # behaelt seine Reihenfolge aus SC_PARAMS.
+    for tab_id, names in SC_PRIMARY.items():
+        entries = by_tab[tab_id]["scParams"]
+        order = {name: i for i, name in enumerate(names)}
+        entries.sort(key=lambda e: (not e["primary"],
+                                    order.get(e["name"], len(order))))
+
+    # Generische Gruppen
+    for group in groups:
+        controls = group.get("controls") or []
+        addresses = [c.get("address") for c in controls if c.get("address")]
+        if not addresses:
+            continue
+        tab_id = tab_for_address(addresses[0])
+        kept = [c for c in controls
+                if c.get("address") not in primary_all]
+        if kept:
+            trimmed = dict(group)
+            trimmed["controls"] = kept
+            by_tab[tab_id]["groups"].append(trimmed)
+
+    # Kuratierte Regler in der Reihenfolge der Liste
+    lookup = {}
+    for group in groups:
+        for control in group.get("controls") or []:
+            if control.get("address"):
+                lookup[control["address"]] = control
+    for tab_id, addresses in TAB_PRIMARY.items():
+        for address in addresses:
+            control = lookup.get(address)
+            if control is not None:
+                by_tab[tab_id]["primary"].append(control)
+
+    return [by_tab[tab_id] for tab_id, _t in TAB_TITLES]
 
 
 def sc_param_groups() -> List[Dict[str, Any]]:
@@ -956,6 +1120,7 @@ class ParameterStore:
                 "values": dict(self.values),
                 "sequencer": sequencer,
                 "speedClasses": speed,
+                "tabs": build_tabs(groups, sequencer, speed),
                 "scParams": {
                     "port": SC_OSC_PORT,
                     "groups": sc_param_groups(),

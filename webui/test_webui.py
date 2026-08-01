@@ -749,6 +749,147 @@ class SequencerSectionTest(unittest.TestCase):
         self.assertIsNotNone(snapshot["speedClasses"])
 
 
+class TabLayoutTest(unittest.TestCase):
+    """Die Tab-Zuordnung -- der Punkt, an dem ein Parameter verschwinden kann."""
+
+    def _snapshot(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, "remoteSettings.txt")
+        lines = [
+            "float\t/master/level\tx\t0.1\t0\t1",
+            "float\tMaster/trace\tx\t0\t0\t1",
+            "float\tMaster/0/opacity/0.Impulse\tx\t1\t0\t1",
+            "float\tMaster/1/opacity/1.Nodes\tx\t1\t0\t1",
+            "int\t/net/impulse/speed\tx\t16\t1\t1500",
+            "float\t/net/impulse/lifetime\tx\t0.02\t0.0001\t1",
+            "float\t/net/impulse/nodeDeadTime\tx\t5\t0\t10",
+            "float\t/net/impulse/splitSpeedJitter\tx\t0\t0\t1",
+            "float\t/net/impulse/splitLifetimeJitter\tx\t0\t0\t1",
+            "float\t/net/impulse/color/r\tx\t1\t0\t1",
+            "float\t/net/impulse/speed/randomize/period\tx\t30\t1\t300",
+            "int\t/net/impulse/oscMaxCount\tx\t32\t0\t256",
+            "int\t/net/randomSpawn/enabled\tx\t1\t0\t1",
+            "float\t/net/randomSpawn/interval\tx\t30\t0.05\t40",
+            "float\t/net/randomSpawn/energy\tx\t0.6\t0\t1",
+            "int\t/net/randomSpawn/count\tx\t1\t1\t30",
+            "int\t/net/activateNode\tx\t0\t0\t50",
+            "float\t/nodes/times/recover\tx\t4\t0\t10",
+            "float\t/net/sequencer/bpm\tx\t60\t20\t200",
+            "int\t/net/sequencer/enabled\tx\t0\t0\t1",
+            "int\t/net/impulse/speedQuantize/enabled\tx\t0\t0\t1",
+            "float\t/net/impulse/speedQuantize/jitter\tx\t0\t0\t1",
+        ]
+        for i in range(server.SEQUENCER_TRACK_COUNT):
+            base = "/net/sequencer/track%d/" % i
+            lines.append("int\t%senabled\tx\t0\t0\t1" % base)
+            for name in server.SEQUENCER_TRACK_FIELDS:
+                lines.append("int\t%s%s\tx\t0\t-1\t29" % (base, name))
+        for suffix, _label in server.SPEED_CLASSES:
+            lines.append("float\t%s%s\tx\t0\t0\t100"
+                         % (server.SPEED_WEIGHT_PREFIX, suffix))
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        store = ParameterStore(path=path)
+        store.refresh(force=True)
+        return store.snapshot()
+
+    def test_five_tabs_in_the_briefed_order(self):
+        tabs = self._snapshot()["tabs"]
+        self.assertEqual([t["id"] for t in tabs],
+                         ["mixer", "sound", "spawn", "noten", "physik"])
+
+    def test_every_control_lands_in_exactly_one_tab(self):
+        """Der eigentliche Zweck: kein Regler faellt beim Umbau heraus."""
+        snapshot = self._snapshot()
+        in_groups = set()
+        for group in snapshot["groups"]:
+            for control in group["controls"]:
+                if control.get("address"):
+                    in_groups.add(control["address"])
+        seen = []
+        for tab in snapshot["tabs"]:
+            for control in tab["primary"]:
+                seen.append(control["address"])
+            for group in tab["groups"]:
+                for control in group["controls"]:
+                    if control.get("address"):
+                        seen.append(control["address"])
+        self.assertEqual(sorted(seen), sorted(in_groups),
+                         "Regler fehlen in den Tabs oder stehen doppelt")
+        self.assertEqual(len(seen), len(set(seen)), "Regler doppelt vergeben")
+
+    def test_special_sections_sit_on_their_tab(self):
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        self.assertIn("sequencer", tabs["spawn"]["sections"])
+        self.assertIn("speedClasses", tabs["noten"]["sections"])
+        self.assertEqual(tabs["mixer"]["sections"], [])
+
+    def test_addresses_go_where_the_brief_says(self):
+        self.assertEqual(server.tab_for_address("/master/level"), "mixer")
+        self.assertEqual(server.tab_for_address("Master/trace"), "mixer")
+        self.assertEqual(server.tab_for_address("/net/sequencer/bpm"), "spawn")
+        self.assertEqual(server.tab_for_address("/net/randomSpawn/interval"), "spawn")
+        self.assertEqual(server.tab_for_address("/net/activateStripe"), "spawn")
+        # speedQuantize gehoert zu den Noten, NICHT zur Physik - die Regel
+        # dafuer muss vor der allgemeinen /net/impulse/-Regel stehen.
+        self.assertEqual(
+            server.tab_for_address("/net/impulse/speedQuantize/enabled"), "noten")
+        self.assertEqual(
+            server.tab_for_address("/net/impulse/speedQuantize/weight/8x"), "noten")
+        self.assertEqual(server.tab_for_address("/net/impulse/speed"), "physik")
+        self.assertEqual(server.tab_for_address("/net/impulse/color/r"), "physik")
+        self.assertEqual(server.tab_for_address("/nodes/times/recover"), "physik")
+        # Unbekanntes verschwindet nicht, es landet sichtbar in der Physik
+        self.assertEqual(server.tab_for_address("/etwas/ganz/neues"), "physik")
+
+    def test_primary_controls_are_not_repeated_in_the_groups(self):
+        for tab in self._snapshot()["tabs"]:
+            primary = {c["address"] for c in tab["primary"]}
+            for group in tab["groups"]:
+                for control in group["controls"]:
+                    self.assertNotIn(control.get("address"), primary,
+                                     "%s steht zweimal im Tab %s"
+                                     % (control.get("address"), tab["id"]))
+
+    def test_sc_params_are_split_between_mixer_and_sound(self):
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        mixer = {p["name"] for p in tabs["mixer"]["scParams"]}
+        sound = {p["name"] for p in tabs["sound"]["scParams"]}
+        self.assertIn("masterVolume", mixer)
+        self.assertIn("bellVolume", mixer)
+        self.assertIn("droneVolume", mixer)
+        self.assertIn("travelMix", sound)
+        self.assertIn("brightness", sound)
+        self.assertEqual(mixer & sound, set(), "SC-Parameter doppelt vergeben")
+        self.assertEqual(mixer | sound, {p["name"] for p in server.SC_PARAMS})
+
+    def test_curated_sc_params_come_first_and_are_flagged(self):
+        tabs = {t["id"]: t for t in self._snapshot()["tabs"]}
+        names = [p["name"] for p in tabs["mixer"]["scParams"]]
+        self.assertEqual(names[:4], server.SC_PRIMARY["mixer"])
+        flags = [p["primary"] for p in tabs["mixer"]["scParams"]]
+        self.assertEqual(flags[:4], [True]*4)
+        self.assertNotIn(True, flags[4:])
+
+    def test_every_tab_primary_address_is_real(self):
+        """Eine Adresse in TAB_PRIMARY, die es nicht gibt, faellt sonst nur auf,
+        wenn jemand hinsieht."""
+        snapshot = self._snapshot()
+        known = set()
+        for group in snapshot["groups"]:
+            for control in group["controls"]:
+                if control.get("address"):
+                    known.add(control["address"])
+        taken = server.sequencer_addresses(snapshot["sequencer"],
+                                           snapshot["speedClasses"])
+        for tab_id, addresses in server.TAB_PRIMARY.items():
+            for address in addresses:
+                self.assertTrue(address in known or address in taken,
+                                "%s (Tab %s) gibt es im Dump nicht"
+                                % (address, tab_id))
+
+
 class ScParamTest(unittest.TestCase):
     """Die handgepflegte Spiegelung der SC-Registry."""
 

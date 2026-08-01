@@ -23,12 +23,6 @@
 
   <p class="status" id="status" role="status">&nbsp;</p>
 
-  <!-- Spezial-Sektionen. Sie bauen sich aus den strukturierten Feldern
-       "sequencer" / "speedClasses" / "scParams" der Payload und stehen
-       bewusst ausserhalb von <main id="groups">, dessen Raster fuer die
-       generischen Parameterkarten gedacht ist. -->
-  <div id="sequencerHost"></div>
-
   <section class="presets" id="presets">
     <h2>Presets</h2>
     <div class="preset-rows">
@@ -44,9 +38,16 @@
     </div>
   </section>
 
-  <main id="groups"></main>
+  <!-- Fuenf Themen-Tabs. Die Zuordnung kommt vom Server (TABS in
+       server.py); app.js baut ALLE Panels und schaltet nur die
+       Sichtbarkeit um, damit Preset-Laden und der applied/echoed-Ruecklauf
+       auch Regler auf inaktiven Tabs erreichen. -->
+  <nav class="tab-bar" id="tabBar" role="tablist"></nav>
+  <main id="tabPanels"></main>
 
-  <div id="scHost"></div>
+  <!-- Rueckfall fuer einen aelteren Server ohne Tab-Daten, siehe
+       buildTabs() in app.js. -->
+  <div id="groups" hidden></div>
 
   <script type="application/json" id="bootstrap">{{ bootstrap|safe }}</script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>

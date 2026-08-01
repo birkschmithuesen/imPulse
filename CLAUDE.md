@@ -73,7 +73,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 
 ### Tests
 
-`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`, `SpeedQuantizer`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
+`test/run.sh` übersetzt die processing- und netzunabhängigen Klassen (`LedColor`, `ArtNetOutput`, `NodeCrossingStore`, `NodeSelection`, `LedStripeNetworks`, `TestPatterns`, `LedAnchorStore`, `LedPositionMap`, `LedPositionCalibration`, `ImpulseOscThrottle`, `ParameterOscillator`, `PresetStore`, `PresetScheduler`, `SplitVariance`, `MusicalClock`, `OriginSequencer`, `SpeedQuantizer`, `StripeTreeStore`) zusammen mit `test/*.java` gegen `core.jar` von Processing und führt sie aus. Ohne Argumente startet es alle Suiten der Default-Liste im Skript — die vier ersten immer, die übrigen nur, wenn ihre Quelldatei vorhanden ist (ein Fehlen wird gemeldet, nicht stillschweigend übergangen):
 
 - `ArtNetOutputTest` — Adressrechnung und byte-genauer Paketbau, inklusive der Sicherheitsanforderung an den Master-Pegel (Auslieferungswert 0.1, Klemmung auf 0..1)
 - `ArtNetDecoderTest` — Gegenprobe: ein unabhängiger Decoder setzt den LED-Puffer aus den gebauten Paketen zurück zusammen
@@ -89,6 +89,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `SplitVarianceTest` — die Jitter-Formel der Split-Kinder: neutraler Auslieferungswert, Symmetrie um den Ausgangswert, die Untergrenze gegen unsterbliche Impulse, Vorzeichenerhalt bei rückwärts laufenden Kindern
 - `MusicalClockTest` — die akkumulierende Beat-Phase: kein Sprung bei BPM-Wechsel, Notenwert-Intervalle, entartete BPM, Rücksprung der Wanduhr
 - `OriginSequencerTest` — Feuertakt je Notenwert, `repeatCount` hält den Ursprung, `originStripeOverride`, kein Sofort-Feuern beim Wiedereinschalten, kein Nachholen nach einem Hänger, Rasterung der Notenwerte
+- `StripeTreeStoreTest` — die Baum-Zuordnung: Parsen samt Kommentaren, unbekannter Baumname, Index ausserhalb des Bereichs, doppelter Stripe (letzte Zeile gewinnt), leerer Baum liefert `null`, fehlende Datei, Gegenprobe an der echten `data/stripeTrees.txt`
 - `SpeedQuantizerTest` — die gewichtete Auswahl der Speed-Klasse: die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, Normalisierung nicht-prozentualer Gewichte, entartete Gewichte (alle 0, negativ, NaN)
 - `PresetStoreTest` — Format, Datei, Snapshot und Anwenden eines Presets, inklusive der ausgeschlossenen und still übergangenen Adressen
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
@@ -149,6 +150,28 @@ Zwei Dinge, die man beim Ändern kennen muss:
 - **Die Liste kommt vom Dateisystem, nicht per OSC.** `server.py` läuft auf derselben Maschine wie imPulse und liest `data/presets/` direkt (`--presets`, Vorgabe `presets/` neben `--settings`). Ein OSC-Rückkanal wäre neu zu bauen — die einzige Ausgangsadresse des Sketches ist 8002. Geschrieben wird der Ordner weiterhin ausschliesslich von imPulse; deshalb gibt es im UI auch kein Löschen.
 - **Nach dem Laden zieht der Server die Regleranzeige nach**, indem er dieselbe Preset-Datei mit `parse_settings()` liest — das geht, weil Preset- und `remoteSettings.txt`-Format identisch sind. Die Werte gehen in der HTTP-Antwort zurück und werden im Browser *still* gesetzt (kein zweites OSC); geklemmt wird auf die Range aus `remoteSettings.txt`, nicht auf die aus der Preset-Datei — dieselbe Regel wie `PresetStore.applyPreset()`. Adressen, die der Dump nicht kennt, und Werte ausserhalb der verengten UI-Range (`UI_RANGE_OVERRIDES`) nennt die Statuszeile, statt sie zu verschlucken.
 - **Speichern wartet auf die Datei.** `/preset/save` ist asynchron (imPulse schreibt erst im nächsten `draw()`), also pollt der Endpoint bis zu 1 s auf eine geänderte `mtime` und antwortet sonst mit 504 statt Erfolg zu behaupten — der häufigste Fehlerfall ist „Web-UI läuft, imPulse nicht". `valid_preset_name()` in `server.py` und die Regex im JS spiegeln `PresetStore.isValidName()`; Autorität bleibt Java, dort geht es um Pfad-Traversal.
+
+**Fünf Themen-Tabs** (Mixer, Sound Design, Spawn-Verhalten, Noten-Verhalten,
+Impuls-Verhalten) statt einer langen Liste. Welche Adresse in welchen Tab
+gehört, entscheidet `TAB_RULES`/`TAB_PRIMARY` in `server.py` — dort ist es
+prüfbar, und `test_webui.py` stellt sicher, dass **jeder** Regler in genau
+einem Tab landet und keiner doppelt. Oben je Tab die kuratierten Regler,
+darunter ein eingeklapptes `<details>` mit dem Rest.
+
+Die Reihenfolge der Regeln zählt: `/net/impulse/speedQuantize/` muss **vor**
+`/net/impulse/` stehen, sonst zöge die Physik-Regel die Speed-Klassen an sich.
+
+**`buildTabs()` baut ALLE Panels und schaltet nur `hidden` um** — nicht erst
+beim Öffnen eines Tabs. Die Regler tragen sich beim Bauen in die flache
+`controls`-Map ein, und über genau die laufen Preset-Laden und der
+`applied`/`echoed`-Rücklauf. Ein Regler auf einem nie geöffneten Tab stünde
+sonst nicht in der Map und würde von einem Preset still nicht angezeigt.
+Headless mit jsdom gegengeprüft: 67 Einträge in der Map, ein Regler auf einem
+inaktiven Tab lässt sich setzen, und das Umschalten baut nichts neu.
+
+Kopfzeile, Statuszeile und Preset-Sektion stehen bewusst **über** der
+Tab-Leiste: sie gelten für alle Tabs, und ein Preset-Feld, das nur auf einem
+Tab sichtbar wäre, wäre eine Falle.
 
 **Drei Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
 flache Liste aus 38 Sequencer-Reglern unbedienbar wäre. Der Server liefert
@@ -260,7 +283,41 @@ Melodie, das ist der Zweck.
   Default 1 für Track 0 und 1, sonst 0), `noteValue` (int 1..16, gerastet auf
   1/2/4/8/16), `repeatCount` (int 1..8, Default 3), `energy` (float 0..1,
   Default 0.6), `swingJitter` (float 0..1, Default **0**),
-  `originStripeOverride` (int, -1 = zufällig)
+  `originTreeFilter` (int 0..4, Default **0**), `originStripeOverride`
+  (int, -1 = zufällig)
+
+**Baum-Origin-Filter** (`StripeTreeStore.java`, `data/stripeTrees.txt`): ein
+Track kann seinen Ursprungs-Vorrat auf einen der vier physischen Bäume
+einschränken. `originTreeFilter` 0 = alle Stripes, 1 = vorn, 2 = hinten,
+3 = rechts, 4 = links (Reihenfolge = `StripeTreeStore.TREE_NAMES`, das Web-UI
+zeigt Klartext).
+
+Die Datei hat vier Tab-Spalten `stripeIndex baum confidence distanceMeters`,
+`#` leitet einen Kommentar ein. Sie ist **automatisch erzeugter Best-Guess**
+und wird von Birk von Hand korrigiert — daraus folgen drei Regeln:
+
+- **Bei doppeltem Stripe gewinnt die LETZTE Zeile.** Die natürliche
+  Handkorrektur ist eine angehängte Zeile am Ende; „erste gewinnt" würde sie
+  still verschlucken. Die Überschreibung wird gemeldet.
+- **Index und Baum genügen**, `confidence`/`distanceMeters` sind optional —
+  beim Korrigieren soll niemand eine Distanz erfinden müssen.
+- **`confidence` wird gelesen, aber nicht ausgewertet.** „unsicher" ist eine
+  Notiz für die Handkorrektur, kein Laufzeitverhalten; die Anzahl steht im
+  Startbericht, damit sie nicht in Vergessenheit gerät.
+
+Drei Dinge, die man beim Ändern kennen muss:
+
+- **Vorrangregel:** `originStripeOverride >= 0` schlägt den Baum-Filter. Der
+  Filter wirkt nur bei `-1` und schränkt dann den Zufalls-Pool ein — auch
+  beim Nachwürfeln nach Ablauf von `repeatCount`, weil `pickStripe()` der
+  einzige Ort ist, an dem ein Ursprung entsteht.
+- **Ein leerer Pool zählt wie kein Filter.** `stripesFor()` liefert für einen
+  Baum ohne Stripes `null`, nicht ein leeres Array. Sonst verstummte der Track
+  nach dem Einschalten eines Filters — ein Fehlerzustand ohne Symptom.
+- **Der Sequencer kennt keine Bäume.** `TrackConfig.originPool` wird vom
+  Effekt gefüllt (Referenz auf das im Store gecachte Array, keine Kopie —
+  `tickSequencer()` läuft mit 40 Hz). Damit hängt die Prüfbarkeit des
+  Sequencers nicht an einer Datei.
 
 Vier Dinge, die man beim Ändern kennen muss:
 
