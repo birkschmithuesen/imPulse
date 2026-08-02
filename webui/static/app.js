@@ -1364,7 +1364,7 @@ function presetNameProblem(name) {
   return null;
 }
 
-function fillPresets(payload) {
+function fillPresets(payload, activeName) {
   const names = (payload && payload.presets) || [];
   const previous = presetSelectEl.value;
   presetSelectEl.innerHTML = '';
@@ -1382,7 +1382,18 @@ function fillPresets(payload) {
   }
   presetSelectEl.disabled = !names.length;
   presetLoadEl.disabled = !names.length;
-  if (names.indexOf(previous) >= 0) { presetSelectEl.value = previous; }
+  // Schritt 2b (reine Anzeige-Synchronisation): beim allerersten Aufruf
+  // (Seiten-Load, kein `previous`-Wert im Select vorhanden) auf das vom
+  // Server gemeldete zuletzt aktive Preset springen, falls es noch in der
+  // Liste steht. Bei jedem SPAETEREN Aufruf (z.B. Preset von Hand geloescht,
+  // refreshPresets() nach 404) hat der Operator womoeglich schon manuell
+  // etwas anderes ausgewaehlt -- dessen Wahl darf hier nicht ueberschrieben
+  // werden, deshalb Vorrang fuer `previous`, wenn es noch gueltig ist.
+  if (names.indexOf(previous) >= 0) {
+    presetSelectEl.value = previous;
+  } else if (activeName && names.indexOf(activeName) >= 0) {
+    presetSelectEl.value = activeName;
+  }
   if (payload && payload.error) { setStatus(payload.error, 'warn'); }
 }
 
@@ -2851,7 +2862,7 @@ async function gotoLevel(level, stateHost) {
  * Wird zweimal gerufen: einmal fuer die kuratierten oben im Tab, einmal fuer
  * den Rest im Erweitert-Bereich. Der Warnhinweis steht nur beim ersten Block
  * je Tab. */
-function buildScParams(params, host, port, withNote) {
+function buildScParams(params, host, port, withNote, values) {
   if (!params || !params.length) { return; }
 
   const section = document.createElement('section');
@@ -2895,19 +2906,27 @@ function buildScParams(params, host, port, withNote) {
 
       const body = document.createElement('div');
       body.className = 'param-body';
+      // Der eigentliche Bugfix (Root-Cause-Analyse 2026-08-02): frueher
+      // stand hier immer param.default, egal was zuletzt tatsaechlich per
+      // OSC gesendet wurde -- ein Browser-Reload zeigte dadurch nie den
+      // wirklichen Stand, obwohl SuperCollider laengst etwas anderes
+      // spielte. `values` kommt aus scParams.values (server.py, ParameterStore
+      // .sc_values, persistiert in scState.json).
+      const startValue = (values && Object.prototype.hasOwnProperty.call(values, param.name))
+        ? values[param.name] : param.default;
       const slider = document.createElement('input');
       slider.type = 'range';
       slider.min = param.min;
       slider.max = param.max;
       const span = param.max - param.min;
       slider.step = span > 40 ? 1 : (span > 4 ? 0.05 : 0.01);
-      slider.value = param.default;
+      slider.value = startValue;
       const out = document.createElement('input');
       out.type = 'number';
       out.min = param.min;
       out.max = param.max;
       out.step = 'any';
-      out.value = param.default;
+      out.value = startValue;
       body.appendChild(slider);
       body.appendChild(out);
       wrap.appendChild(body);
@@ -3254,7 +3273,8 @@ function buildTabs(data) {
       });
       panel.appendChild(card);
     }
-    buildScParams(scPrimary, panel, (data.scParams || {}).port, true);
+    buildScParams(scPrimary, panel, (data.scParams || {}).port, true,
+      (data.scParams || {}).values);
 
     // 3. Alles Uebrige. Normalerweise eingeklappt -- dasselbe
     //    <details>-Muster wie die bisherige Advanced-Gruppe. Ausnahme: der
@@ -3270,7 +3290,7 @@ function buildTabs(data) {
         body.appendChild(buildGroupSection(group, data));
       });
       buildScParams(scRest, body, (data.scParams || {}).port,
-        scPrimary.length === 0);
+        scPrimary.length === 0, (data.scParams || {}).values);
       if (tab.expanded) {
         panel.appendChild(body);
       } else {
@@ -3420,7 +3440,7 @@ couplingEl.addEventListener('change', () => {
 
 reloadEl.addEventListener('click', reload);
 
-fillPresets(bootstrap.presets);
+fillPresets(bootstrap.presets, bootstrap.activePreset);
 renderAutocommit(bootstrap.autocommit);
 setInterval(pollAutocommit, AUTOCOMMIT_POLL_MS);
 render(bootstrap);

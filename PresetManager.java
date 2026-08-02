@@ -29,6 +29,12 @@ class PresetManager implements OscMessageSink {
 	private final String statePath;
 	private boolean stateWriteFailed = false;
 
+	// data/lastPreset.txt - Boot-Fallback, siehe PresetStore.readLastPresetName
+	// fuer die Begruendung. null erlaubt (aeltere Aufrufer/Tests ohne dieses
+	// Feature) - dann passiert bei jedem load()/save() einfach nichts.
+	private final String lastPresetPath;
+	private boolean lastPresetWriteFailed = false;
+
 	// digestMessage() laeuft im Draw-Thread, weil distributeMessages() aus
 	// draw() gerufen wird - eine Synchronisierung braucht es hier also nicht.
 	// Gemerkt statt sofort ausgefuehrt wird trotzdem, damit das Lesen einer
@@ -40,12 +46,25 @@ class PresetManager implements OscMessageSink {
 	PresetManager(String presetDirectory, OscP5 _oscP5, NetAddress _soundTarget,
 			SongStructureDirector _director, SongStructureParams _songParams,
 			String _statePath) {
+		this(presetDirectory, _oscP5, _soundTarget, _director, _songParams,
+				_statePath, null);
+	}
+
+	// Ueberladung mit lastPresetPath (Boot-Fallback, Schritt 2a). Eigener
+	// Konstruktor statt eines Pflichtparameters am bestehenden: Tests, die
+	// den alten Fuenf-Parameter-Aufruf benutzen, bleiben unveraendert
+	// lauffaehig - dieselbe Ueberlegung wie bei TravellingActivation weiter
+	// oben im Effekt.
+	PresetManager(String presetDirectory, OscP5 _oscP5, NetAddress _soundTarget,
+			SongStructureDirector _director, SongStructureParams _songParams,
+			String _statePath, String _lastPresetPath) {
 		store = new PresetStore(presetDirectory);
 		oscP5 = _oscP5;
 		soundTarget = _soundTarget;
 		director = _director;
 		songParams = _songParams;
 		statePath = _statePath;
+		lastPresetPath = _lastPresetPath;
 		OscMessageDistributor.registerAdress("/preset/load", this);
 		OscMessageDistributor.registerAdress("/preset/save", this);
 		OscMessageDistributor.registerAdress("/preset/next", this);
@@ -215,6 +234,7 @@ class PresetManager implements OscMessageSink {
 		}
 		System.out.println("Preset \"" + name + "\" geladen: " + report.summary());
 		forwardToSound("/sc/preset/load", name);
+		writeLastPresetName(name);
 		return true;
 	}
 
@@ -233,6 +253,7 @@ class PresetManager implements OscMessageSink {
 		// - beim spaeteren Laden kaeme die Szene optisch zurueck und klanglich
 		// nicht, ohne Fehlermeldung.
 		forwardToSound("/sc/preset/save", name);
+		writeLastPresetName(name);
 		return true;
 	}
 
@@ -260,5 +281,29 @@ class PresetManager implements OscMessageSink {
 		OscMessage message = new OscMessage(address);
 		message.add(name);
 		oscP5.send(message, soundTarget);
+	}
+
+	// Schritt 2a: den Namen als Boot-Fallback fuer den naechsten Prozess-
+	// Neustart merken. Ein Schreibfehler darf die laufende Show nicht
+	// stoeren - genau dieselbe Ueberlegung wie bei writeState() oben, deshalb
+	// auch dieselbe "einmal melden, dann nicht mehr"-Regel.
+	private void writeLastPresetName(String name) {
+		if (lastPresetPath == null) {
+			return;
+		}
+		if (!PresetStore.writeLastPresetName(lastPresetPath, name) && !lastPresetWriteFailed) {
+			lastPresetWriteFailed = true;
+			System.out.println("Letztes Preset nicht sicherbar (" + lastPresetPath
+					+ ") - ein Neustart faellt auf Sketch-Argument/IMPULSE_PRESET zurueck");
+		}
+	}
+
+	// Statisch UND unabhaengig von einer PresetManager-Instanz aufrufbar:
+	// imPulse.pde braucht den Namen VOR dem Anlegen des PresetManager (siehe
+	// loadBootPreset() weiter oben - der Aufruf steht dort bewusst NACH dem
+	// Anlegen aller Effekte, der Boot-Fallback-Lesevorgang selbst hat aber
+	// keine solche Abhaengigkeit und darf frueher passieren).
+	static String lastPresetName(String path) {
+		return PresetStore.readLastPresetName(path);
 	}
 }

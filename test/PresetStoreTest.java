@@ -276,6 +276,43 @@ public class PresetStoreTest {
     Check.near("Wert unveraendert geblieben", before, level.value, 1e-6);
     Check.that("nicht zusaetzlich als unbekannt gemeldet", brokenReport.unknown.isEmpty());
 
+    // ---- Letztes Preset (lastPreset.txt, Schritt 2a Boot-Fallback) ----
+    File lastPresetFile = new File(dir, "lastPreset.txt");
+    Check.that("fehlende Datei ergibt null",
+        PresetStore.readLastPresetName(lastPresetFile.getPath()) == null);
+
+    Check.that("Schreiben meldet Erfolg",
+        PresetStore.writeLastPresetName(lastPresetFile.getPath(), "hang_drum_slow"));
+    Check.eq("Name kommt unveraendert zurueck", "hang_drum_slow",
+        PresetStore.readLastPresetName(lastPresetFile.getPath()));
+
+    // Ueberschreiben statt Anhaengen: die Datei enthaelt danach IMMER nur
+    // den letzten Namen.
+    Check.that("zweites Schreiben meldet ebenfalls Erfolg",
+        PresetStore.writeLastPresetName(lastPresetFile.getPath(), "order1"));
+    Check.eq("zweiter Name ersetzt den ersten", "order1",
+        PresetStore.readLastPresetName(lastPresetFile.getPath()));
+
+    // Whitespace/Leerzeile darf nicht als gueltiger Name durchgehen - eine
+    // halb geschriebene oder von Hand angelegte leere Datei soll wie "kein
+    // Preset bekannt" behandelt werden, nicht wie ein Name mit Leerstring.
+    write(lastPresetFile, "\n");
+    Check.that("Leerzeile ergibt null, keinen leeren String",
+        PresetStore.readLastPresetName(lastPresetFile.getPath()) == null);
+
+    write(lastPresetFile, "  order1  \n");
+    Check.eq("umgebende Leerzeichen werden getrimmt", "order1",
+        PresetStore.readLastPresetName(lastPresetFile.getPath()));
+
+    // Verzeichnis existiert noch nicht - writeLastPresetName muss es selbst
+    // anlegen (dasselbe Verhalten wie PresetStore.write() fuer den
+    // Preset-Ordner).
+    File nestedPath = new File(new File(dir, "nested"), "lastPreset.txt");
+    Check.that("Schreiben legt fehlendes Verzeichnis an",
+        PresetStore.writeLastPresetName(nestedPath.getPath(), "standby"));
+    Check.eq("und der Name ist danach lesbar", "standby",
+        PresetStore.readLastPresetName(nestedPath.getPath()));
+
     System.exit(Check.report("PresetStoreTest"));
   }
 
