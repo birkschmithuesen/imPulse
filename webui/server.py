@@ -2995,6 +2995,85 @@ def write_ui_state(path: str, values: Dict[str, float]) -> None:
     os.replace(temp, path)
 
 
+# ---------------------------------------------------------------------------
+# SC-Zustandsdatei (scState.json) -- derselbe Anzeige-/Zustands-Bug wie oben
+# bei webuiState.json, nur fuer die SuperCollider-Sound-Parameter.
+#
+# EIGENE Datei statt eines Feldes in webuiState.json: die zwei Zustaende
+# gehoeren zu VERSCHIEDENEN Parametersystemen (remoteSettings.txt vs.
+# SC_PARAMS/klangnetz_bells.scd, verschiedene OSC-Ports), die nur zufaellig
+# im selben Prozess laufen. Eine gemeinsame Datei muesste beim Lesen zwischen
+# zwei Namensraeumen unterscheiden (SC-Namen sind nicht adressfoermig, z.B.
+# "masterVolume" statt "/net/impulse/speed") und ein Test, der nur den
+# UI-Zustand pruefen will, bekaeme SC-Rauschen mit in die Datei. Format und
+# Schreibweg sind trotzdem WORTGLEICH read_ui_state/write_ui_state -- ein
+# Wert ist ein Wert, es gibt keinen Grund fuer eine zweite Implementierung.
+# ---------------------------------------------------------------------------
+
+SC_STATE_FILENAME = "scState.json"
+
+
+def default_sc_state_path(settings_path: str) -> str:
+    """Zustandsdatei neben der Parameterdatei: <dir von settings>/scState.json.
+
+    Dieselbe Begruendung wie default_ui_state_path: der Ort gehoert zur
+    Installation, nicht zum Programm.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(settings_path)),
+                        SC_STATE_FILENAME)
+
+
+# read_ui_state/write_ui_state lesen und schreiben ein generisches
+# Dict[str, float] ohne Bezug zu remoteSettings.txt -- fuer die SC-Werte
+# gilt exakt dasselbe Format, deshalb keine zweite Funktion.
+read_sc_state = read_ui_state
+write_sc_state = write_ui_state
+
+
+# ---------------------------------------------------------------------------
+# Aktives Preset (activePreset.txt) -- fuer die Anzeige-Synchronisation nach
+# einem Browser-Reload (Schritt 2b). Bewusst reiner Text statt JSON: es ist
+# GENAU EIN Wert, derselbe Ansatz wie data/lastPreset.txt auf der Java-Seite
+# fuer den Boot-Fallback (Schritt 2a) -- zwei verschiedene Zwecke (Boot vs.
+# Anzeige), zwei verschiedene Dateien, aber dasselbe simple Format.
+# ---------------------------------------------------------------------------
+
+ACTIVE_PRESET_FILENAME = "activePreset.txt"
+
+
+def default_active_preset_path(settings_path: str) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(settings_path)),
+                        ACTIVE_PRESET_FILENAME)
+
+
+def read_active_preset_name(path: str) -> Tuple[Optional[str], Optional[str]]:
+    """Liest den Namen. Rueckgabe: (Name oder None, Fehlermeldung oder None).
+
+    Eine fehlende Datei ist der Normalfall (noch nie ein Preset geladen/
+    gespeichert) und liefert (None, None) -- kein Fehler, wie bei
+    read_ui_state.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, "aktives Preset nicht lesbar (%s): %s" % (path, exc)
+    name = text.strip()
+    return (name if name else None), None
+
+
+def write_active_preset_name(path: str, name: str) -> None:
+    """Schreibt den Namen atomar (Temp-Datei + Rename), wie write_ui_state."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(name + "\n")
+    os.replace(temp, path)
+
+
 def group_key(address: str) -> str:
     """Gruppenschluessel aus dem Adress-Praefix.
 
@@ -3177,6 +3256,21 @@ class ParameterStore:
     Ohne ``ui_state_path`` (Vorgabe) verhaelt sich der Store exakt wie vorher
     und schreibt nichts -- so bleiben die Tests, die einen Store direkt auf
     eine Preset-Datei richten, frei von Nebenwirkungen.
+
+    Seit dem Preset-Persistenz-Feature (2026-08-02) kommen zwei weitere,
+    UNABHAENGIGE Zustaende dazu, beide nach demselben Muster (eigene Datei,
+    einmalig beim Start geladen, danach im Speicher gefuehrt, bei jeder
+    Aenderung neu geschrieben):
+
+    - ``sc_values`` / ``sc_state_path``: der zuletzt an SuperCollider
+      gesendete Wert je SC-Parameter. Das ist der eigentliche Bugfix aus der
+      Root-Cause-Analyse: /api/sc schrieb den Wert bisher NUR per OSC raus,
+      nirgendwo in den Server-Zustand -- ein Browser-Reload zeigte deshalb
+      immer den Code-Default aus SC_PARAMS, nie den zuletzt tatsaechlich
+      gesendeten Wert, obwohl SuperCollider laengst etwas anderes spielte.
+    - ``active_preset`` / ``active_preset_path``: der Name des zuletzt ueber
+      dieses UI geladenen oder gespeicherten Presets, reine ANZEIGE-Sache
+      (Schritt 2b) -- kein Bezug zu remoteSettings.txt.
     """
 
     path: str
@@ -3193,6 +3287,16 @@ class ParameterStore:
     # Der Ueberlagerung ist ein EINMALIGER Vorgang beim Start, kein Zustand,
     # der bei jedem Neulesen wieder greift -- siehe _read().
     ui_state_applied: bool = False
+    # ---- SC-Werte (Schritt 1, der Hauptfix) -------------------------------
+    sc_state_path: Optional[str] = None
+    sc_values: Dict[str, float] = field(default_factory=dict)
+    sc_state_error: Optional[str] = None
+    sc_state_applied: bool = False
+    # ---- Aktives Preset (Schritt 2b, reine Anzeige) -----------------------
+    active_preset_path: Optional[str] = None
+    active_preset: Optional[str] = None
+    active_preset_error: Optional[str] = None
+    active_preset_applied: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def _read(self) -> None:
@@ -3219,6 +3323,17 @@ class ParameterStore:
         if not self.ui_state_applied:
             self.ui_state_applied = True
             self._load_ui_state()
+        # sc_values und active_preset haengen NICHT an remoteSettings.txt
+        # (andere Namensraeume, kein by_address-Abgleich noetig), laufen
+        # aber ueber denselben "nur beim ersten Lesen"-Schalter: ein
+        # imPulse-Neustart soll auch hier nicht die Anzeige ueberschreiben,
+        # die seit dem Start dieses UI-Prozesses gesetzt wurde.
+        if not self.sc_state_applied:
+            self.sc_state_applied = True
+            self._load_sc_state()
+        if not self.active_preset_applied:
+            self.active_preset_applied = True
+            self._load_active_preset()
 
     def _load_ui_state(self) -> None:
         """Die zuletzt ueber das UI gesetzten Werte ueber die Boot-Werte legen.
@@ -3280,6 +3395,77 @@ class ParameterStore:
         else:
             self.ui_state_error = None
 
+    def _load_sc_state(self) -> None:
+        """Die zuletzt an SuperCollider gesendeten Werte einlesen.
+
+        Kein Abgleich gegen eine Registry noetig (anders als bei
+        _load_ui_state gegen remoteSettings.txt): SC_PARAMS ist eine feste,
+        im Code kompilierte Liste, kein zur Laufzeit veraenderliches Dokument.
+        Ein Name, den es dort nicht mehr gibt, wird trotzdem verworfen -- die
+        Tabelle kann sich zwischen zwei Server-Versionen aendern, genau wie
+        remoteSettings.txt sich zwischen zwei imPulse-Versionen aendert.
+        """
+        if not self.sc_state_path:
+            return
+        raw, error = read_sc_state(self.sc_state_path)
+        self.sc_state_error = error
+        if error:
+            print("[webui] %s" % error, file=sys.stderr)
+        known = {entry["name"] for entry in SC_PARAMS}
+        kept = {name: value for name, value in raw.items() if name in known}
+        dropped = len(raw) - len(kept)
+        self.sc_values = kept
+        if kept or dropped:
+            print("[webui] SC-Zustand: %d Werte uebernommen, %d verworfen "
+                  "(Parameter gibt es nicht mehr) -- %s"
+                  % (len(kept), dropped, self.sc_state_path), file=sys.stderr)
+
+    def _write_sc_state(self) -> None:
+        """Die SC-Zustandsdatei neu schreiben. Aufrufer haelt ``_lock``.
+
+        Dieselbe Begruendung wie bei _write_ui_state: ein Schreibfehler ist
+        kein Fehler des Aufrufers, der OSC-Versand ist laengst passiert.
+        """
+        if not self.sc_state_path:
+            return
+        try:
+            write_sc_state(self.sc_state_path, self.sc_values)
+        except OSError as exc:
+            message = "SC-Zustand nicht schreibbar: %s" % exc
+            if message != self.sc_state_error:
+                print("[webui] %s" % message, file=sys.stderr)
+            self.sc_state_error = message
+        else:
+            self.sc_state_error = None
+
+    def _load_active_preset(self) -> None:
+        """Den zuletzt geladenen/gespeicherten Preset-Namen einlesen."""
+        if not self.active_preset_path:
+            return
+        name, error = read_active_preset_name(self.active_preset_path)
+        self.active_preset_error = error
+        if error:
+            print("[webui] %s" % error, file=sys.stderr)
+        self.active_preset = name
+
+    def _write_active_preset(self) -> None:
+        """Die Datei mit dem aktiven Preset-Namen neu schreiben.
+
+        Aufrufer haelt ``_lock``. Wie bei den anderen zwei Zustandsdateien:
+        ein Schreibfehler ist kein Fehler des Aufrufers.
+        """
+        if not self.active_preset_path or not self.active_preset:
+            return
+        try:
+            write_active_preset_name(self.active_preset_path, self.active_preset)
+        except OSError as exc:
+            message = "aktives Preset nicht schreibbar: %s" % exc
+            if message != self.active_preset_error:
+                print("[webui] %s" % message, file=sys.stderr)
+            self.active_preset_error = message
+        else:
+            self.active_preset_error = None
+
     def refresh(self, force: bool = False) -> None:
         with self._lock:
             if force or not self.parameters:
@@ -3333,7 +3519,17 @@ class ParameterStore:
                 "scParams": {
                     "port": SC_OSC_PORT,
                     "groups": sc_param_groups(),
+                    # Der Hauptfix (Root-Cause: /api/sc schrieb bisher nur
+                    # per OSC, nie in einen Server-Zustand): die zuletzt
+                    # tatsaechlich gesendeten SC-Werte, damit app.js beim
+                    # Rendern der Slider NICHT mehr auf param.default
+                    # zurueckfallen muss, sobald schon ein Wert bekannt ist.
+                    "values": dict(self.sc_values),
                 },
+                # Schritt 2b: reine Anzeige-Synchronisation, kein Auto-Reload
+                # -- siehe api_preset_load()/api_preset_save() fuer die
+                # Begruendung, warum hier NICHTS an imPulse gesendet wird.
+                "activePreset": self.active_preset,
                 "settings": {
                     "path": self.path,
                     "mtime": self.mtime,
@@ -3347,6 +3543,15 @@ class ParameterStore:
                         "path": self.ui_state_path,
                         "count": len(self.ui_state),
                         "error": self.ui_state_error,
+                    },
+                    "scState": {
+                        "path": self.sc_state_path,
+                        "count": len(self.sc_values),
+                        "error": self.sc_state_error,
+                    },
+                    "activePresetState": {
+                        "path": self.active_preset_path,
+                        "error": self.active_preset_error,
                     },
                 },
             }
@@ -3373,6 +3578,32 @@ class ParameterStore:
             if self.ui_state_path and self.ui_state.get(address) != value:
                 self.ui_state[address] = value
                 self._write_ui_state()
+
+    def store_sc(self, name: str, value: float) -> None:
+        """Einen an SuperCollider gesendeten SC-Wert uebernehmen und sichern.
+
+        Das Gegenstueck zu ``store()`` fuer die SC_PARAMS-Welt. Einziger
+        Aufrufer ist ``api_sc()``, direkt NACH dem erfolgreichen
+        ``sc_sender.send(...)`` -- das war die fehlende Anbindung aus der
+        Root-Cause-Analyse: ohne diesen Aufruf landete der Wert nirgendwo,
+        weder im Server-Speicher noch auf der Platte.
+        """
+        with self._lock:
+            self.sc_values[name] = value
+            if self.sc_state_path:
+                self._write_sc_state()
+
+    def set_active_preset(self, name: str) -> None:
+        """Den Namen des zuletzt geladenen/gespeicherten Presets merken.
+
+        Aufrufer: api_preset_load() und api_preset_save(), jeweils NACH
+        Erfolg -- ein fehlgeschlagenes Laden/Speichern soll die Anzeige nicht
+        auf einen Namen ziehen, der gar nicht (mehr) aktiv ist.
+        """
+        with self._lock:
+            self.active_preset = name
+            if self.active_preset_path:
+                self._write_active_preset()
 
 
 def apply_preset_entries(store: ParameterStore,
@@ -3454,7 +3685,9 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                sc_port: int = SC_OSC_PORT,
                record_status_host: str = DEFAULT_RECORD_STATUS_HOST,
                record_status_port: int = DEFAULT_RECORD_STATUS_PORT,
-               ui_state_path: Optional[str] = None):
+               ui_state_path: Optional[str] = None,
+               sc_state_path: Optional[str] = None,
+               active_preset_path: Optional[str] = None):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
@@ -3464,9 +3697,15 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                                   DEFAULT_STATE_FILENAME)
     if ui_state_path is None:
         ui_state_path = default_ui_state_path(settings_path)
+    if sc_state_path is None:
+        sc_state_path = default_sc_state_path(settings_path)
+    if active_preset_path is None:
+        active_preset_path = default_active_preset_path(settings_path)
     # Erst danach refresh(): der Store legt den gesicherten UI-Zustand direkt
     # beim ersten Lesen ueber die Boot-Werte, ohne ein zweites Kommando.
-    store = ParameterStore(path=settings_path, ui_state_path=ui_state_path)
+    store = ParameterStore(path=settings_path, ui_state_path=ui_state_path,
+                           sc_state_path=sc_state_path,
+                           active_preset_path=active_preset_path)
     store.refresh(force=True)
     sender = OscSender(osc_host, osc_port)
     # Zweiter Sender fuer die Sound-Parameter: die /klangnetz/param/*-Adressen
@@ -3606,7 +3845,13 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         value = max(entry["min"], min(entry["max"], value))
         address = SC_PARAM_PREFIX + name
         sc_sender.send(address, value)
+        # Der eigentliche Bugfix (Root-Cause-Analyse): ohne diesen Aufruf
+        # landete der Wert nirgendwo im Server-Zustand -- ein Browser-Reload
+        # zeigte danach immer param.default statt des zuletzt gesendeten
+        # Werts, obwohl SuperCollider laengst etwas anderes spielte.
+        store.store_sc(name, value)
         return jsonify({"ok": True, "address": address, "value": value})
+
 
     # ---- Vierkanal-Mitschnitt -------------------------------------------
     # Vier Endpoints statt eines mit Aktion im Body: eine Adresse pro
@@ -3788,6 +4033,10 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         # auf der vorigen Farbe stehen, ohne Fehlermeldung.
         result["fade"] = build_fade(store.by_address, store.values)
         result.update({"ok": True, "name": name})
+        # Schritt 2b: erst NACH erfolgreichem Parsen/Anwenden merken -- ein
+        # Preset mit kaputtem Inhalt (oben abgefangen) soll die Anzeige nicht
+        # auf einen Namen ziehen, dessen Werte gar nicht uebernommen wurden.
+        store.set_active_preset(str(name))
         return jsonify(result)
 
     @app.route("/api/melody/recompute", methods=["POST"])
@@ -3876,6 +4125,10 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
             }), 504
         payload = preset_list_payload()
         payload.update({"name": name, "overwritten": existed})
+        # Schritt 2b: ein gespeichertes Preset ist danach auch das aktive --
+        # der Operator hat gerade dessen Inhalt festgeschrieben, ein
+        # Browser-Reload soll das zeigen, nicht das vorher geladene Preset.
+        store.set_active_preset(str(name))
         return jsonify(payload)
 
     @app.route("/api/palette")
@@ -3936,6 +4189,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "Neustart des Servers ueberleben "
                              "(Vorgabe: %s neben --settings)"
                              % UI_STATE_FILENAME)
+    parser.add_argument("--sc-state",
+                        default=os.environ.get("IMPULSE_SC_STATE"),
+                        help="Datei, in der die zuletzt an SuperCollider "
+                             "gesendeten Sound-Parameter gesichert werden "
+                             "(Vorgabe: %s neben --settings)"
+                             % SC_STATE_FILENAME)
+    parser.add_argument("--active-preset",
+                        default=os.environ.get("IMPULSE_ACTIVE_PRESET"),
+                        help="Datei mit dem Namen des zuletzt geladenen/"
+                             "gespeicherten Presets, fuer die Anzeige nach "
+                             "einem Browser-Reload (Vorgabe: %s neben "
+                             "--settings)"
+                             % ACTIVE_PRESET_FILENAME)
     parser.add_argument("--osc-host",
                         default=os.environ.get("IMPULSE_OSC_HOST", DEFAULT_OSC_HOST),
                         help="Ziel-Host fuer OSC (Vorgabe: %(default)s)")
@@ -3982,6 +4248,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                                     DEFAULT_STATE_FILENAME))
     ui_state_path = (os.path.abspath(args.ui_state) if args.ui_state
                      else default_ui_state_path(settings_path))
+    sc_state_path = (os.path.abspath(args.sc_state) if args.sc_state
+                     else default_sc_state_path(settings_path))
+    active_preset_path = (os.path.abspath(args.active_preset)
+                          if args.active_preset
+                          else default_active_preset_path(settings_path))
 
     # Der Auto-Commit arbeitet auf dem Checkout, in dem dieser Server liegt --
     # nicht auf dem Ordner von --settings. Zeigt --settings woanders hin, ist
@@ -3996,7 +4267,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     app = create_app(settings_path, args.osc_host, args.osc_port, presets_path,
                      palette_path, state_path, autocommit_scheduler=scheduler,
                      record_status_port=args.record_status_port,
-                     ui_state_path=ui_state_path)
+                     ui_state_path=ui_state_path,
+                     sc_state_path=sc_state_path,
+                     active_preset_path=active_preset_path)
 
     print("[webui] remoteSettings: %s" % settings_path)
     print("[webui] Presets:        %s" % presets_path)

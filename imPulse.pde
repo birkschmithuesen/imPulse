@@ -270,7 +270,7 @@ void setup() {
 
   presetManager = new PresetManager(dataPath("presets"), oscP5, oscOutput,
       songStructureDirector, songStructureParams,
-      dataPath("songStructureState.txt"));
+      dataPath("songStructureState.txt"), dataPath("lastPreset.txt"));
 
   // Der Graph haengt an derselben Kreuzungsliste wie die Node-Objekte. Er
   // wird hier gebaut, nachdem crossingStore geladen ist, und NICHT bei jedem
@@ -281,15 +281,23 @@ void setup() {
   melodyManager = new MelodyManager(dataPath(""), melodyGraph, oscP5, oscOutput);
   System.out.println(melodyManager.startupReport());
 
-  // Start-Preset: Sketch-Argument hat Vorrang, sonst die Umgebungsvariable.
-  // Beide Wege, weil processing-java die Weitergabe von Argumenten nicht
-  // zusichert, eine Umgebungsvariable aus einer .bat dagegen immer geht.
+  // Start-Preset: Sketch-Argument hat Vorrang, dann die Umgebungsvariable,
+  // zuletzt (Schritt 2a, 2026-08-02) data/lastPreset.txt - der Name, den
+  // PresetManager bei jedem erfolgreichen /preset/load bzw. /preset/save
+  // dorthin schreibt. Ohne diesen dritten Fallback startete die Installation
+  // nach einem Neustart (Crash, Update, Stromausfall) immer mit den
+  // Code-Defaults statt mit dem zuletzt tatsaechlich gefahrenen Preset - ein
+  // Operator vor Ort haette das erst am Klang-/Lichtbild bemerkt, nicht an
+  // einer Fehlermeldung.
   //
   // Der Aufruf steht bewusst hier: nach dem Anlegen aller Effekte, sonst sind
   // die Parameter noch nicht registriert - und vor dem Schreiben von
   // remoteSettings.txt, damit diese Datei danach den wirklich gefahrenen Stand
   // zeigt statt der Code-Defaults.
   String bootPreset = (args != null && args.length > 0) ? args[0] : System.getenv("IMPULSE_PRESET");
+  if (bootPreset == null || bootPreset.trim().length() == 0) {
+    bootPreset = PresetManager.lastPresetName(dataPath("lastPreset.txt"));
+  }
   presetManager.loadBootPreset(bootPreset, System.currentTimeMillis());
 
   //to save the osc-adresses

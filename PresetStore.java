@@ -1,7 +1,9 @@
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -71,15 +73,15 @@ class PresetApplyReport {
     return text.toString();
   }
 
-  private static String join(List<String> items) {
-    StringBuilder text = new StringBuilder();
-    for (int i = 0; i < items.size(); i++) {
+  private static String join(List<String> parts) {
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < parts.size(); i++) {
       if (i > 0) {
-        text.append(", ");
+        sb.append(", ");
       }
-      text.append(items.get(i));
+      sb.append(parts.get(i));
     }
-    return text.toString();
+    return sb.toString();
   }
 }
 
@@ -445,5 +447,77 @@ class PresetStore {
     Collections.sort(report.unparsable);
     Collections.sort(report.adjusted);
     return report;
+  }
+
+  // ---- Letztes Preset (data/lastPreset.txt) --------------------------
+  //
+  // Reiner Name, keine sechs Spalten wie ein Preset selbst - die Datei
+  // ist kein Preset, sondern ein Zeiger auf eins. Zweck: imPulse soll nach
+  // einem Prozess-Neustart ohne explizites Sketch-Argument/IMPULSE_PRESET
+  // trotzdem dort weitermachen, wo die Show zuletzt stand (Birk, 2026-08-02).
+  //
+  // Statisch statt Instanzmethode auf PresetStore: die Datei liegt NICHT im
+  // Preset-Ordner selbst (der wird beim Auflisten nach *.txt durchsucht,
+  // eine zusaetzliche Datei dort waere ein falscher Eintrag in list()),
+  // sondern eine Ebene hoeher in data/ - der Aufrufer (PresetManager)
+  // uebergibt den vollen Pfad.
+
+  // Ein Name ohne Datei ist der Normalfall (frischer Checkout, noch nie
+  // gespeichert/geladen) und liefert null, keinen Fehler.
+  static String readLastPresetName(String path) {
+    File file = new File(path);
+    if (!file.isFile()) {
+      return null;
+    }
+    BufferedReader reader = null;
+    try {
+      reader = new BufferedReader(
+          new InputStreamReader(new FileInputStream(file), "UTF-8"));
+      String line = reader.readLine();
+      if (line == null) {
+        return null;
+      }
+      String trimmed = line.trim();
+      return (trimmed.length() == 0) ? null : trimmed;
+    } catch (IOException e) {
+      return null;
+    } finally {
+      if (reader != null) {
+        try {
+          reader.close();
+        } catch (IOException ignored) {
+          // Schliessen darf das Lesen nicht scheitern lassen.
+        }
+      }
+    }
+  }
+
+  // Atomar wie write(): erst Temp-Datei, dann Rename - ein abgebrochener
+  // Schreibvorgang darf den vorherigen, gueltigen Namen nicht durch eine
+  // halbe Zeile ersetzen.
+  static boolean writeLastPresetName(String path, String name) {
+    File target = new File(path);
+    File parent = target.getParentFile();
+    if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+      return false;
+    }
+    File temp = new File(path + ".tmp");
+    PrintWriter writer = null;
+    try {
+      writer = new PrintWriter(temp, "UTF-8");
+      writer.print(name);
+      writer.print('\n');
+      writer.flush();
+    } catch (IOException e) {
+      return false;
+    } finally {
+      if (writer != null) {
+        writer.close();
+      }
+    }
+    if (target.exists() && !target.delete()) {
+      return false;
+    }
+    return temp.renameTo(target);
   }
 }
