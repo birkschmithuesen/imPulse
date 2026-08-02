@@ -154,7 +154,88 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
    section-Regeln oben. */
 .presets { margin: 1rem 1rem 0; }
 
-.preset-rows { padding: 0.55rem 0.8rem; display: grid; gap: 0.5rem; }
+/* Eine Zeile je Preset: Name (Knopf), Level, Rotationshaken, Loeschen.
+   Der Name nimmt den Rest der Breite, damit die drei Bedienelemente rechts
+   untereinander fluchten und sich beim Ueberfliegen der Liste vergleichen
+   lassen. */
+.preset-list { padding: 0.55rem 0.8rem 0.2rem; display: grid; gap: 0.3rem; }
+
+.preset-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+}
+.preset-item.is-active { background: var(--panel-hi); }
+/* Ein Preset ausserhalb der Rotation bleibt lesbar und ladbar -- es ist nur
+   nicht mehr Teil der Nacht. Ausgrauen statt ausblenden: sonst waere es weg,
+   ohne dass jemand es wiederfindet. */
+.preset-item.is-inactive .preset-name { color: var(--muted); }
+
+.preset-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.25rem 0.2rem;
+  color: var(--text);
+  font: 0.85rem ui-monospace, "Consolas", monospace;
+  cursor: pointer;
+}
+.preset-name:hover { color: var(--accent); }
+.preset-item.is-active .preset-name { font-weight: 600; }
+
+.preset-level {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.3rem;
+  background: #12151a;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: 0.78rem ui-monospace, "Consolas", monospace;
+}
+/* Nie eingeschaetzt: der Regler zeigt den Rueckfall "mittel", und das soll
+   nicht wie eine getroffene Entscheidung aussehen. */
+.preset-level.is-untagged { color: var(--muted); font-style: italic; }
+
+.preset-active {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.preset-delete {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
+}
+.preset-delete:hover { color: var(--err); border-color: var(--err); }
+
+.preset-empty { margin: 0; padding: 0.2rem; color: var(--muted); font-size: 0.82rem; }
+
+.preset-note {
+  margin: 0;
+  padding: 0.1rem 0.8rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.preset-rows { padding: 0.2rem 0.8rem 0.55rem; display: grid; gap: 0.5rem; }
 
 .preset-row { display: flex; align-items: center; gap: 0.6rem; }
 .preset-row select, .preset-row input[type=text] { flex: 1 1 auto; min-width: 0; }
