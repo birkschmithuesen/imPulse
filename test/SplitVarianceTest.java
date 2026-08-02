@@ -59,6 +59,22 @@ public class SplitVarianceTest {
     // Ausgangswert 0 bleibt 0, ohne NaN
     Check.near("Ausgangswert 0 bleibt 0", 0.0, SplitVariance.jitter(0f, 0.5f, 0.9), 1e-9);
 
+    // ---- clampDecayScale: Obergrenze gegen Aufschaukeln ueber Split-Generationen ----
+    // (Kettenreaktions-Fix, 2026-08-02) - siehe Kommentar an MAX_DECAY_SCALE.
+    Check.near("Werte unterhalb der Grenze bleiben unveraendert",
+        5.0, SplitVariance.clampDecayScale(5f), 1e-6);
+    Check.near("Wert genau an der Grenze bleibt unveraendert",
+        SplitVariance.MAX_DECAY_SCALE, SplitVariance.clampDecayScale(SplitVariance.MAX_DECAY_SCALE), 1e-6);
+    Check.near("Werte oberhalb der Grenze werden geklemmt",
+        SplitVariance.MAX_DECAY_SCALE, SplitVariance.clampDecayScale(SplitVariance.MAX_DECAY_SCALE * 100f), 1e-6);
+    // Negative Werte kommen bei decayScale nicht vor (anders als bei speed),
+    // die Klemmung ist trotzdem symmetrisch angelegt statt eine Annahme ueber
+    // das Vorzeichen zu treffen, die anderswo im Code nicht gilt.
+    Check.near("negative Werte werden symmetrisch geklemmt",
+        -SplitVariance.MAX_DECAY_SCALE, SplitVariance.clampDecayScale(-SplitVariance.MAX_DECAY_SCALE * 100f), 1e-6);
+    Check.that("NaN bleibt NaN statt eine falsche Zahl vorzutaeuschen",
+        Float.isNaN(SplitVariance.clampDecayScale(Float.NaN)));
+
     System.exit(Check.report("SplitVarianceTest"));
   }
 }

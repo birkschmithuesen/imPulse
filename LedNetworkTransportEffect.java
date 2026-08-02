@@ -96,6 +96,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   // behaelt ein Operator so seine eingestellte Verteilung, waehrend er den
   // Versatz zum Vergleich ab- und wieder anschaltet.
   RemoteControlledIntParameter splitStaggerEnabled;
+  // 0 = jeder Zweig bekommt die volle Energie des Elternimpulses (bisheriges,
+  // live gefahrenes Verhalten), 1 = anteilig UND halbiert geteilte Energie
+  // (curActivation.energy/nActivations/2.0f). Ohne Teilung vervielfacht jede
+  // Aufspaltung die Gesamtenergie im Netz - siehe activationEncounteredNode()
+  // fuer die Formel und die Begruendung der Halbierung. Default 0: ein
+  // Neustart mit diesem Stand darf das laufende Klangbild nicht ungefragt
+  // aendern, dieselbe Regel wie bei splitFanoutWeights/splitStaggerEnabled.
+  RemoteControlledIntParameter splitEnergyConservation;
   // Ein Gewicht je Klasse, Reihenfolge wie OriginSequencer.NOTE_VALUES
   // (Ganze .. Sechzehntel) und dahinter "gleichzeitig". Bis 2026-08-01 stand
   // hier ein einzelner fester Notenwert - er machte jeden Versatz im ganzen
@@ -283,6 +291,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
           "/net/impulse/split/weight/"+fanoutNames[i], fanoutDefaults[i], 0f, 100f);
     }
     splitStaggerEnabled= new RemoteControlledIntParameter("/net/impulse/split/staggerEnabled", 0, 0, 1);
+    // Adresse und Default siehe Deklaration oben - 0 laesst die Berechnung
+    // von childEnergy in activationEncounteredNode() bitgleich dem
+    // bisherigen Verhalten.
+    splitEnergyConservation= new RemoteControlledIntParameter("/net/impulse/split/energyConservation", 0, 0, 1);
     // Gewichte der Notenwert-Klassen, Schwerpunkt auf den kurzen: Sechzehntel
     // 60, Achtel 30, Viertel 10. Der Versatz soll knapp bleiben - ein halber
     // Takt zwischen zwei Zweigen liest sich nicht mehr als eine Aufspaltung,
@@ -455,18 +467,21 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         // Einmal je Kommando gezogen, nicht je Richtung: die zwei Zweige
         // desselben Anstosses sollen zusammengehoeren.
         float cmdSpeed=spawnSpeed();
+        // decayScale gehoert zur selben Ziehung wie cmdSpeed (siehe
+        // spawnSpeed()/spawnDecayScale()) - Kettenreaktions-Fix, 2026-08-02.
+        float cmdDecayScale=spawnDecayScale();
         for (Integer nodeLedIdx : activeNode.ledIndices) {
           LedInNetInfo curLedInfo=ledNetInfo[nodeLedIdx]; //which stripe are we on?
           int cmdTree=spawnTree(curLedInfo.stripeIndex);
           //  activation spreads in boths directions
           int forwPos=nodeLedIdx +1;
           if (forwPos>0&&forwPos<nLeds) {
-			activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, cmdSpeed, 1f, cmdTree));
+			activations.add(new TravellingActivation(forwPos, curLedInfo.stripeIndex, cmdSpeed, 1f, cmdDecayScale, cmdTree));
 		}
           //do not go back the same stripe:
           int backwPos=nodeLedIdx -1;
           if (backwPos>0&&backwPos<nLeds) {
-			activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -cmdSpeed, 1f, cmdTree));
+			activations.add(new TravellingActivation(backwPos, curLedInfo.stripeIndex, -cmdSpeed, 1f, cmdDecayScale, cmdTree));
 		}
         }
       }
@@ -476,7 +491,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       newMessage.getTypetagAsBytes()[0]=='i'
       ) {
       int theValue=newMessage.get(0).intValue();
-      activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), 1f, spawnTree(theValue)));
+      // decayScale gehoert zur selben Ziehung wie die Geschwindigkeit -
+      // Kettenreaktions-Fix, 2026-08-02, siehe spawnSpeed()/spawnDecayScale().
+      float stripeSpeed=spawnSpeed();
+      activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, stripeSpeed, 1f, spawnDecayScale(), spawnTree(theValue)));
     }
 
     //System.out.println(newMessage);
@@ -497,7 +515,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       //System.out.println("Calculated Energy: "  + energy);
       //PApplet.println(theValue);
       if (theValue<nStripes) {
-        activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, spawnSpeed(), energy, spawnTree(theValue)));
+        // decayScale gehoert zur selben Ziehung wie die Geschwindigkeit -
+        // Kettenreaktions-Fix, 2026-08-02, siehe spawnSpeed()/spawnDecayScale().
+        float tubeSpeed=spawnSpeed();
+        activations.add(new TravellingActivation(theValue*nLedsInStripe, theValue, tubeSpeed, energy, spawnDecayScale(), spawnTree(theValue)));
       }
     }
   }
@@ -806,10 +827,22 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         // releasePendingSplits(), je einmal pro tatsaechlich gestartetem Kind.
         // Begruendung siehe sendOscMessage().
         float nActivations=hitNode.ledIndices.size();
-        //energieerhaltende Variante, bewusst nicht aktiv (siehe CLAUDE.md):
-        //float childEnergy=curActivation.energy/nActivations/2.0f;
-        //curActivation.setEnergy(childEnergy);
-        float childEnergy=curActivation.energy;
+        // Energieerhaltung am Knoten (Kettenreaktions-Fix, 2026-08-02):
+        // standardmaessig AUS (/net/impulse/split/energyConservation, Default
+        // 0) - dann bekommt jeder Zweig die VOLLE Energie des Elternimpulses,
+        // das bisherige, live gefahrene Verhalten. Bei 1 wird die Energie
+        // anteilig UND zusaetzlich halbiert geteilt
+        // (curActivation.energy/nActivations/2.0f) - ohne das vervielfacht
+        // jede Aufspaltung die Gesamtenergie im Netz, mit hoher Speed (und
+        // dadurch vielen Kreuzungstreffern) verschaerft das die
+        // Kettenreaktion zusaetzlich zum decayScale-Problem oben. Eigener
+        // Schalter statt fest umzustellen: Birk faehrt aktuell das
+        // Vollenergie-Verhalten live, ein Neustart mit diesem Stand darf das
+        // Klangbild nicht ungefragt aendern (dieselbe Regel wie bei
+        // splitFanoutWeights/splitStaggerEnabled oben).
+        float childEnergy = (splitEnergyConservation.getValue() == 1)
+            ? curActivation.energy/nActivations/2.0f
+            : curActivation.energy;
         // Streuung je Kind, siehe /net/impulse/splitSpeedJitter und
         // /net/impulse/splitLifetimeJitter. Bei beiden Auslieferungswerten 0
         // liefert SplitVariance.jitter() den Ausgangswert unveraendert, das
@@ -843,7 +876,16 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
             splitCandidates.add(candidate(forwPos, curLedInfo.stripeIndex,
                 SplitVariance.jitter(curActivation.speed, speedJitter, Math.random()),
                 childEnergy,
-                SplitVariance.jitter(1f, lifetimeJitter, Math.random()),
+                // Jitter-BASIS ist der decayScale des Elternimpulses, nicht
+                // mehr 1f (Kettenreaktions-Fix, 2026-08-02): sonst faellt ein
+                // schnelles Kind (hohe geerbte Speed, siehe
+                // TravellingActivation.speed) beim Splitten auf den normalen
+                // Zerfall zurueck und legt dadurch noch mehr Strecke zurueck
+                // als sein Elternimpuls - jede Generation eskaliert weiter.
+                // clampDecayScale() deckelt das Aufschaukeln ueber mehrere
+                // Split-Generationen, siehe SplitVariance.MAX_DECAY_SCALE.
+                SplitVariance.clampDecayScale(
+                    SplitVariance.jitter(curActivation.decayScale, lifetimeJitter, Math.random())),
                 curActivation.originTree, hitNode));
           }
           //do not go back the same stripe:
@@ -853,7 +895,8 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
               splitCandidates.add(candidate(backwPos, curLedInfo.stripeIndex,
                   SplitVariance.jitter(-curActivation.speed, speedJitter, Math.random()),
                   childEnergy,
-                  SplitVariance.jitter(1f, lifetimeJitter, Math.random()),
+                  SplitVariance.clampDecayScale(
+                      SplitVariance.jitter(curActivation.decayScale, lifetimeJitter, Math.random())),
                   curActivation.originTree, hitNode));
             }
           }
@@ -1173,10 +1216,13 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // der ganze Schwung gleich schnell sein. Grundwert bleibt impulseSpeed,
       // bewusst kein eigener Speed-Parameter fuer den Ambient-Layer.
       float speed=spawnSpeed();
+      // decayScale gehoert zur selben Ziehung wie speed - Kettenreaktions-Fix,
+      // 2026-08-02, siehe spawnSpeed()/spawnDecayScale().
+      float decayScale=spawnDecayScale();
       // "rueckwaerts" beginnt am anderen Ende des Stripes, sonst wuerde der Impuls sofort
       // wieder aus den Bounds fallen (siehe activationIsValid) statt eine sichtbare Strecke zu reisen
       float startPos=forward ? stripeIdx*nLedsInStripe : stripeIdx*nLedsInStripe + (nLedsInStripe-1);
-      activations.add(new TravellingActivation(startPos, stripeIdx, forward ? speed : -speed, energy, spawnTree(stripeIdx)));
+      activations.add(new TravellingActivation(startPos, stripeIdx, forward ? speed : -speed, energy, decayScale, spawnTree(stripeIdx)));
     }
   }
 
@@ -1188,9 +1234,22 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   // Sequencer) gehen hierdurch. Split-Kinder NICHT - die erben die (schon
   // vervielfachte) Geschwindigkeit ihres Elternimpulses und bekommen
   // obendrauf splitSpeedJitter, siehe activationEncounteredNode().
+  //
+  // Legt nebenbei lastSpawnDecayScale fest (Kettenreaktions-Fix, 2026-08-02):
+  // die gezogene Speed-KLASSE (nicht nur der Multiplikator auf impulseSpeed)
+  // bestimmt auch den decayScale des gespawnten Impulses, siehe
+  // spawnDecayScale(). Beides muss aus DERSELBEN Ziehung kommen - ein
+  // zweiter, unabhaengiger Aufruf von SpeedQuantizer.pick() wuerde eine
+  // andere Klasse treffen und Geschwindigkeit und Zerfall auseinanderlaufen
+  // lassen, ohne dass sich das an einer der beiden Zahlen zeigt.
+  private float lastSpawnDecayScale = 1f;
+
   private float spawnSpeed() {
     float base=impulseSpeed.getValue();
     if (speedQuantizeEnabled.getValue() != 1) {
+      // Ohne Speed-Klassen bleibt auch der Zerfall unveraendert: 1.0 ist der
+      // Ausgangswert, auf den impulseLifetime allein wirkt.
+      lastSpawnDecayScale=1f;
       return base;
     }
     // base bleibt impulseSpeed - die Klassen sind ein VIELFACHES des
@@ -1205,10 +1264,26 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     }
     int cls=SpeedQuantizer.pick(weightScratch, Math.random());
     float speed=base*SpeedQuantizer.multiplierAt(cls);
+    // decayScale = derselbe Multiplikator M wie bei der Geschwindigkeit
+    // (SpeedQuantizer.decayScaleFor == multiplierAt): ein M-fach schneller
+    // Impuls zerfaellt M-mal schneller, die zurueckgelegte Grunddistanz bis
+    // zum Energie-Aus bleibt ueber alle Speed-Klassen gleich. Ohne diese
+    // Kopplung liefe ein 8x-Impuls die achtfache Strecke, traefe achtmal so
+    // viele Kreuzungen und splittete sich dort entsprechend oefter - die
+    // Kettenreaktion bei hoher Speed.
+    lastSpawnDecayScale=SpeedQuantizer.decayScaleFor(cls);
     // Swing auf der Geschwindigkeit, gleiche Formel und gleicher
     // Auslieferungswert 0 wie ueberall sonst: Choreografie primaer exakt,
     // Jitter ein optionaler Regler obendrauf.
     return SplitVariance.jitter(speed, speedQuantizeJitter.getValue(), Math.random());
+  }
+
+  // Der zu spawnSpeed() GEHOERENDE decayScale derselben Ziehung - siehe dort.
+  // Muss unmittelbar nach spawnSpeed() fuer denselben Impuls aufgerufen
+  // werden, bevor ein anderer Spawn-Pfad erneut zieht; alle fuenf Spawn-Pfade
+  // rufen beide Methoden im selben Atemzug.
+  private float spawnDecayScale() {
+    return lastSpawnDecayScale;
   }
 
   // Der Ursprungs-Baum fuer EINEN neu gespawnten Impuls: 0..3 nach
@@ -1294,17 +1369,19 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // Geschwindigkeit je Track einzeln gezogen (spawnSpeed): zwei Tracks, die
     // im selben Beat feuern, sollen nicht zwangslaeufig dieselbe Klasse
     // bekommen. Grundwert bleibt impulseSpeed, damit getaktete und zufaellige
-    // Impulse denselben Bezugspunkt haben. decayScale 1.0 (der Konstruktor
-    // ohne ausdruecklichen Wert): ein gespawnter Impuls folgt dem globalen
-    // Lifetime, gestreut wird erst an einer Kreuzung.
+    // Impulse denselben Bezugspunkt haben. decayScale kommt aus derselben
+    // Ziehung wie die Geschwindigkeit (spawnDecayScale(), Kettenreaktions-Fix
+    // 2026-08-02) - bei speedQuantize/enabled=0 liefert das weiterhin 1.0,
+    // bitgleich dem vorherigen Verhalten.
     for (int i=0; i<firing.length; i++) {
       int track=firing[i];
       int stripeIdx=originSequencer.originOf(track);
       if (stripeIdx < 0 || stripeIdx >= nStripes) {
         continue;
       }
+      float trackSpeed=spawnSpeed();
       activations.add(new TravellingActivation(stripeIdx*nLedsInStripe, stripeIdx,
-          spawnSpeed(), trackConfigs[track].energy, spawnTree(stripeIdx)));
+          trackSpeed, trackConfigs[track].energy, spawnDecayScale(), spawnTree(stripeIdx)));
     }
   }
 

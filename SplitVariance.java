@@ -51,4 +51,40 @@ class SplitVariance {
     }
     return (float) (base*factor);
   }
+
+  // Obergrenze fuer decayScale ueber mehrere Split-Generationen hinweg
+  // (Kettenreaktions-Fix, 2026-08-02).
+  //
+  // Ein MAX_FACTOR analog zu MIN_FACTOR in jitter() selbst haette das
+  // eigentliche Problem NICHT geloest: der Faktor je Aufruf ist durch
+  // amount<=1 schon auf hoechstens 2.0 begrenzt (amount=1, random01=1 ->
+  // factor=2), das ist keine Kettenreaktion, sondern eine einzelne Streuung.
+  // Das Risiko entsteht erst durch WIEDERHOLTES Anwenden: seit Aenderung 2
+  // erben Split-Kinder den decayScale des Elternimpulses als Jitter-BASIS
+  // (curActivation.decayScale statt 1f) - bei mehreren Split-Generationen in
+  // Folge kann jede einzelne bis zu verdoppeln, macht ueber vier
+  // Generationen theoretisch das 16-fache. Die Klemmung gehoert deshalb an
+  // den AUFRUFER (den Wert selbst, nach jitter()), nicht in die Formel.
+  //
+  // Obergrenze 32: die hoechste Speed-Klasse (SpeedQuantizer, 8x) bekommt per
+  // Kopplung decayScale 8. Ein einzelner Split-Jitter-Schritt kann das auf
+  // bis zu 16 verdoppeln - 32 laesst also noch einen zweiten vollen
+  // Verdopplungsschritt zu, deckelt aber ein unbegrenztes Aufschaukeln ueber
+  // viele Generationen. Bei Auslieferungswerten (splitLifetimeJitter=0)
+  // greift die Klemmung nie - jitter() liefert dann exakt die Jitter-Basis
+  // zurueck.
+  static final float MAX_DECAY_SCALE = 32f;
+
+  static float clampDecayScale(float value) {
+    if (Float.isNaN(value)) {
+      return value;
+    }
+    if (value > MAX_DECAY_SCALE) {
+      return MAX_DECAY_SCALE;
+    }
+    if (value < -MAX_DECAY_SCALE) {
+      return -MAX_DECAY_SCALE;
+    }
+    return value;
+  }
 }

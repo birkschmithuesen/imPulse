@@ -50,4 +50,23 @@ class SpeedQuantizer {
   static int pick(float[] weights, double random01) {
     return WeightedChoice.pick(weights, MULTIPLIERS.length, NEUTRAL_INDEX, random01);
   }
+
+  // Kopplung Speed-Klasse -> decayScale (Kettenreaktions-Fix, 2026-08-02):
+  // derselbe Multiplikator M wie bei der Geschwindigkeit. energy -=
+  // timeStep*impulseLifetime*decayScale ist zeitbasiert, nicht streckenbasiert
+  // - ohne diese Kopplung legt ein M-fach schneller Impuls die M-fache
+  // Strecke bis zum Energie-Aus zurueck, trifft M-mal mehr Kreuzungen und
+  // splittet sich dort M-mal mehr, jede Generation eskaliert weiter. Mit
+  // decayScale = M zerfaellt er auch M-mal schneller, die Grunddistanz bleibt
+  // ueber alle Klassen gleich.
+  //
+  // Eigene Methode statt einfach multiplierAt() an der Aufrufstelle zu
+  // benutzen: der Zusammenhang "Speed-Klasse und decayScale sind dieselbe
+  // Zahl" ist eine bewusste Design-Entscheidung, keine zufaellige
+  // Uebereinstimmung - eine eigene Methode macht das an der Aufrufstelle
+  // lesbar und haelt die Kopplung an EINER Stelle aenderbar, falls sie sich
+  // je von 1:1 loesen soll.
+  static float decayScaleFor(int index) {
+    return multiplierAt(index);
+  }
 }
