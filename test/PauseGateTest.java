@@ -66,8 +66,13 @@ public class PauseGateTest {
     Check.that("blockiert RandomSpawn per Default", g2.blocksRandomSpawn());
     g2.tick(39.9, immer, new FixedRandom(0.99));
     Check.that("kurz vor Pausenende noch pausiert", g2.isPaused());
+    // Am Pausenende (Beat 40) wird sofort neu gewuerfelt, nicht erst beim
+    // naechsten Rasterpunkt bei Beat 64 - bei probability=1 heisst das:
+    // nahtlos die naechste Pause. Dass die GEZOGENE Laenge trotzdem wirklich
+    // ablaeuft und nicht verlaengert wird, prueft der Fall weiter unten, in
+    // dem der Wurf am Pausenende danebengeht.
     g2.tick(40.1, immer, new FixedRandom(0.99));
-    Check.that("nach 8 Beats Pausenlaenge vorbei", !g2.isPaused());
+    Check.that("bei probability=1 folgt am Pausenende sofort die naechste Pause", g2.isPaused());
 
     // ---- probability=0: nie eine Pause, egal wie oft geprueft wird ----
     PauseGate g3 = new PauseGate();
@@ -107,20 +112,20 @@ public class PauseGateTest {
     // laufende Pause fallen wuerden, wenn die Klasse das nicht verhindert.
     PauseGate g6 = new PauseGate();
     PauseGateConfig kurzTakt = on();
-    kurzTakt.probability = 1f;
+    kurzTakt.probability = 0.5f;
     kurzTakt.checkIntervalBars = 1f;  // 4 Beats
     kurzTakt.lengthMinBars = 3.5f;    // 14 Beats, absichtlich NICHT auf dem Checkraster
     kurzTakt.lengthMaxBars = 3.5f;
     g6.tick(0.0, kurzTakt, new FixedRandom(0.0));
-    g6.tick(4.0, kurzTakt, new FixedRandom(0.0)); // startet Pause bis Beat 18
+    g6.tick(4.0, kurzTakt, new FixedRandom(0.0)); // 0.0 < 0.5: Pause bis Beat 18
     for (double b = 8.0; b < 18.0; b += 4.0) {
       g6.tick(b, kurzTakt, new FixedRandom(0.0));
       Check.that("bleibt waehrend der laufenden Pause pausiert", g6.isPaused());
     }
-    // Abfrage AUSSERHALB des Checkrasters (naechster Check waere erst bei 20),
-    // damit der Test nur das natuerliche Pausenende prueft, nicht einen neuen
-    // Wurf, der bei probability=1 sofort wieder eine Pause startete.
-    g6.tick(18.5, kurzTakt, new FixedRandom(0.0));
+    // Seit dem Vorziehen am Pausenende faellt dort in jedem Fall ein Wurf an -
+    // damit das natuerliche Ende der gezogenen Laenge sichtbar wird, muss
+    // dieser Wurf danebengehen (0.99 gegen probability 0.5).
+    g6.tick(18.5, kurzTakt, new FixedRandom(0.99));
     Check.that("Pause endet wie urspruenglich gezogen, nicht verlaengert", !g6.isPaused());
 
     // ---- Vertauschte min/max-Laenge stuerzt nicht ab ----
@@ -155,6 +160,53 @@ public class PauseGateTest {
     PauseGate g10 = new PauseGate();
     g10.tick(5.0, null, new FixedRandom(0.0));
     Check.that("null-Config pausiert nicht", !g10.isPaused());
+
+    // ---- Am Pausenende wird SOFORT neu gewuerfelt ----
+    // Das war der Bug (live am Geraet aufgefallen): nextCheckBeat wurde bei
+    // JEDEM Wurf auf beats + intervalBeats gesetzt, also auch bei einem
+    // Treffer. Zwischen dem Ende einer kurzen Pause und dem naechsten Wurf lag
+    // damit der Rest des starren Rasters, in dem der Sequencer ohne jeden
+    // Bezug zur probability normal weiterlief.
+    PauseGate g11 = new PauseGate();
+    PauseGateConfig sofort = on();
+    sofort.probability = 1f;
+    sofort.checkIntervalBars = 8f; // 32 Beats Raster ...
+    sofort.lengthMinBars = 2f;     // ... deutlich groesser als die
+    sofort.lengthMaxBars = 2f;     //     8 Beats Pausenlaenge
+    g11.tick(0.0, sofort, new FixedRandom(0.99)); // Nullpunkt
+    g11.tick(32.0, sofort, new FixedRandom(0.99)); // Treffer, Pause bis Beat 40
+    Check.that("erste Pause laeuft ab Beat 32", g11.isPaused());
+    // Erster Tick mit beats >= pauseEndBeat: ohne den Fix waere der naechste
+    // Wurf erst bei Beat 64 gekommen, 24 Beats Normalbetrieb spaeter.
+    g11.tick(40.0, sofort, new FixedRandom(0.99));
+    Check.that("am Pausenende sofort neu gewuerfelt statt bis Beat 64 zu warten", g11.isPaused());
+    g11.tick(47.9, sofort, new FixedRandom(0.99));
+    Check.that("die neue Pause laeuft ihre eigenen 8 Beats", g11.isPaused());
+
+    // ---- Der tatsaechliche Pausenanteil folgt der probability ----
+    // Dasselbe Szenario ueber 1000 Beats gemessen: bei probability=1 muss das
+    // Netz nahezu durchgehend pausieren. Mit dem starren Raster kam hier
+    // 8/32 = 25 % heraus - der Regler "Wahrscheinlichkeit" log damit ueber
+    // seine eigene Bedeutung, sobald die mittlere Pausenlaenge kuerzer war als
+    // das Pruefintervall (der Normalfall).
+    PauseGate g12 = new PauseGate();
+    PauseGateConfig anteil = on();
+    anteil.probability = 1f;
+    anteil.checkIntervalBars = 8f; // 32 Beats
+    anteil.lengthMinBars = 2f;     // 8 Beats
+    anteil.lengthMaxBars = 2f;
+    int schritte = 0;
+    int pausiert = 0;
+    for (int i = 0; i <= 10000; i++) { // 0..1000 Beats in 0.1er Schritten
+      g12.tick(i*0.1, anteil, new FixedRandom(0.99));
+      schritte++;
+      if (g12.isPaused()) {
+        pausiert++;
+      }
+    }
+    double anteilPausiert = (double) pausiert/(double) schritte;
+    Check.that("bei probability=1 ist der Pausenanteil nahe 100 % (war 25 %), ist: "
+        + anteilPausiert, anteilPausiert > 0.9);
 
     System.exit(Check.report("PauseGateTest"));
   }
