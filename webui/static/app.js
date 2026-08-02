@@ -2035,9 +2035,16 @@ function buildSequencer(data, host) {
   host.appendChild(section);
 }
 
-/* Speed-Klassen. Der Verteilungsbalken macht aus fuenf Gewichten ein Bild -
- * die Zahlen allein verraten nicht, wie selten ein 8x-Ausreisser wirklich
- * ist, weil sie nicht auf 100 normiert sind. */
+/* Grundtempo und Speed-Klassen. Der Verteilungsbalken macht aus fuenf
+ * Gewichten ein Bild - die Zahlen allein verraten nicht, wie selten ein
+ * 8x-Ausreisser wirklich ist, weil sie nicht auf 100 normiert sind.
+ *
+ * Der Grundregler /net/impulse/speed steht seit 2026-08-02 GANZ OBEN in
+ * dieser Sektion, nicht mehr im Tab Impuls-Verhalten: die Klassen darunter
+ * tun nichts anderes, als ihn zu vervielfachen, und ein Tabwechsel zwischen
+ * dem Wert und seinen Vielfachen war genau die Trennung, die den frueheren
+ * zweiten Basis-Regler (speedQuantize/baseSpeed) plausibel gemacht hat. Er
+ * steht ueber dem Ein/Aus-Schalter, weil er in BEIDEN Zustaenden gilt. */
 function buildSpeedClasses(data, host) {
   const speed = data.speedClasses;
   if (!speed) { return; }
@@ -2046,13 +2053,29 @@ function buildSpeedClasses(data, host) {
   section.className = 'seq';
 
   const title = document.createElement('h2');
-  title.textContent = 'Speed-Klassen';
+  title.textContent = 'Grundtempo und Speed-Klassen';
   section.appendChild(title);
 
   const body = document.createElement('div');
   body.style.padding = '0.7rem 0.8rem';
   body.style.display = 'grid';
   body.style.gap = '0.6rem';
+
+  // Der Grundregler selbst. Laeuft ueber denselben queueSend-Weg wie jeder
+  // andere Regler, die Speed-Kopplung im Server haengt also unveraendert an
+  // ihm (lifetime, nodeDeadTime, randomSpawn/interval ziehen mit, sofern die
+  // Kopplung in der Kopfzeile eingeschaltet ist).
+  if (speed.base) {
+    const base = miniSlider(speed.base.label || 'Grundgeschwindigkeit',
+      speed.base, data.values[speed.base.address]);
+    body.appendChild(base.element);
+    if (speed.base.help) {
+      const baseNote = document.createElement('p');
+      baseNote.className = 'help';
+      baseNote.textContent = speed.base.help;
+      body.appendChild(baseNote);
+    }
+  }
 
   // Ein/Aus
   const power = document.createElement('label');
@@ -2086,17 +2109,6 @@ function buildSpeedClasses(data, host) {
   });
   body.appendChild(power);
 
-  // Manuelle Basis-Speed wenn quantisiert
-  if (speed.baseSpeed) {
-    const baseSpeedSlider = miniSlider('Basis-Speed (quantisiert)',
-      speed.baseSpeed, data.values[speed.baseSpeed.address]);
-    body.appendChild(baseSpeedSlider.element);
-    const baseSpeedNote = document.createElement('p');
-    baseSpeedNote.className = 'help';
-    baseSpeedNote.textContent = speed.baseSpeed.help || '';
-    body.appendChild(baseSpeedNote);
-  }
-
   // Rueckfalltext: genau das macht SpeedQuantizer.pick() bei lauter Nullen.
   const bank = weightBank(speed.weights, data.values,
     'alle Gewichte 0 – es gilt 1×');
@@ -2104,9 +2116,9 @@ function buildSpeedClasses(data, host) {
 
   const help = document.createElement('p');
   help.className = 'help';
-  help.textContent = 'Anteil der Impulse je Klasse. Vielfaches von '
-    + '/net/impulse/speed – 1× ist der Normalfall, hohe Klassen sind die '
-    + 'seltenen Ausreisser. Die Gewichte werden normalisiert, sie muessen '
+  help.textContent = 'Anteil der Impulse je Klasse. Vielfaches der '
+    + 'Grundgeschwindigkeit oben – 1× ist der Normalfall, hohe Klassen sind '
+    + 'die seltenen Ausreisser. Die Gewichte werden normalisiert, sie muessen '
     + 'sich nicht zu 100 summieren.';
   body.appendChild(help);
   body.appendChild(bank.sliders);

@@ -319,7 +319,17 @@ def track_field_legend() -> List[Dict[str, str]]:
 
 
 def build_speed_classes(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
-    """Struktur der Speed-Klassen-Sektion, oder None wenn unbekannt."""
+    """Struktur der Speed-Klassen-Sektion, oder None wenn unbekannt.
+
+    ``base`` ist der GRUNDREGLER /net/impulse/speed selbst, nicht ein zweiter
+    Parameter daneben. Bis 2026-08-02 stand hier ein eigenes
+    /net/impulse/speedQuantize/baseSpeed -- zwei Regler, die beide "die
+    Geschwindigkeit" hiessen, und der eine machte den anderen bei
+    eingeschalteten Klassen wirkungslos (siehe spawnSpeed() auf der
+    Java-Seite). Jetzt steht der Grundregler in der Sektion, die ihn
+    vervielfacht, und nirgends sonst: die Klassen 0,5x..8x multiplizieren
+    sichtbar auf den Wert direkt darueber.
+    """
     enabled = by_address.get("/net/impulse/speedQuantize/enabled")
     if enabled is None:
         return None
@@ -334,11 +344,11 @@ def build_speed_classes(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str
     if not weights:
         return None
     jitter = by_address.get("/net/impulse/speedQuantize/jitter")
-    baseSpeed = by_address.get("/net/impulse/speedQuantize/baseSpeed")
+    base = by_address.get(SPEED_ADDRESS)
     return {
         "enabled": enabled.as_dict(),
         "jitter": jitter.as_dict() if jitter is not None else None,
-        "baseSpeed": baseSpeed.as_dict() if baseSpeed is not None else None,
+        "base": base.as_dict() if base is not None else None,
         "weights": weights,
     }
 
@@ -711,8 +721,10 @@ ADDRESS_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
     "/net/impulse/speed": (
         "Grundgeschwindigkeit",
         "Wie schnell ein Impuls den Stripe entlangwandert, in LEDs pro "
-        "Sekunde. Bei eingeschalteter Kopplung ziehen Lebensdauer, Totzeit "
-        "und Spawn-Intervall proportional mit."),
+        "Sekunde. Die EINZIGE Quelle des Grundtempos: die Tempo-Klassen "
+        "darunter sind Vielfache davon. Bei eingeschalteter Kopplung ziehen "
+        "Lebensdauer, Totzeit und Spawn-Intervall proportional mit; die "
+        "Sinus-Schwingung auf demselben Wert steht im Tab Impuls-Verhalten."),
     "/net/impulse/lifetime": (
         "Energieverlust je Sekunde",
         "Wie schnell ein Impuls unterwegs dunkler wird und schliesslich "
@@ -784,11 +796,6 @@ ADDRESS_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
         "Swing auf der Tempo-Klasse",
         "0 = exakt das Vielfache. Ueber 0,29 rutschen einzelne Impulse im "
         "Klang hoerbar in die Nachbarklasse."),
-    "/net/impulse/speedQuantize/baseSpeed": (
-        "Basis der Tempo-Klassen",
-        "Faktor, auf den die Klassen (0,5x bis 8x) multiplizieren, solange "
-        "die Tempo-Klassen an sind - unabhaengig vom Sinus-Randomizer auf der "
-        "Grundgeschwindigkeit."),
     "/net/impulse/speedQuantize/weight/0x5": (
         "Gewicht 0,5x",
         "Wie oft ein neuer Impuls halb so schnell startet wie die "
@@ -1289,6 +1296,12 @@ def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
         taken.add(speed["enabled"]["address"])
         if speed.get("jitter"):
             taken.add(speed["jitter"]["address"])
+        # Der Grundregler wird von der Sektion selbst gerendert -- ohne diese
+        # Zeile stuende /net/impulse/speed zweimal auf der Seite: einmal ueber
+        # den Klassen, die ihn vervielfachen, und einmal als generischer
+        # Schieber im Impuls-Verhalten.
+        if speed.get("base"):
+            taken.add(speed["base"]["address"])
         for weight in speed["weights"]:
             taken.add(weight["address"])
     if split:
@@ -1380,7 +1393,14 @@ TAB_RULES: List[Tuple[str, str]] = [
     # auch /net/impulse/splitSpeedJitter und /net/impulse/splitLifetimeJitter
     # hierher, die zur Physik gehoeren und dort schon kuratiert sind.
     ("/net/impulse/split/", TAB_NOTES),
-    ("/net/melody/", TAB_NOTES),
+    # Die Melodie-Zuordnung hat seit 2026-08-02 einen eigenen Tab, und ihre
+    # vier Adressen rendert die Sektion dort selbst (melody_addresses()).
+    # Diese Regel ist damit nur noch der Rueckfall fuer eine SPAETER
+    # dazukommende /net/melody/-Adresse, die MELODY_FIELDS nicht kennt -- und
+    # die gehoert neben die Sektion auf den Tonleiter-Tab, nicht ins
+    # Noten-Verhalten. Bis 2026-08-02 zeigte die Regel noch auf TAB_NOTES, wo
+    # die Sektion frueher stand.
+    ("/net/melody/", TAB_SCALE),
     ("/net/sequencer/", TAB_SPAWN),
     ("/net/randomSpawn/", TAB_SPAWN),
     ("/net/pause/", TAB_SPAWN),
@@ -1388,6 +1408,25 @@ TAB_RULES: List[Tuple[str, str]] = [
     ("/net/impulse/", TAB_PHYSICS),
     ("/nodes/", TAB_PHYSICS),
 ]
+
+# Adressen, die EXAKT (nicht als Praefix) einem Tab gehoeren. Wird vor
+# TAB_RULES nachgeschlagen.
+#
+# Gebraucht fuer genau einen Fall: /net/impulse/speed steht seit 2026-08-02 in
+# der Speed-Klassen-Sektion des Noten-Tabs, weil die Klassen 0,5x..8x nichts
+# anderes tun als ihn zu vervielfachen -- ein Tabwechsel zwischen dem Wert und
+# seinen Vielfachen ist genau die Trennung, die den baseSpeed-Fehler ueberhaupt
+# erst plausibel gemacht hat.
+#
+# Als PRAEFIX ginge das nicht: "/net/impulse/speed" faengt auch
+# /net/impulse/speed/randomize/* (der Sinus-Randomizer, gehoert zur Physik --
+# er teilt sich eine Gruppe mit dem Lifetime-Randomizer und kann nicht allein
+# umziehen) und /net/impulse/speedQuantize/* (steht schon eine Zeile weiter
+# oben). Deshalb eine eigene Tabelle mit exakter Gleichheit statt einer
+# sechsten Praefix-Regel.
+TAB_EXACT: Dict[str, str] = {
+    SPEED_ADDRESS: TAB_NOTES,
+}
 
 # Tabs, deren Gruppen direkt sichtbar sind statt hinter "Erweitert".
 # Gedacht fuer Tabs ohne kuratierte Auswahl: eine Farbkarte traegt keine
@@ -1435,7 +1474,11 @@ TAB_PRIMARY: Dict[str, List[str]] = {
     # aussieht, als taete er etwas.
     TAB_SCALE: [],
     TAB_PHYSICS: [
-        "/net/impulse/speed",
+        # /net/impulse/speed steht seit 2026-08-02 NICHT mehr hier, sondern in
+        # der Speed-Klassen-Sektion des Noten-Tabs (build_speed_classes). Er
+        # stuende sonst zweimal auf der Seite -- die Sektion rendert ihn
+        # selbst, und ein Eintrag hier waere still wirkungslos, weil
+        # sequencer_addresses() ihn aus dem generischen Rendering nimmt.
         "/net/impulse/lifetime",
         "/net/impulse/nodeDeadTime",
         "/net/impulse/splitSpeedJitter",
@@ -1741,7 +1784,14 @@ def tab_for_address(address: str) -> str:
     Der Rueckfall ist bewusst ein echter Tab und nicht ein sechster
     "Sonstiges": ein neuer Parameter soll sichtbar sein, auch wenn hier
     niemand eine Regel dafuer ergaenzt hat.
+
+    Exakte Treffer (TAB_EXACT) gehen vor den Praefix-Regeln -- eine Adresse,
+    die zufaellig der Anfang einer anderen ist, laesst sich anders nicht
+    einzeln zuordnen.
     """
+    exact = TAB_EXACT.get(address)
+    if exact is not None:
+        return exact
     for prefix, tab in TAB_RULES:
         if address.startswith(prefix):
             return tab
@@ -2630,6 +2680,93 @@ def default_palette_path(settings_path: str) -> str:
                         PALETTE_FILENAME)
 
 
+# ---------------------------------------------------------------------------
+# Gesicherter UI-Zustand
+#
+# Adresse -> Wert, als flaches JSON-Objekt. Enthaelt AUSSCHLIESSLICH, was
+# ueber dieses Web-UI gesendet wurde (siehe ParameterStore.store()) -- nicht
+# den Live-Zustand von imPulse. Was jemand per osc_send.py oder aus der IDE an
+# den Sketch schickt, steht hier nicht und soll hier auch nicht stehen: es
+# gibt keinen Rueckkanal von imPulse hierher, und einen zu bauen war
+# ausdruecklich nicht gewuenscht (Birk, 2026-08-02).
+#
+# Warum eine eigene Datei und nicht data/remoteSettings.txt: die schreibt
+# imPulse bei JEDEM Start komplett neu (Boot-Snapshot, gitignored). Ein
+# Fremdschreiber darin waere beim naechsten Sketch-Start weg, und schlimmer:
+# er wuerde die Datei veraendern, an deren mtime der Server erkennt, dass
+# imPulse neu gestartet wurde.
+#
+# Warum JSON und nicht das Tab-Format der Presets: das Tab-Format traegt
+# Typ, Beschreibung und Bereich mit -- alles Angaben, die hier aus
+# remoteSettings.txt kommen und in einer zweiten Datei nur veralten koennten.
+# Gebraucht wird ein Paar aus Adresse und Zahl, und genau das ist JSON.
+# ---------------------------------------------------------------------------
+
+UI_STATE_FILENAME = "webuiState.json"
+
+
+def default_ui_state_path(settings_path: str) -> str:
+    """Zustandsdatei neben der Parameterdatei: <dir von settings>/webuiState.json.
+
+    Neben remoteSettings.txt und nicht fest in webui/: der Ort gehoert zur
+    Installation, nicht zum Programm. Ein Testaufbau, der --settings in ein
+    Temp-Verzeichnis legt, schreibt seinen Zustand damit auch dorthin, statt
+    in den Checkout.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(settings_path)),
+                        UI_STATE_FILENAME)
+
+
+def read_ui_state(path: str) -> Tuple[Dict[str, float], Optional[str]]:
+    """Liest die Zustandsdatei. Rueckgabe: (Werte, Fehlermeldung oder None).
+
+    Eine fehlende Datei ist der Normalfall (erster Start, frischer Rechner)
+    und liefert ein leeres Ergebnis ohne Fehler. Eine kaputte Datei ist
+    dagegen eine Meldung wert -- sie wird uebergangen, aber nicht
+    verschwiegen: sonst saehe ein Operator nur, dass "die Werte weg sind".
+
+    Einzelne unbrauchbare Eintraege werden still uebersprungen, wie beim
+    Parsen von remoteSettings.txt: eine von Hand editierte Zeile darf nicht
+    den ganzen Rest kosten.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except FileNotFoundError:
+        return {}, None
+    except (OSError, ValueError) as exc:
+        return {}, "UI-Zustand nicht lesbar (%s): %s" % (path, exc)
+    if not isinstance(raw, dict):
+        return {}, "UI-Zustand ist kein JSON-Objekt: %s" % path
+    values: Dict[str, float] = {}
+    for address, value in raw.items():
+        if not isinstance(address, str) or isinstance(value, bool):
+            continue
+        if not isinstance(value, (int, float)):
+            continue
+        number = float(value)
+        if number != number or number in (float("inf"), float("-inf")):
+            continue
+        values[address] = number
+    return values, None
+
+
+def write_ui_state(path: str, values: Dict[str, float]) -> None:
+    """Schreibt die Zustandsdatei atomar (Temp-Datei + Rename).
+
+    Dasselbe Muster wie save_palette und wie NodeCrossingStore/LedAnchorStore
+    auf der Java-Seite: ein abgebrochener Schreibvorgang darf keine halbe
+    Datei hinterlassen. Sortiert, damit zwei Staende vergleichbar bleiben.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(values, handle, indent=1, sort_keys=True)
+        handle.write("\n")
+    os.replace(temp, path)
+
+
 def group_key(address: str) -> str:
     """Gruppenschluessel aus dem Adress-Praefix.
 
@@ -2796,6 +2933,18 @@ class ParameterStore:
     imPulse ja nur beim Start geschrieben, waere also sofort veraltet.
     Aendert sich die Datei (imPulse wurde neu gestartet), wird komplett neu
     eingelesen.
+
+    Ueber ``ui_state_path`` kommt seit 2026-08-02 eine ZWEITE, eigene Quelle
+    dazu: alles, was ueber dieses UI gesendet wurde, steht als JSON in einer
+    kleinen Zustandsdatei und wird beim naechsten START des Servers ueber die
+    frisch gelesenen Boot-Werte gelegt. Ohne sie stand nach jedem Neustart des
+    UI-Prozesses wieder der Code-Default in den Reglern, obwohl imPulse
+    laengst etwas anderes fuhr -- der Operator musste jeden Wert von Hand
+    nachziehen, um ueberhaupt zu sehen, wo er steht.
+
+    Ohne ``ui_state_path`` (Vorgabe) verhaelt sich der Store exakt wie vorher
+    und schreibt nichts -- so bleiben die Tests, die einen Store direkt auf
+    eine Preset-Datei richten, frei von Nebenwirkungen.
     """
 
     path: str
@@ -2804,6 +2953,14 @@ class ParameterStore:
     by_address: Dict[str, Parameter] = field(default_factory=dict)
     mtime: Optional[float] = None
     error: Optional[str] = None
+    ui_state_path: Optional[str] = None
+    # Zuletzt geschriebener Stand der Zustandsdatei, im Speicher gespiegelt:
+    # geschrieben wird die ganze Datei, gelesen nur einmal beim Start.
+    ui_state: Dict[str, float] = field(default_factory=dict)
+    ui_state_error: Optional[str] = None
+    # Der Ueberlagerung ist ein EINMALIGER Vorgang beim Start, kein Zustand,
+    # der bei jedem Neulesen wieder greift -- siehe _read().
+    ui_state_applied: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def _read(self) -> None:
@@ -2823,6 +2980,73 @@ class ParameterStore:
         self.parameters = parse_settings(text)
         self.by_address = {p.address: p for p in self.parameters}
         self.values = {p.address: p.coerce(p.value) for p in self.parameters}
+        # NUR beim ersten Lesen, also beim Start des Servers. Ein spaeteres
+        # Neulesen heisst "imPulse wurde neu gestartet" -- dann faehrt der
+        # Sketch wirklich seine Boot-Werte, und die alte UI-Anzeige darueber
+        # zu legen behauptete einen Zustand, den es gerade nicht mehr gibt.
+        if not self.ui_state_applied:
+            self.ui_state_applied = True
+            self._load_ui_state()
+
+    def _load_ui_state(self) -> None:
+        """Die zuletzt ueber das UI gesetzten Werte ueber die Boot-Werte legen.
+
+        Bewusst OHNE OSC-Versand: der Live-Zustand von imPulse kommt aus
+        dessen eigenem Boot-Zustand, hier wird nur die ANZEIGE nachgezogen.
+        Ein automatischer Versand beim Start machte aus dem Neustart eines
+        Anzeigeprozesses einen Eingriff in die laufende Show.
+
+        Werte fuer Adressen, die es in remoteSettings.txt nicht (mehr) gibt,
+        werden verworfen -- kein Fehler, sondern der Normalfall nach einem
+        umbenannten oder entfernten Parameter.
+        """
+        if not self.ui_state_path:
+            return
+        raw, error = read_ui_state(self.ui_state_path)
+        self.ui_state_error = error
+        if error:
+            print("[webui] %s" % error, file=sys.stderr)
+        kept: Dict[str, float] = {}
+        dropped = 0
+        for address, value in raw.items():
+            param = self.by_address.get(address)
+            if param is None:
+                dropped += 1
+                continue
+            kept[address] = param.coerce(value)
+        self.ui_state = kept
+        self.values.update(kept)
+        if kept or dropped:
+            print("[webui] UI-Zustand: %d Werte uebernommen, %d verworfen "
+                  "(Adresse gibt es nicht mehr) -- %s"
+                  % (len(kept), dropped, self.ui_state_path), file=sys.stderr)
+
+    def _write_ui_state(self) -> None:
+        """Die Zustandsdatei neu schreiben. Aufrufer haelt ``_lock``.
+
+        Voll-Datei statt Anhaengen, wie beim POST auf die Farbpalette: zwei
+        Formate (Vollstand und Nachtrag) waeren zwei Wege, die auseinander
+        laufen koennen. Die Datei hat die Groessenordnung der Parameterliste,
+        also wenige Kilobyte -- ein Regler, der 150 ms lang gezogen wird,
+        schreibt sie ein paar Dutzend Mal, und das ist billiger als jede
+        Sonderbehandlung.
+
+        Ein Schreibfehler ist KEIN Fehler des Aufrufers: die Aenderung ist
+        laengst per OSC raus, die Sicherung ist nur ihr Gedaechtnis. Er wird
+        gemerkt (``ui_state_error``, sichtbar unter /api/parameters) statt
+        geworfen.
+        """
+        if not self.ui_state_path:
+            return
+        try:
+            write_ui_state(self.ui_state_path, self.ui_state)
+        except OSError as exc:
+            message = "UI-Zustand nicht schreibbar: %s" % exc
+            if message != self.ui_state_error:
+                print("[webui] %s" % message, file=sys.stderr)
+            self.ui_state_error = message
+        else:
+            self.ui_state_error = None
 
     def refresh(self, force: bool = False) -> None:
         with self._lock:
@@ -2880,6 +3104,15 @@ class ParameterStore:
                     "mtime": self.mtime,
                     "count": len(self.parameters),
                     "error": self.error,
+                    # Der gesicherte UI-Zustand, rein informativ: das UI zeigt
+                    # ihn nicht als eigenes Bedienelement, aber ein
+                    # Schreibfehler soll nachschlagbar sein, ohne im Log des
+                    # Servers zu suchen.
+                    "uiState": {
+                        "path": self.ui_state_path,
+                        "count": len(self.ui_state),
+                        "error": self.ui_state_error,
+                    },
                 },
             }
 
@@ -2888,8 +3121,23 @@ class ParameterStore:
             return self.by_address.get(address)
 
     def store(self, address: str, value: float) -> None:
+        """Einen ueber das UI gesetzten Wert uebernehmen und sichern.
+
+        Der einzige Ort, an dem ein Wert im Store landet, nachdem
+        remoteSettings.txt gelesen wurde: ``apply_value()`` (/api/set,
+        /api/fadeout, /api/melody/recompute) und ``apply_preset_entries()``
+        gehen beide hier durch. Deshalb haengt die Sicherung hier und nicht an
+        den vier Endpoints -- ein fuenfter Endpoint erbt sie damit, statt sie
+        vergessen zu koennen.
+
+        Geschrieben wird nur, wenn sich wirklich etwas geaendert hat: waehrend
+        eines Reglerzugs kommen dieselben Werte mehrfach an.
+        """
         with self._lock:
             self.values[address] = value
+            if self.ui_state_path and self.ui_state.get(address) != value:
+                self.ui_state[address] = value
+                self._write_ui_state()
 
 
 def apply_preset_entries(store: ParameterStore,
@@ -2970,7 +3218,8 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                state_path: Optional[str] = None, autocommit_scheduler=None,
                sc_port: int = SC_OSC_PORT,
                record_status_host: str = DEFAULT_RECORD_STATUS_HOST,
-               record_status_port: int = DEFAULT_RECORD_STATUS_PORT):
+               record_status_port: int = DEFAULT_RECORD_STATUS_PORT,
+               ui_state_path: Optional[str] = None):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
@@ -2978,7 +3227,11 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
     if state_path is None:
         state_path = os.path.join(os.path.dirname(settings_path),
                                   DEFAULT_STATE_FILENAME)
-    store = ParameterStore(path=settings_path)
+    if ui_state_path is None:
+        ui_state_path = default_ui_state_path(settings_path)
+    # Erst danach refresh(): der Store legt den gesicherten UI-Zustand direkt
+    # beim ersten Lesen ueber die Boot-Werte, ohne ein zweites Kommando.
+    store = ParameterStore(path=settings_path, ui_state_path=ui_state_path)
     store.refresh(force=True)
     sender = OscSender(osc_host, osc_port)
     # Zweiter Sender fuer die Sound-Parameter: die /klangnetz/param/*-Adressen
@@ -3441,6 +3694,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Zustandsdatei der Song-Struktur "
                              "(Vorgabe: %s neben --settings)"
                              % DEFAULT_STATE_FILENAME)
+    parser.add_argument("--ui-state",
+                        default=os.environ.get("IMPULSE_UI_STATE"),
+                        help="Datei, in der die ueber dieses UI gesetzten "
+                             "Werte gesichert werden, damit sie einen "
+                             "Neustart des Servers ueberleben "
+                             "(Vorgabe: %s neben --settings)"
+                             % UI_STATE_FILENAME)
     parser.add_argument("--osc-host",
                         default=os.environ.get("IMPULSE_OSC_HOST", DEFAULT_OSC_HOST),
                         help="Ziel-Host fuer OSC (Vorgabe: %(default)s)")
@@ -3485,6 +3745,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     state_path = (os.path.abspath(args.state) if args.state
                   else os.path.join(os.path.dirname(settings_path),
                                     DEFAULT_STATE_FILENAME))
+    ui_state_path = (os.path.abspath(args.ui_state) if args.ui_state
+                     else default_ui_state_path(settings_path))
 
     # Der Auto-Commit arbeitet auf dem Checkout, in dem dieser Server liegt --
     # nicht auf dem Ordner von --settings. Zeigt --settings woanders hin, ist
@@ -3498,12 +3760,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     app = create_app(settings_path, args.osc_host, args.osc_port, presets_path,
                      palette_path, state_path, autocommit_scheduler=scheduler,
-                     record_status_port=args.record_status_port)
+                     record_status_port=args.record_status_port,
+                     ui_state_path=ui_state_path)
 
     print("[webui] remoteSettings: %s" % settings_path)
     print("[webui] Presets:        %s" % presets_path)
     print("[webui] Palette:        %s" % palette_path)
     print("[webui] Song-Zustand:   %s" % state_path)
+    print("[webui] UI-Zustand:     %s (nur was ueber dieses UI gesendet wurde)"
+          % ui_state_path)
     print("[webui] OSC-Ziel:       %s:%d" % (args.osc_host, args.osc_port))
     print("[webui] Sound (sclang): %s:%d" % (args.osc_host, SC_OSC_PORT))
     print("[webui] Record-Status:  %s:%d (Rueckkanal von sclang)"

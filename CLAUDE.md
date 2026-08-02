@@ -203,10 +203,10 @@ zur Wirkung, darunter die rohe Adresse als kleinste, gedimmte Zeile
 - **Nach dem Laden zieht der Server die Regleranzeige nach**, indem er dieselbe Preset-Datei mit `parse_settings()` liest — das geht, weil Preset- und `remoteSettings.txt`-Format identisch sind. Die Werte gehen in der HTTP-Antwort zurück und werden im Browser *still* gesetzt (kein zweites OSC); geklemmt wird auf die Range aus `remoteSettings.txt`, nicht auf die aus der Preset-Datei — dieselbe Regel wie `PresetStore.applyPreset()`. Adressen, die der Dump nicht kennt, und Werte ausserhalb der verengten UI-Range (`UI_RANGE_OVERRIDES`) nennt die Statuszeile, statt sie zu verschlucken.
 - **Speichern wartet auf die Datei.** `/preset/save` ist asynchron (imPulse schreibt erst im nächsten `draw()`), also pollt der Endpoint bis zu 1 s auf eine geänderte `mtime` und antwortet sonst mit 504 statt Erfolg zu behaupten — der häufigste Fehlerfall ist „Web-UI läuft, imPulse nicht". `valid_preset_name()` in `server.py` und die Regex im JS spiegeln `PresetStore.isValidName()`; Autorität bleibt Java, dort geht es um Pfad-Traversal.
 
-**Sieben Themen-Tabs** (Mixer, Sound Design, Spawn-Verhalten, Noten-Verhalten,
-Impuls-Verhalten, Farben, Song-Struktur) statt einer langen Liste. Welche
-Adresse in welchen Tab gehört, entscheidet `TAB_RULES`/`TAB_PRIMARY` in
-`server.py` — dort ist es
+**Acht Themen-Tabs** (Mixer, Sound Design, Spawn-Verhalten, Noten-Verhalten,
+Tonleiter, Impuls-Verhalten, Farben, Song-Struktur) statt einer langen Liste.
+Welche Adresse in welchen Tab gehört, entscheidet
+`TAB_EXACT`/`TAB_RULES`/`TAB_PRIMARY` in `server.py` — dort ist es
 prüfbar, und `test_webui.py` stellt sicher, dass **jeder** Regler in genau
 einem Tab landet und keiner doppelt. Oben je Tab die kuratierten Regler,
 darunter ein eingeklapptes `<details>` mit dem Rest.
@@ -216,6 +216,26 @@ Die Reihenfolge der Regeln zählt: `/net/impulse/speedQuantize/` muss **vor**
 Dieselbe Falle bei den Farben: `/net/impulse/color/`,
 `/net/impulse/fadeOut/` und `/nodes/colors/` stehen vor `/net/impulse/` bzw.
 `/nodes/`.
+
+**`TAB_EXACT` wird vor `TAB_RULES` nachgeschlagen** und ordnet eine Adresse
+über **Gleichheit** zu statt über ein Präfix. Es gibt darin genau einen
+Eintrag, und der ist der Anlass: `/net/impulse/speed` steht seit 2026-08-02 in
+der Speed-Klassen-Sektion des Noten-Tabs, weil die Klassen 0,5x..8x nichts
+anderes tun, als ihn zu vervielfachen — ein Tabwechsel zwischen dem Wert und
+seinen Vielfachen ist genau die Trennung, die den zweiten Basis-Regler
+`speedQuantize/baseSpeed` überhaupt erst plausibel gemacht hat (siehe
+„Quantisierte Spawn-Geschwindigkeit"). Als sechste Präfix-Regel ginge das
+nicht: `"/net/impulse/speed"` fängt auch `/net/impulse/speed/randomize/*` (der
+Sinus-Randomizer gehört zur Physik und teilt sich dort eine Gruppe mit dem
+Lifetime-Randomizer, kann also nicht allein umziehen) und
+`/net/impulse/speedQuantize/*`. Ein Test hält beides fest.
+
+Aus demselben Umbau: `("/net/melody/", …)` zeigt jetzt auf den
+**Tonleiter**-Tab, nicht mehr auf Noten-Verhalten. Die Melodie-Sektion war
+schon vorher dorthin gezogen, die Regel war es nicht — sie ist ohnehin nur der
+Rückfall für eine *später* dazukommende `/net/melody/`-Adresse, die
+`MELODY_FIELDS` nicht kennt, und die gehört neben die Sektion und nicht auf
+einen Tab, auf dem von der Melodie nichts mehr steht.
 
 **Eine Gruppe geht als GANZES in einen Tab**, bestimmt von der Adresse ihres
 ersten Reglers. Eine Farbkarte trägt aber **keine eigene Adresse**, sondern
@@ -285,8 +305,13 @@ zwei Farb-Sektionen des Farben-Tabs (`build_colors`, `build_fade`), die unter
   und Kürzel** (nicht jede Windows-Schrift hat U+1D15D..U+1D161, ein Symbol
   allein wäre dort ein leeres Kästchen). `originTreeFilter` ist ein
   **Auswahlbalken** mit fünf Klartext-Zuständen, siehe unten.
-- **Speed-Klassen** — die fünf Gewichte plus ein Verteilungsbalken, der sie
-  normiert zeigt; die Gewichte selbst summieren sich bewusst nicht auf 100.
+- **Grundtempo und Speed-Klassen** — ganz oben der Grundregler
+  `/net/impulse/speed` selbst, darunter der Ein/Aus-Schalter, die fünf
+  Gewichte und ein Verteilungsbalken, der sie normiert zeigt; die Gewichte
+  selbst summieren sich bewusst nicht auf 100. Der Grundregler steht **über**
+  dem Schalter, weil er in beiden Zuständen gilt, und
+  `sequencer_addresses()` nimmt ihn dafür aus dem generischen Rendering —
+  sonst stünde er zweimal auf der Seite.
 - **Split-Verhalten** — zwei Verteilungen untereinander (Zweigzahl, Notenwert
   des Versatzes), im selben Tab wie die Speed-Klassen. Details unter
   „Split-Anzahl und Split-Versatz".
@@ -479,6 +504,59 @@ Sieben Dinge, die man beim Ändern kennen muss:
   `input`-Event.** Das Laden eines Presets ruft `control.set(wert, true)` und
   löst bewusst kein `input` aus; an einem reinen Event-Listener blieben beide
   danach auf der alten Verteilung stehen.
+
+**Gesicherter Anzeigezustand: `data/webuiState.json`.** Die Regler zeigen beim
+Start die Werte aus `data/remoteSettings.txt`, also den **Boot-Zustand von
+imPulse** — nicht das, was seither eingestellt wurde. Bis 2026-08-02 stellte
+damit jeder Neustart des UI-Prozesses (Rechner neu gestartet, Task neu
+angeworfen, `--debug`-Autoreload) die Anzeige auf die Code-Defaults zurück,
+obwohl die Installation längst etwas anderes fuhr; der Operator sah nicht
+mehr, wo er steht. `ParameterStore` schreibt deshalb jede über **dieses UI**
+gesendete Wertänderung zusätzlich als flaches JSON (Adresse → Zahl) neben
+`remoteSettings.txt` und legt sie beim nächsten Start über die frisch
+gelesenen Boot-Werte. Pfad über `--ui-state` / `IMPULSE_UI_STATE`.
+
+Sechs Dinge, die man beim Ändern kennen muss:
+
+- **Beim Laden geht kein OSC raus** (Birk, 2026-08-02, ausdrücklich). Der
+  Neustart eines *Anzeige*prozesses ist kein Eingriff in die laufende Show:
+  imPulse fährt weiter seinen eigenen Zustand, das UI zeigt nur wieder, was
+  zuletzt darüber gesetzt wurde, damit der Operator es nicht neu eintippen
+  muss, falls er es erneut senden will. Ein Test hält fest, dass beim Start
+  kein einziges Datagramm entsteht.
+- **Es gibt weiterhin keinen Rückkanal von imPulse**, und einen zu bauen war
+  ausdrücklich nicht gewünscht. Die Datei enthält ausschliesslich, was durch
+  `ParameterStore.store()` ging; was jemand per `osc_send.py` oder aus der IDE
+  an den Sketch schickt, steht hier nicht und **soll** hier nicht stehen. Dass
+  eine Änderung ausserhalb des UI nicht auftaucht, ist gewolltes Verhalten,
+  kein Fehler.
+- **Überlagert wird genau EINMAL, beim ersten erfolgreichen Lesen.** Ein
+  späteres Neulesen heisst „imPulse wurde neu gestartet" (die mtime hat sich
+  geändert) — dann fährt der Sketch wirklich seine Boot-Werte, und die alte
+  Anzeige darüber zu legen behauptete einen Zustand, den es gerade nicht mehr
+  gibt. Dafür das Flag `ui_state_applied`.
+- **Eine eigene Datei, nicht `remoteSettings.txt`.** Die schreibt imPulse bei
+  jedem Start komplett neu; ein Fremdschreiber darin wäre beim nächsten
+  Sketch-Start weg, und schlimmer: er veränderte ausgerechnet die mtime, an
+  der der Server einen imPulse-Neustart erkennt. JSON und nicht das
+  Tab-Format der Presets, weil das Typ, Beschreibung und Bereich mitträgt —
+  alles Angaben, die aus `remoteSettings.txt` kommen und in einer zweiten
+  Datei nur veralten könnten.
+- **Die Sicherung hängt an `store()`, nicht an den Endpoints.** `/api/set`,
+  `/api/fadeout`, `/api/melody/recompute` und das Preset-Laden gehen alle
+  dort durch; ein sechster Endpoint erbt sie damit, statt sie vergessen zu
+  können. Geschrieben wird die ganze Datei (Voll-Stand, wie beim POST auf die
+  Farbpalette) und nur bei einer echten Änderung — während eines Reglerzugs
+  kommt derselbe Wert mehrfach an. Ein Schreibfehler lässt die Änderung nicht
+  scheitern (die ist längst per OSC raus) und steht unter
+  `GET /api/parameters` in `settings.uiState.error`.
+- **Sie steht in `.gitignore` und NICHT auf der Liste des Auto-Commits.**
+  Dieselbe Trennlinie wie dort beschrieben: „wann ändert sie sich" statt „wer
+  schreibt sie". Sie ändert sich bei jedem Reglerzug — auf `WATCHED_PATTERNS`
+  ergäbe das alle zehn Minuten einen Commit, also genau die feste Taktung
+  unabhängig vom Zustand, die vermieden werden soll. Ein Preset-Ersatz ist sie
+  ohnehin nicht: sie hält Anzeigezustand einer Maschine, keinen benannten
+  Wertesatz.
 
 Für die UI-Schicht selbst gibt es **kein** Testgerüst im Repo — `webui/` soll
 ohne Node/npm auskommen, und ein jsdom-Test würde genau das einführen. Geprüft
@@ -837,6 +915,24 @@ Vier Dinge, die man beim Ändern kennen muss:
   „die Geschwindigkeit" heißen, und die Zeitbasis-Kopplung (`lifetime`,
   `nodeDeadTime`, `randomSpawn/interval` ziehen im Web-UI an `impulseSpeed`
   mit) hätte einen zweiten, unbeteiligten Bezugspunkt.
+
+  **Genau das war zwischenzeitlich passiert und ist am 2026-08-02 wieder
+  entfernt worden.** Ein `/net/impulse/speedQuantize/baseSpeed` (Bereich
+  0,1..2,0) hatte sich zwischen die zwei Zeilen von `spawnSpeed()` geschoben:
+  `base` wurde erst korrekt aus `impulseSpeed` gesetzt und im
+  Eingeschaltet-Zweig sofort wieder überschrieben. Bei aktiven Tempo-Klassen
+  war der Grundregler (Bereich 1..1500) damit **wirkungslos**, die höchste
+  überhaupt erreichbare Geschwindigkeit lag winzig unter dem, was er
+  versprach — und die Zeitbasis-Kopplung rechnete auf einem Wert, den gar
+  niemand fuhr. Kein Fehler, keine Meldung, nur ein Regler, der nichts tat.
+  Der Parameter ist **ersatzlos** weg (Java, Web-UI, `ADDRESS_LABELS`); ein
+  älteres Preset mit der Adresse meldet sie beim Laden als unbekannt und lässt
+  alles andere unberührt. Geprüft wird das von `webui/test_webui.py`
+  (`SpeedConsolidationTest`, liest `LedNetworkTransportEffect.java` als Text):
+  die Adresse wird nirgends mehr registriert, und `spawnSpeed()` weist `base`
+  genau **einmal** zu. Ein Java-Unit-Test käme nicht heran — die Methode hängt
+  an vier `RemoteControlled*Parameter` und damit an oscP5, das `test/run.sh`
+  bewusst nicht hat.
 - **`spawnSpeed()` ist der einzige Ort, an dem eine Spawn-Geschwindigkeit
   entsteht.** Alle fünf Spawn-Pfade gehen hindurch: `/tube/trigger`,
   `/net/activateStripe`, `/net/activateNode`, `spawnRandomImpulses()`,

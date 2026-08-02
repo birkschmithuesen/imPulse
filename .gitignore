@@ -16,6 +16,13 @@ webui/.venv/
 # Quelle der Wahrheit, verursacht nur wiederkehrende Merge-Konflikte.
 data/remoteSettings.txt
 
+# Gesicherter Anzeigezustand des Web-UI (webui/server.py, ParameterStore):
+# Adresse -> zuletzt UEBER DAS UI gesendeter Wert. Laufzeitstatus einer
+# Maschine, aendert sich bei jedem Reglerzug -- gehoert aus demselben Grund
+# nicht in die Historie wie remoteSettings.txt und steht deshalb auch nicht
+# auf der Liste des Auto-Commits.
+data/webuiState.json
+
 # Vierkanal-Mitschnitte, von sclang geschrieben (/klangnetz/record/start).
 # Rohmaterial eines Drehtages: mehrere hundert MB je Datei, gehoert nicht
 # in die Historie. Den Ordner legt der erste Start selbst an.
