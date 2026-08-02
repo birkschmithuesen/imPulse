@@ -2074,6 +2074,47 @@ class MarkupWiringTest(unittest.TestCase):
         self.assertIn('id="melodyRecompute" disabled', html)
         self.assertIn("/api/melody/recompute", js)
 
+    def test_nothing_stands_above_the_tab_bar(self):
+        """Ganz oben steht seit 2026-08-02 NUR die Tab-Leiste.
+
+        Jeder dauerhaft sichtbare Block darueber schiebt die Tab-Panels nach
+        unten und zwingt jeden Aufruf, an ihm vorbeizuscrollen, bevor der
+        erste Regler sichtbar wird -- derselbe Grund, aus dem vorher schon
+        Presets und Melodie-Zuordnung in die Tabs gewandert sind. Der Test
+        prueft die Struktur, nicht das Aussehen: zwischen <body> und der
+        Tab-Leiste darf ausser Kommentaren kein Element stehen.
+        """
+        html = self._read(os.path.join("templates", "index.html"))
+        start = html.index("<body>") + len("<body>")
+        head = html[start:html.index('<nav class="tab-bar"')]
+        head = re.sub(r"<!--.*?-->", "", head, flags=re.S)
+        self.assertNotIn("<", head,
+                         "ueber der Tab-Leiste steht wieder ein Element: "
+                         + head.strip())
+
+    def test_the_headline_block_is_parked_and_hung_into_a_tab(self):
+        """Kopfzeile, Status- und Autocommit-Zeile liegen im Abstellplatz.
+
+        Sie tragen feste IDs, an die app.js beim Laden seine Listener haengt,
+        und #status/#autocommit/#meta werden aus dem gesamten Code heraus
+        beschrieben -- sie duerfen weder neu gebaut werden noch beim
+        Tab-Neuaufbau aus dem Dokument fallen.
+        """
+        html = self._read(os.path.join("templates", "index.html"))
+        js = self._read(os.path.join("static", "app.js"))
+        parked = html.index('<div id="parked"')
+        for element_id in ("headline", "meta", "status", "autocommit",
+                           "coupling", "reload"):
+            marker = 'id="%s"' % element_id
+            self.assertIn(marker, html)
+            self.assertGreater(html.index(marker), parked,
+                               "%s steht nicht im Abstellplatz" % element_id)
+        # Zurueck auf den Abstellplatz vor jedem Neuaufbau, sonst wirft
+        # tabPanelsEl.innerHTML = '' die Kopfzeile aus dem Dokument.
+        self.assertIn("parkedEl.appendChild(headlineEl)", js)
+        # Und wieder hinein, in denselben Tab wie die Presets.
+        self.assertIn("panel.appendChild(headlineEl)", js)
+
 
 class MelodyTest(unittest.TestCase):
     """Die Melodie-Sektion: vier Werte plus ein Knopf, und genau EIN Ort im UI."""

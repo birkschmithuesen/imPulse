@@ -59,18 +59,47 @@ faellt der Tab komplett weg, statt leer dazustehen — dieselbe Regel wie
 vorher beim `hidden`-Attribut der Sektion, nur eine Ebene hoeher
 (`build_tabs()` in `server.py`).
 
-**Seit 2026-08-02 stehen Presets und Melodie-Zuordnung IN den Tabs**, nicht
-mehr fest ueber der Tab-Leiste: Presets ganz oben im Mixer-Tab (vor den
-kuratierten Reglern), Melodie-Zuordnung als einziger Inhalt des
-Tonleiter-Tabs. Vorher zwangen beide Sektionen jeden Aufruf, an ihnen
-vorbeizuscrollen, bevor ueberhaupt ein Tuning-Regler sichtbar wurde. Ihr
-Markup liegt trotzdem weiterhin in `templates/index.html`, jetzt in einem
-`<div id="parked" hidden>`-Abstellplatz — `buildTabs()` in `app.js` haengt
-die beiden `<section>`-Elemente nur um, statt sie neu zu bauen: `app.js`
-verdrahtet seine Listener beim Laden an feste IDs (`presetSelect`,
-`melodyRecompute` usw.), und dieselben Elemente muessen bei jedem
-Tab-Neuaufbau (`tabPanelsEl.innerHTML = ''`) wieder in den Abstellplatz
-zurueck, statt aus dem Dokument zu fallen.
+**Seit 2026-08-02 steht ganz oben NUR NOCH die Tab-Leiste.** Alles, was
+vorher fest darueber sass, ist in die Tabs gewandert:
+
+| war fest oben | steht jetzt |
+|---|---|
+| Titel „imPulse" + Meta-Zeile (`#meta`) | Mixer-Tab, erste Karte |
+| Status-Zeile (`#status`) | dieselbe Karte, unter dem Titel |
+| Autocommit-Zeile (`#autocommit`) | dieselbe Karte, darunter |
+| Speed-Kopplung (`#coupling`) + „Neu laden" (`#reload`) | dieselbe Karte, unten |
+| Presets | Mixer-Tab, direkt darunter |
+| Melodie-Zuordnung | einziger Inhalt des Tonleiter-Tabs |
+
+Der Grund ist zweimal derselbe: jeder dauerhaft sichtbare Block schob die
+Tab-Panels nach unten und zwang jeden Aufruf, an ihm vorbeizuscrollen, bevor
+ueberhaupt ein Tuning-Regler sichtbar wurde. `position: sticky` gilt seither
+nur noch fuer die Tab-Leiste selbst — sie ist das einzige, was auf jedem Tab
+gebraucht wird.
+
+Die Reihenfolge in der Kopfzeilen-Karte ist die Lesereihenfolge: erst
+wer/woher (Titel, Parameterzahl, OSC-Ziel), dann was zuletzt passiert ist
+(Status, automatische Sicherung), dann die zwei Bedienelemente, die fuer die
+ganze Seite gelten. Sie haengt sich an die **Preset-Sektion** statt an eine
+fest verdrahtete Tab-ID (`buildTabs()` in `app.js`) — beides gilt fuer alle
+Tabs und wird zusammen gelesen: Szene waehlen, Rueckmeldung lesen.
+
+Das Markup aller drei Bloecke liegt trotzdem weiterhin in
+`templates/index.html`, in einem `<div id="parked" hidden>`-Abstellplatz —
+`buildTabs()` haengt die `<section>`-Elemente nur um, statt sie neu zu bauen:
+`app.js` verdrahtet seine Listener beim Laden an feste IDs (`presetSelect`,
+`melodyRecompute`, `coupling`, `reload` usw.), und dieselben Elemente muessen
+bei jedem Tab-Neuaufbau (`tabPanelsEl.innerHTML = ''`) wieder in den
+Abstellplatz zurueck, statt aus dem Dokument zu fallen.
+
+**`#status`, `#autocommit` und `#meta` duerfen nie aus dem Dokument fallen.**
+Sie werden aus dem gesamten Code heraus beschrieben — nach jedem `/api/set`,
+jedem Preset-Laden, jedem Autocommit-Poll —, nicht nur beim Bau der Seite; ein
+fehlendes Element waere dort ein `TypeError` mitten in einer Sendung. Zwei
+Dinge halten das: der Tab-Wechsel **versteckt** Panels nur (`[hidden]`),
+entfernt sie nicht, und findet `buildTabs()` keinen Tab mit Preset-Sektion
+(aelterer Server), bleibt die Kopfzeile schlicht auf dem Abstellplatz stehen —
+unsichtbar, aber beschreibbar.
 
 Drei Dinge, die man beim Aendern kennen muss:
 
@@ -291,8 +320,8 @@ Daraus folgt der Rest:
 
 ## Presets
 
-Im Mixer-Tab, ganz oben ueber den kuratierten Reglern, sitzt die Sektion
-**Presets**: ein Dropdown mit
+Im Mixer-Tab, unter der Kopfzeilen-Karte und ueber den kuratierten Reglern,
+sitzt die Sektion **Presets**: ein Dropdown mit
 allen vorhandenen Presets plus **Laden**, darunter ein Textfeld plus
 **Speichern**.
 
@@ -333,7 +362,8 @@ nicht behaupten, der Sketch fahre den angezeigten Wert.
 von Hand loescht. Bewusst nicht im UI, weil sonst das Web-UI in einen Ordner
 schreiben wuerde, der imPulse gehoert.
 
-Der Knopf **Neu laden** oben rechts hat damit nichts zu tun — der liest
+Der Knopf **Neu laden** in der Kopfzeilen-Karte darueber hat damit nichts zu
+tun — der liest
 `remoteSettings.txt` neu ein, also die Parameter-*Definitionen*.
 
 ## Farbpalette
@@ -487,7 +517,8 @@ gesendeten Werte an (die Regler springen sichtbar nach), es wird nichts blind
 verschickt. Parameter, die in der Datei fehlen (z. B. `/net/randomSpawn/*` in
 einem alten Dump), werden uebersprungen und in der Statuszeile genannt.
 
-Die Kopplung laesst sich oben rechts per **Speed-Kopplung aktiv** abschalten,
+Die Kopplung laesst sich in der Kopfzeilen-Karte des Mixer-Tabs per
+**Speed-Kopplung aktiv** abschalten,
 wenn Speed mal isoliert geaendert werden soll (die Einstellung merkt sich der
 Browser).
 

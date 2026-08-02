@@ -17,6 +17,7 @@ const colorCards = [];        // { base, input, components }
 const pending = new Map();    // Sende-Schluessel -> { last, timer, updates }
 
 const groupsEl = document.getElementById('groups');
+const headlineEl = document.getElementById('headline');
 const statusEl = document.getElementById('status');
 const metaEl = document.getElementById('meta');
 const couplingEl = document.getElementById('coupling');
@@ -2871,13 +2872,16 @@ function buildRecordSection(host) {
 
 const TAB_STORAGE_KEY = 'imPulse.activeTab';
 
-/* Presets und Melodie-Zuordnung sind FESTES Markup aus index.html (ihre
- * Listener haengen an festen IDs, siehe MarkupWiringTest) und werden hier nur
- * umgehaengt. Vor jedem Neuaufbau muessen sie zurueck auf den Abstellplatz:
- * tabPanelsEl.innerHTML = '' wuerde sie sonst mitsamt dem alten Panel aus dem
- * Dokument werfen, und ein "Neu laden" liesse die Presets verschwinden. */
+/* Kopfzeile, Presets und Melodie-Zuordnung sind FESTES Markup aus index.html
+ * (ihre Listener haengen an festen IDs, siehe MarkupWiringTest) und werden
+ * hier nur umgehaengt. Vor jedem Neuaufbau muessen sie zurueck auf den
+ * Abstellplatz: tabPanelsEl.innerHTML = '' wuerde sie sonst mitsamt dem alten
+ * Panel aus dem Dokument werfen, und ein "Neu laden" liesse die Presets
+ * verschwinden -- und mit der Kopfzeile #status/#autocommit/#meta, die aus dem
+ * ganzen Code heraus beschrieben werden. */
 function parkFixedSections() {
   if (!parkedEl) { return; }
+  if (headlineEl) { parkedEl.appendChild(headlineEl); }
   if (presetsEl) { parkedEl.appendChild(presetsEl); }
   if (melodyEl) { parkedEl.appendChild(melodyEl); }
 }
@@ -2889,9 +2893,10 @@ function buildTabs(data) {
   const tabs = data.tabs || [];
   if (!tabs.length) {
     // Aelterer Server ohne Tab-Daten: alles in einen Block, damit die
-    // Oberflaeche nicht leer bleibt. Die zwei festen Sektionen kommen dann
+    // Oberflaeche nicht leer bleibt. Die drei festen Sektionen kommen dann
     // wieder nach oben -- ohne Tabs gibt es keinen Platz, an den sie sonst
     // gehoerten, und ein Preset-Dropdown im Abstellplatz waere unsichtbar.
+    if (headlineEl) { tabPanelsEl.appendChild(headlineEl); }
     if (presetsEl) { tabPanelsEl.appendChild(presetsEl); }
     if (melodyEl) { tabPanelsEl.appendChild(melodyEl); }
     tabPanelsEl.appendChild(groupsEl);
@@ -2922,6 +2927,21 @@ function buildTabs(data) {
     const panel = document.createElement('div');
     panel.className = 'tab-panel';
     panel.setAttribute('role', 'tabpanel');
+
+    // 0. Kopfzeile. Seit 2026-08-02 steht ueber der Tab-Leiste nichts mehr;
+    //    Titel, Meta-Zeile, Status, automatische Sicherung, Speed-Kopplung und
+    //    "Neu laden" sitzen als erste Karte in demselben Tab wie die Presets.
+    //    Der Server sagt nicht eigens, welcher das ist -- sie haengt sich an
+    //    die Preset-Sektion, weil beides fuer die ganze Seite gilt und
+    //    zusammen gelesen wird (Szene waehlen, Rueckmeldung lesen).
+    //
+    //    Findet sich kein solcher Tab (aelterer Server), bleibt sie auf dem
+    //    Abstellplatz stehen: unsichtbar, aber im Dokument -- #status und
+    //    #autocommit werden von ueberall her beschrieben und duerfen nie
+    //    fehlen.
+    if (headlineEl && (tab.sections || []).indexOf('presets') >= 0) {
+      panel.appendChild(headlineEl);
+    }
 
     // 1. Spezial-Sektionen (Presets, Melodie-Zuordnung, Sequencer-Panel,
     //    Speed-Klassen, Split-Verhalten, Palette, Song-Struktur)
