@@ -248,6 +248,70 @@ SPLIT_STAGGER_NOTES: List[Tuple[str, int]] = [
     ("sixteenth", 16),
 ]
 
+# Ruhemomente (PauseGate.java): alle checkIntervalBars Takte faellt mit
+# probability die Entscheidung, ob eine Pause beginnt; sie dauert dann
+# lengthMinBars..lengthMaxBars Takte und schaltet die zwei Spawn-Ebenen stumm,
+# die dafuer angehakt sind. Alle Zeitangaben in TAKTEN, nicht Beats oder
+# Sekunden -- dieselbe Einheit, in der der Sequencer daneben gedacht wird
+# (siehe den Kommentar in PauseGateConfig).
+PAUSE_PREFIX = "/net/pause/"
+
+# Die zwei Ebenen, die eine laufende Pause stummschalten kann. Adress-Suffix
+# und Anzeigename, Reihenfolge wie im Panel.
+PAUSE_TARGETS: List[Tuple[str, str]] = [
+    ("affectsSequencer", "Sequencer"),
+    ("affectsRandomSpawn", "Zufalls-Spawns"),
+]
+
+# Die drei Fragen, die live am Geraet offen geblieben sind (Birk, 2026-08-02):
+# nach WIEVIEL TAKTEN kann eine Pause ueberhaupt beginnen, mit WELCHER
+# WAHRSCHEINLICHKEIT tut sie das dann, und WIE LANGE dauert sie. Jede bekommt
+# einen eigenen benannten Block statt sieben Schieber in einer Reihe.
+#
+# Die Ueberschriften sind ausgeschriebene Fragen und keine Substantive
+# ("Ziehung", "Dauer"): genau die Kurzform war der Zustand, in dem
+# „probability 0,25“ dastand und niemand sagen konnte, worauf sich die Zahl
+# bezieht. Sie stehen hier und nicht in app.js, aus demselben Grund wie
+# ADDRESS_LABELS und TREE_HELP -- nur hier sind sie ohne jsdom pruefbar.
+PAUSE_BLOCK_TITLES: Dict[str, str] = {
+    "when": "Wann kann eine Pause beginnen?",
+    "length": "Wie lange dauert eine Pause?",
+    "targets": "Wen schaltet eine Pause stumm?",
+}
+
+# Kurzbeschriftungen der vier Schieber im Panel. Die langen Titel aus
+# ADDRESS_LABELS ("Pausendauer, kuerzeste") passen nicht in die
+# Beschriftungsspalte einer .mini-row, muessen dort aber trotzdem ihre EINHEIT
+# nennen: „2“ neben einem Schieber ist ohne „Takte“ wieder eine Zahl ohne
+# Bezug. Die lange Fassung samt Erklaerung bleibt als Tooltip erreichbar.
+PAUSE_FIELD_LABELS: Dict[str, str] = {
+    "checkIntervalBars": "Pruefintervall (Takte)",
+    "probability": "Wahrscheinlichkeit",
+    "lengthMinBars": "kuerzeste Dauer (Takte)",
+    "lengthMaxBars": "laengste Dauer (Takte)",
+}
+
+# Was eine Pause WIRKLICH tut -- einmal unter dem Schalter. Der Text steht
+# hier und nicht in app.js, aus demselben Grund wie TREE_HELP: er ist eine
+# Aussage ueber die Java-Seite (PauseGate.tick: kein harter Stop, sondern
+# keine neuen Anfaenge; kein neuer Wurf waehrend einer laufenden Pause) und
+# bleibt hier ohne jsdom pruefbar.
+PAUSE_HELP = ("Eine Pause verbietet nur NEUE Impulse. Schon fliegende laufen "
+              "weiter, spalten sich auf und klingen aus – es ist kein harter "
+              "Stop, sondern eine Atempause. Gezaehlt wird in Takten auf "
+              "derselben Uhr wie der Sequencer (/net/sequencer/bpm), auch "
+              "wenn der Sequencer selbst aus ist. Waehrend einer laufenden "
+              "Pause wird nicht neu gewuerfelt – eine Pause kann keine "
+              "andere verlaengern.")
+
+# Die zwei Haken darunter. Ihre Bedeutung stand bisher nur im Java-Kommentar
+# in PauseGateConfig: aus „affectsSequencer“ allein ist nicht zu erraten, dass
+# hier steht, WER waehrend der Pause verstummt.
+PAUSE_TARGET_HELP = ("Welche Spawn-Ebene eine laufende Pause stummschaltet. "
+                     "Beide unabhaengig: nur den Sequencer aussetzen lassen "
+                     "(die Zufalls-Spawns laufen als Ambient weiter) oder "
+                     "beide zusammen fuer echte Stille.")
+
 # Die Titel und Kurzerklaerungen aller Regler stehen weiter unten in
 # ADDRESS_LABELS -- sie brauchen die Levelnamen der Song-Struktur, die erst
 # darunter definiert sind.
@@ -385,6 +449,82 @@ def build_split(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
         "staggerEnabled": stagger_enabled.as_dict() if stagger_enabled is not None else None,
         "staggerWeights": stagger_weights,
     }
+
+
+def build_pause(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
+    """Struktur der Ruhemomente-Sektion, oder None wenn unbekannt.
+
+    Eigene Sektion statt sieben generischer Schieber, aus demselben Grund wie
+    bei den Speed-Klassen: die sieben Adressen sind kein Satz unabhaengiger
+    Zahlen, sondern EIN Mechanismus. „Wahrscheinlichkeit 0,25“ heisst nichts,
+    ohne dass daneben steht, worauf sie sich bezieht (alle acht Takte eine
+    Ziehung), und die Dauer der Pause lag bis 2026-08-02 im
+    Erweitert-Bereich zwischen den RandomSpawn-Reglern -- Birk hat sie live am
+    Geraet nicht gefunden.
+
+    None heisst wie bei den anderen build_*-Funktionen: dieser imPulse-Stand
+    kennt die Ruhemomente nicht (aelterer Dump). Dann faellt das UI still auf
+    das generische Rendering zurueck, statt eine leere Sektion zu zeigen.
+    Fehlt nur ein einzelner Regler, bleibt die Sektion und laesst ihn weg --
+    anders als bei der Song-Matrix ist hier jeder Wert fuer sich lesbar, ein
+    fehlender ist keine stille Luecke in einem Gitter.
+    """
+    enabled = by_address.get(PAUSE_PREFIX + "enabled")
+    if enabled is None:
+        return None
+
+    def entry(name: str) -> Optional[Dict[str, Any]]:
+        param = by_address.get(PAUSE_PREFIX + name)
+        if param is None:
+            return None
+        item = param.as_dict()
+        # Kurzform fuer die Beschriftungsspalte; der lange Titel aus
+        # ADDRESS_LABELS bleibt ueber "help" im Tooltip erreichbar.
+        item["label"] = PAUSE_FIELD_LABELS[name]
+        return item
+
+    targets: List[Dict[str, Any]] = []
+    for suffix, label in PAUSE_TARGETS:
+        param = by_address.get(PAUSE_PREFIX + suffix)
+        if param is None:
+            continue
+        item = param.as_dict()
+        item["label"] = label
+        targets.append(item)
+
+    return {
+        "enabled": enabled.as_dict(),
+        "probability": entry("probability"),
+        "checkIntervalBars": entry("checkIntervalBars"),
+        # lengthMin/lengthMax gehen als PAAR heraus und werden im UI als
+        # Spanne gezeigt: PauseGate.drawLength() zieht gleichverteilt
+        # dazwischen, zwei einzelne Schieber lesen sich als zwei unabhaengige
+        # Werte.
+        "lengthMin": entry("lengthMinBars"),
+        "lengthMax": entry("lengthMaxBars"),
+        "targets": targets,
+        "blockTitles": dict(PAUSE_BLOCK_TITLES),
+        "help": PAUSE_HELP,
+        "targetHelp": PAUSE_TARGET_HELP,
+    }
+
+
+def pause_addresses(pause: Optional[Dict[str, Any]]) -> Set[str]:
+    """Adressen, die die Ruhemomente-Sektion selbst rendert.
+
+    Genau die, die oben auch wirklich in die Struktur gewandert sind -- ein
+    Regler, der hier steht und dort fehlt, waere aus dem UI verschwunden.
+    """
+    if not pause:
+        return set()
+    taken = {pause["enabled"]["address"]}
+    for key in ("probability", "checkIntervalBars", "lengthMin", "lengthMax"):
+        item = pause.get(key)
+        if item:
+            taken.add(item["address"])
+    for target in pause.get("targets", []):
+        taken.add(target["address"])
+    return taken
 
 
 # ---------------------------------------------------------------------------
@@ -959,6 +1099,41 @@ ADDRESS_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
         "-1 = die Spur wuerfelt ihren Ursprungs-Stripe. Ein Wert ab 0 nagelt "
         "sie auf diesen Stripe fest und schlaegt den Baum-Filter."),
 
+    # --- Ruhemomente (Pause) ----------------------------------------------
+    # Der Schalter hiess im UI bis 2026-08-02 schlicht „Enabled“ (letztes
+    # Adresssegment, Rueckfall von label_for) -- ein Schalter ohne Aussage
+    # darueber, was er einschaltet.
+    "/net/pause/enabled": (
+        "Ruhemomente aktiv",
+        "Laesst die Installation von selbst gelegentlich verstummen. Aus "
+        "heisst: es beginnt nie eine Pause."),
+    "/net/pause/probability": (
+        "Wahrscheinlichkeit einer Pause",
+        "Chance je Pruefintervall, dass eine Pause beginnt - nicht je Takt "
+        "und nicht je Minute. Bei 0,25 und einem Pruefintervall von 8 Takten "
+        "beginnt im Mittel etwa alle 32 Takte eine."),
+    "/net/pause/checkIntervalBars": (
+        "Pruefintervall",
+        "So viele Takte liegen zwischen zwei Ziehungen. Nur dann faellt "
+        "ueberhaupt eine Entscheidung; laeuft gerade eine Pause, wird "
+        "uebersprungen."),
+    "/net/pause/lengthMinBars": (
+        "Pausendauer, kuerzeste",
+        "Untergrenze der Spanne, aus der die Dauer einer ausgeloesten Pause "
+        "gleichverteilt gezogen wird, in Takten."),
+    "/net/pause/lengthMaxBars": (
+        "Pausendauer, laengste",
+        "Obergrenze derselben Spanne, in Takten. Vertauschte Grenzen werden "
+        "beim Ziehen getauscht, nicht als Fehler behandelt."),
+    "/net/pause/affectsSequencer": (
+        "Pause schaltet den Sequencer stumm",
+        "Waehrend einer Pause startet der Sequencer keine neuen Impulse. "
+        "Schon fliegende laufen unbeeindruckt weiter."),
+    "/net/pause/affectsRandomSpawn": (
+        "Pause schaltet die Zufalls-Spawns stumm",
+        "Dasselbe fuer die Ambient-Ebene. Aus heisst: sie rauscht auch "
+        "waehrend der Pause weiter, nur der Sequencer setzt aus."),
+
     # --- Knoten -----------------------------------------------------------
     "/nodes/fadeOutGamma": (
         "Ausblend-Kurve der Knoten",
@@ -1419,13 +1594,15 @@ TAB_PRIMARY: Dict[str, List[str]] = {
         "Master/1/opacity/1.Nodes",
     ],
     TAB_SOUND: [],
+    # Die zwei /net/pause/-Adressen standen hier bis 2026-08-02. Seit die
+    # Sektion "Ruhemomente" sie selbst rendert (siehe pause_addresses()),
+    # stuenden sie zweimal auf der Seite -- einmal im Panel und einmal als
+    # kuratierter Schieber darunter.
     TAB_SPAWN: [
         "/net/randomSpawn/enabled",
         "/net/randomSpawn/interval",
         "/net/randomSpawn/energy",
         "/net/randomSpawn/count",
-        "/net/pause/enabled",
-        "/net/pause/probability",
     ],
     TAB_NOTES: [],
     # Leer wie TAB_SONG: der Tonleiter-Tab besteht ausschliesslich aus der
@@ -1755,7 +1932,8 @@ def build_tabs(groups: List[Dict[str, Any]],
                song: Optional[Dict[str, Any]] = None,
                colors: Optional[Dict[str, Any]] = None,
                fade: Optional[Dict[str, Any]] = None,
-               melody: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+               melody: Optional[Dict[str, Any]] = None,
+               pause: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Verteilt Gruppen, Spezial-Sektionen und SC-Parameter auf die Tabs.
 
     Eine Gruppe geht als GANZES in einen Tab (bestimmt von ihrem ersten
@@ -1794,6 +1972,13 @@ def build_tabs(groups: List[Dict[str, Any]],
         by_tab[TAB_SCALE]["sections"].append("melody")
     if sequencer:
         by_tab[TAB_SPAWN]["sections"].append("sequencer")
+    # Direkt UNTER dem Sequencer und im selben Tab -- kein eigener Reiter
+    # (Birk, 2026-08-02, ausdruecklich verneint). Die Pause schaltet Sequencer
+    # UND Zufalls-Spawns stumm, gehoert also zwischen die beiden, und die
+    # Reihenfolge dieser Liste ist die Reihenfolge im Panel (buildTabs() in
+    # app.js baut sie der Reihe nach).
+    if pause:
+        by_tab[TAB_SPAWN]["sections"].append("pause")
     if speed:
         by_tab[TAB_NOTES]["sections"].append("speedClasses")
     # Reihenfolge im Farben-Tab: erst die Farbe der Impulse selbst mit ihrem
@@ -2683,6 +2868,10 @@ GROUP_TITLE_OVERRIDES = {
     "net/impulse/randomize": "Impuls-Randomizer (Sinus)",
     "net/impulse/split": "Split-Verhalten",
     "net/randomSpawn": "Zufalls-Spawns",
+    # Rueckfall: normalerweise rendert die Sektion "Ruhemomente" alle sieben
+    # Adressen selbst (build_pause). Fehlt /net/pause/enabled im Dump, kann
+    # sie nicht gebaut werden -- dann steht die Gruppe wenigstens unter einem
+    # Klartext-Titel statt unter "/net/pause".
     "net/pause": "Ruhemomente (Pause)",
     "net/sequencer": "Sequencer",
     "net": "Direkt-Trigger",
@@ -2848,11 +3037,13 @@ class ParameterStore:
             sequencer = build_sequencer(self.by_address)
             speed = build_speed_classes(self.by_address)
             split = build_split(self.by_address)
+            pause = build_pause(self.by_address)
             song = build_song_structure(self.by_address)
             colors = build_colors(self.by_address)
             fade = build_fade(self.by_address, self.values)
             melody = build_melody(self.by_address)
             taken = sequencer_addresses(sequencer, speed, split)
+            taken |= pause_addresses(pause)
             taken |= song_structure_addresses(song)
             taken |= color_addresses(colors)
             taken |= fade_addresses(fade)
@@ -2865,12 +3056,13 @@ class ParameterStore:
                 "sequencer": sequencer,
                 "speedClasses": speed,
                 "split": split,
+                "pause": pause,
                 "songStructure": song,
                 "colors": colors,
                 "fade": fade,
                 "melody": melody,
                 "tabs": build_tabs(groups, sequencer, speed, split, song,
-                                   colors, fade, melody),
+                                   colors, fade, melody, pause),
                 "scParams": {
                     "port": SC_OSC_PORT,
                     "groups": sc_param_groups(),
