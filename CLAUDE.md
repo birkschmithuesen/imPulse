@@ -103,7 +103,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `PresetStoreTest` — Format, Datei, Snapshot und Anwenden eines Presets, inklusive der ausgeschlossenen und still übergangenen Adressen
 - `PresetSchedulerTest` — die Zeitlogik des Preset-Wechslers: Einschalten springt nicht sofort, Reihenfolge, Intervall
 - `WeightedChoiceTest` — die gewichtete Ziehung, aus `SpeedQuantizer` herausgezogen: Verteilung über 100 000 Ziehungen, Gewicht 0 wird nie gezogen, Normalisierung, Gewichte hinter `count` zählen nicht mit, entartete Eingaben (null, `count` zu gross, alle 0, negativ, NaN)
-- `EnergyLevelStoreTest` — die Energie-Level-Klassifikation: Parsen samt Kommentaren, unbekanntes Level, doppelter Name (letzte Zeile gewinnt), Rückfall auf *mittel*, `presetsForLevel` liefert eine **leere Liste** statt `null`, fehlende Datei, Gegenprobe an der echten `data/energyLevels.txt` gegen `data/presets/` (jedes Preset getaggt, mindestens zwei je Level — aus dem Verzeichnis gerechnet, nicht als Zahl notiert)
+- `EnergyLevelStoreTest` — die Energie-Level-Klassifikation: Parsen samt Kommentaren, unbekanntes Level, doppelter Name (letzte Zeile gewinnt), Rückfall auf *mittel*, `presetsForLevel` liefert eine **leere Liste** statt `null`, fehlende Datei, Gegenprobe an der echten `data/energyLevels.txt` gegen `data/presets/` (jedes Preset getaggt, mindestens zwei je Level — aus dem Verzeichnis gerechnet, nicht als Zahl notiert). Dazu die dritte Spalte „in der Rotation": zwei- und dreispaltige Zeilen nebeneinander, fehlende Spalte gilt als aktiv, ein unbrauchbarer Wert lehnt die **ganze** Zeile ab (auch das Level fällt dann auf den Rückfall), die letzte Zeile gewinnt für Level **und** Schalter — eine angehängte Zweispalten-Korrektur setzt ihn also zurück —, und `presetsForLevel()` filtert die inaktiven heraus, ohne ihr Level anzutasten
 - `StripeColorDefaultsTest` — die acht Auslieferungsfarben des Modus
   „Stripe-Farben": acht Slots, die 24 Kanalwerte **unabhängig abgetippt**
   (eine Prüfung, die dieselbe Tabelle gegen sich selbst hält, wäre keine),
@@ -199,10 +199,71 @@ zur Wirkung, darunter die rohe Adresse als kleinste, gedimmte Zeile
   (`track_field_legend()`), deren Texte aus `ADDRESS_LABELS` kommen — nicht
   aus einer zweiten Liste, die nachgezogen werden müsste.
 
-Über den Reglern sitzt die Sektion **Presets** (Dropdown + Laden, Textfeld + Speichern). Sie ist der dritte Ladeweg neben OSC von Hand und dem Scheduler, benutzt aber dieselben Kommandos: `/preset/load <name>` und `/preset/save <name>` als OSC-String an 8001. Drei Dinge daran sind nicht offensichtlich:
-- **Die Liste kommt vom Dateisystem, nicht per OSC.** `server.py` läuft auf derselben Maschine wie imPulse und liest `data/presets/` direkt (`--presets`, Vorgabe `presets/` neben `--settings`). Ein OSC-Rückkanal wäre neu zu bauen — die einzige Ausgangsadresse des Sketches ist 8002. Geschrieben wird der Ordner weiterhin ausschliesslich von imPulse; deshalb gibt es im UI auch kein Löschen.
+Über den Reglern sitzt die Sektion **Presets**: **eine Zeile je Preset**
+(Name · Level · Rotationshaken · Löschen), darunter das Textfeld zum
+Speichern. Sie ist der dritte Ladeweg neben OSC von Hand und dem Scheduler,
+benutzt aber dieselben Kommandos: `/preset/load <name>`, `/preset/save <name>`
+und seit 2026-08-02 `/preset/delete <name>` als OSC-String an 8001. Sieben
+Dinge daran sind nicht offensichtlich:
+- **Die Liste kommt vom Dateisystem, nicht per OSC.** `server.py` läuft auf derselben Maschine wie imPulse und liest `data/presets/` direkt (`--presets`, Vorgabe `presets/` neben `--settings`). Ein OSC-Rückkanal wäre neu zu bauen — die einzige Ausgangsadresse des Sketches ist 8002. Geschrieben **und gelöscht** wird der Ordner weiterhin ausschliesslich von imPulse (siehe „Löschen geht über imPulse" unten).
 - **Nach dem Laden zieht der Server die Regleranzeige nach**, indem er dieselbe Preset-Datei mit `parse_settings()` liest — das geht, weil Preset- und `remoteSettings.txt`-Format identisch sind. Die Werte gehen in der HTTP-Antwort zurück und werden im Browser *still* gesetzt (kein zweites OSC); geklemmt wird auf die Range aus `remoteSettings.txt`, nicht auf die aus der Preset-Datei — dieselbe Regel wie `PresetStore.applyPreset()`. Adressen, die der Dump nicht kennt, und Werte ausserhalb der verengten UI-Range (`UI_RANGE_OVERRIDES`) nennt die Statuszeile, statt sie zu verschlucken.
 - **Speichern wartet auf die Datei.** `/preset/save` ist asynchron (imPulse schreibt erst im nächsten `draw()`), also pollt der Endpoint bis zu 1 s auf eine geänderte `mtime` und antwortet sonst mit 504 statt Erfolg zu behaupten — der häufigste Fehlerfall ist „Web-UI läuft, imPulse nicht". `valid_preset_name()` in `server.py` und die Regex im JS spiegeln `PresetStore.isValidName()`; Autorität bleibt Java, dort geht es um Pfad-Traversal.
+- **Ein Klick auf den Namen lädt UND trägt ihn ins Speichern-Feld ein**, das
+  danach auch nicht mehr geleert wird. Überschreiben war vorher ein
+  fehlerfreies Abtippen des alten Namens — ein Tippfehler legte still ein
+  zweites Preset an, statt das gemeinte zu aktualisieren. Einen eigenen
+  „Laden"-Knopf je Zeile gibt es deshalb nicht: er wäre ein zweites
+  Bedienelement für dieselbe Sache.
+- **Löschen geht über imPulse, nicht vom Server aus.** `POST
+  /api/preset/delete` schickt `/preset/delete <name>` und wartet wie beim
+  Speichern auf das Ergebnis auf der Platte — hier auf das *Verschwinden* der
+  Datei, sonst 504. Der Server hat Dateisystemzugriff und könnte selbst
+  löschen; damit wäre „nur imPulse schreibt und löscht in `data/presets/`"
+  eine Regel mit Ausnahme, und die Prüfung gegen Pfad-Traversal läge an zwei
+  Stellen. Ein Preset, das es gar nicht gibt, ergibt 404 **ohne** Kommando —
+  sonst liefe die Frist ab und der Operator sähe einen Timeout, wo in
+  Wahrheit jemand anders es schon gelöscht hat. `supercollider/presets/<name>.txt`
+  wird **nicht** mitgelöscht (siehe `PresetStore.delete()`).
+- **Die Rückfrage steht nur beim Löschen** (`window.confirm` im Browser).
+  Speichern überschreibt bewusst ohne Rückfrage; Löschen ist nicht
+  rückgängig zu machen, und die Zeilen stehen dicht beieinander.
+- **Level und Rotationshaken schreiben `data/energyLevels.txt` DIREKT**, ohne
+  OSC — Präzedenzfall `colorPalettes.txt`. Siehe „Energie-Level-Tagging im
+  Web-UI" unten.
+
+**Energie-Level-Tagging im Web-UI** (`POST /api/preset/tag`,
+`parse_energy_levels`/`format_energy_levels`/`save_energy_levels` in
+`server.py`, seit 2026-08-02): das Level eines Presets und die Frage, ob es
+überhaupt in der Rotation der Song-Struktur steht, waren bis dahin nur durch
+Handeditieren von `data/energyLevels.txt` zu beantworten. Fünf Dinge:
+
+- **Kein OSC.** Das Level ist eine künstlerische Einschätzung **über** ein
+  Preset, kein Preset-*Inhalt*; imPulse liest es beim Start und bei jedem
+  Levelwechsel, muss es aber nie selbst vergeben. Ein OSC-Umweg bräuchte
+  einen neuen Befehl, einen Schreibpfad in Java und ein Warten auf die
+  Datei — für nichts, was der Server nicht schon kann. Genau die Abwägung wie
+  bei der Farbpalette. Der **Gegensatz zum Löschen** ist kein Widerspruch:
+  dort geht es um `data/presets/`, hier um eine Datei daneben.
+- **Zwei unabhängige Aussagen, eine Zeile.** Level und Haken gehen immer
+  zusammen zum Server, auch wenn nur eines verstellt wurde — er schreibt eine
+  ganze Zeile, und zwei Teil-Updates auf derselben Datei könnten sich
+  überholen.
+- **`tagged` ist nicht `active`.** Die Antwort trennt „nie eingeschätzt" von
+  „ausdrücklich mittel"; im UI ist das der Unterschied zwischen einer offenen
+  Aufgabe und einer getroffenen Entscheidung (der Level-Wähler steht dann
+  gedimmt und kursiv).
+- **Gefiltert wird gegen den Ordner**, nicht aus der Tagging-Datei heraus —
+  dieselbe Regel wie `presetsForLevel(level, allNames)` in Java. Ein Eintrag
+  ohne Preset-Datei wäre sonst eine Zeile im UI, die sich zu nichts laden
+  lässt. Beim Löschen fällt der Eintrag deshalb mit weg: sonst erbte ein
+  später gleichnamig neu angelegtes Preset still die alte Einschätzung.
+- **Der Kopfkommentar der Datei kommt aus `ENERGY_HEADER` in `server.py`**
+  und wird bei jedem Schreibvorgang neu gesetzt; die Einträge stehen nach
+  Level gruppiert und darin alphabetisch. Von Hand dazwischengeschriebene
+  Notizen überleben das nicht — dafür bleibt die Datei nach einem
+  Schreibvorgang aus dem UI so lesbar wie vorher, und der git-diff der
+  automatischen Sicherung bleibt klein. Ein Preset, das ein Regler-Preset
+  hat, aber in der Datei fehlt, gilt weiterhin als *mittel* und wählbar.
 
 **Acht Themen-Tabs** (Mixer, Sound Design, Spawn-Verhalten, Noten-Verhalten,
 Tonleiter, Impuls-Verhalten, Farben, Song-Struktur) statt einer langen Liste.
@@ -1327,10 +1388,17 @@ live verifizierten Szenen-Snapshots aus `scenes/` per Kopie zu Presets machen.
 
 Drei Ladewege:
 1. OSC auf Port 8001: `/preset/load <name>`, `/preset/save <name>`,
-   `/preset/next`. Kein `/preset/list` — `ls data/presets/` beantwortet das
-   von aussen, und ein OSC-Rückkanal wäre neu zu bauen (die einzige
-   Ausgangsadresse ist 8002, also SuperCollider). Meldungen gehen per
-   `println` auf die Konsole.
+   `/preset/next`, `/preset/delete <name>`. Kein `/preset/list` —
+   `ls data/presets/` beantwortet das von aussen, und ein OSC-Rückkanal wäre
+   neu zu bauen (die einzige Ausgangsadresse ist 8002, also SuperCollider).
+   Meldungen gehen per `println` auf die Konsole. `/preset/delete` ist der
+   **einzige** Weg, auf dem eine Preset-Datei verschwindet — auch das Web-UI
+   geht darüber, statt selbst zu löschen (siehe „Web-UI"). Es löscht das
+   **Klang**-Preset ausdrücklich nicht mit: `/sc/preset/*` kennt kein
+   Löschen, und eine Fernwirkung auf einen zweiten Prozess ohne Rückmeldung
+   wäre bei einer nicht rückgängig zu machenden Aktion der falsche Tausch —
+   anders als beim Speichern, wo ein fehlendes Klang-Preset die Szene halb
+   wiederherstellen würde.
 2. Beim Start: Sketch-Argument, sonst Umgebungsvariable `IMPULSE_PRESET`.
    Geladen wird in `setup()` **nach** dem Anlegen der Effekte und **vor** dem
    Schreiben von `remoteSettings.txt` — diese Datei zeigt danach den wirklich
@@ -1408,7 +1476,8 @@ Web-UI. Sie steckt ausserdem in den Adressen selbst
 eine falsche Beschriftung.
 
 **Die Klassifikation ist manuell** (`data/energyLevels.txt`, Format
-`name <TAB> level`, `#` als Kommentar — Stil wie `data/stripeTrees.txt`). Rund
+`name <TAB> level <TAB> aktiv`, `#` als Kommentar — Stil wie
+`data/stripeTrees.txt`; vergeben wird sie von Hand oder im Web-UI). Rund
 fünfzig Parameter tragen sehr unterschiedlich und nicht linear zur
 wahrgenommenen Energie bei, die Farben tragen ebenfalls bei, ohne sich in
 einer Formel fassen zu lassen; eine Gewichtungsformel wäre eine Blackbox, die
@@ -1416,7 +1485,18 @@ einer Formel fassen zu lassen; eine Gewichtungsformel wäre eine Blackbox, die
 Einschätzung und wird vergeben, wenn ein Preset am Gerät gehört und gesehen
 wurde.
 
-Drei Regeln der Datei, die man kennen muss:
+Vier Regeln der Datei, die man kennen muss:
+- **Die dritte Spalte ist unabhängig vom Level** (`1` oder `0`, fehlt sie,
+  gilt `1`): sie sagt nicht, wie ein Preset klingt, sondern ob es überhaupt
+  zur Wahl steht. Ein Preset kann *mittel* bleiben und trotzdem aus der
+  Rotation genommen sein — wer es später zurückholt, bekommt es an derselben
+  Stelle der Dramaturgie wieder, ohne das Level erneut einschätzen zu müssen.
+  Gefiltert wird an genau **einer** Stelle, in `presetsForLevel()`; geladen,
+  angezeigt und getaggt bleibt es wie jedes andere. Ein unbrauchbarer Wert
+  lehnt die Zeile ab statt zu raten — „gilt halt als aktiv" wäre ein Preset
+  in der Rotation, das der Operator herausgenommen zu haben glaubt. Ein
+  komplett herausgenommenes Level ist für den Director dasselbe wie ein
+  leeres.
 - **Sie liegt in `data/`, NICHT in `data/presets/`** — anders als im Konzept
   vorgeschlagen. `PresetStore.list()` sammelt jede `*.txt` im Preset-Ordner
   ein; `energyLevels.txt` entginge dem heute nur, weil `isValidName()`

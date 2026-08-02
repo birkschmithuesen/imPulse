@@ -206,3 +206,14 @@ von Hand loeschen. Ein Loeschen-Knopf im UI waere technisch einfach (der Server
 hat Schreibrechte auf den Ordner), wuerde aber das Prinzip brechen, dass nur
 imPulse in `data/presets/` schreibt. Bewusst offengelassen fuer eine spaetere
 Entscheidung.
+
+> **Entschieden am 2026-08-02** (Branch `feature/preset-tagging-ui`): es gibt
+> ein Loeschen im UI, und es geht **ueber imPulse**. `PresetStore.delete()`
+> und der OSC-Befehl `/preset/delete <name>` sind neu in Java;
+> `POST /api/preset/delete` schickt ihn und wartet auf das *Verschwinden* der
+> Datei (504 statt behaupteter Loeschung, analog zum mtime-Polling beim
+> Speichern). Damit bleibt das Prinzip ungebrochen, statt es fuer die Bequem-
+> lichkeit eines `os.remove()` aufzugeben. Im Browser steht davor ein
+> `window.confirm()` — der einzige Bestaetigungsschritt im ganzen UI, weil
+> Loeschen anders als Ueberschreiben nicht rueckgaengig zu machen ist.
+> Details: CLAUDE.md, Abschnitt „Web-UI".
