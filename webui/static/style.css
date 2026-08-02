@@ -24,25 +24,31 @@ body {
   font: 15px/1.4 system-ui, "Segoe UI", Roboto, sans-serif;
 }
 
-header {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1.5rem;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1rem;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-}
+/* Kopfzeile: Titel/Meta, die zwei Rueckmeldezeilen und die zwei
+   seitenweiten Bedienelemente. Sitzt seit 2026-08-02 als erste Karte im
+   Mixer-Tab, direkt ueber den Presets -- ueber der Tab-Leiste steht nichts
+   mehr. Vorher war das ein klebender Block, der zusammen mit Status- und
+   Autocommit-Zeile jedes Tab-Panel nach unten schob; sticky gilt jetzt nur
+   noch fuer die Tab-Leiste selbst.
+
+   Rahmen, Hintergrund und Radius erbt die Sektion von den section-Regeln
+   weiter unten; die Raender hier gelten nur noch fuer den Rueckfall ohne Tabs
+   (aelterer Server), wo sie ausserhalb jedes Rasters steht. */
+.headline { margin: 1rem 1rem 0; }
+
+.titles { padding: 0.6rem 0.8rem 0.5rem; }
 
 h1 { margin: 0; font-size: 1.1rem; letter-spacing: 0.08em; text-transform: uppercase; }
 
 .meta { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.78rem; }
 
-.actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.55rem 0.8rem 0.7rem;
+}
 
 .switch { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; user-select: none; }
 .switch input { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); }
@@ -58,13 +64,16 @@ button {
 }
 button:hover { border-color: var(--accent); }
 
+/* Rueckmeldung nach jeder OSC-Sendung. Steht in der Kopfzeilen-Karte, wird
+   aber aus dem ganzen Code heraus beschrieben -- sie darf nie aus dem
+   Dokument fallen (siehe Kommentar im Abstellplatz in index.html). */
 .status {
   margin: 0;
-  padding: 0.4rem 1rem;
+  padding: 0.4rem 0.8rem;
   min-height: 1.9rem;
   font-size: 0.82rem;
   color: var(--muted);
-  border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line);
   background: #171a1f;
 }
 .status.ok { color: var(--ok); }
@@ -72,14 +81,15 @@ button:hover { border-color: var(--accent); }
 .status.err { color: var(--err); }
 
 /* Automatische Sicherung: eine ruhige Zeile, die nur bei Fehlern auffaellt.
-   Sie steht ueber der Tab-Leiste, weil sie fuer alle Tabs gilt. */
+   Sie gilt fuer alle Tabs und steht deshalb in derselben Karte wie Titel und
+   Status -- naemlich der ersten des Mixer-Tabs. */
 .autocommit {
   margin: 0;
-  padding: 0.35rem 1rem;
+  padding: 0.35rem 0.8rem;
   min-height: 1.6rem;
   font-size: 0.75rem;
   color: var(--muted);
-  border-bottom: 1px solid var(--line);
+  border-top: 1px solid #23272f;
   background: #14171b;
 }
 .autocommit[data-level="warn"] { color: var(--warn); }
@@ -300,8 +310,7 @@ input[type=color] {
 
 @media (max-width: 600px) {
   main { grid-template-columns: 1fr; padding: 0.6rem; gap: 0.6rem; }
-  .presets { margin: 0.6rem 0.6rem 0; }
-  header { padding: 0.6rem; }
+  .presets, .headline { margin: 0.6rem 0.6rem 0; }
   input[type=number] { flex-basis: 5.2rem; }
 }
 
@@ -802,9 +811,12 @@ input[type=color] {
 /* ---------------------------------------------------------------------------
    Tab-Leiste und Panels.
 
-   Fuenf Themen-Tabs statt einer langen Liste. Die Leiste klebt unter der
-   Kopfzeile, damit sie beim Scrollen erreichbar bleibt -- im Dunkeln neben
-   der Installation soll niemand erst nach oben scrollen muessen.
+   Fuenf Themen-Tabs statt einer langen Liste. Seit 2026-08-02 steht die
+   Leiste als EINZIGES Element ganz oben und klebt dort (position: sticky):
+   sie ist das einzige, was auf jedem Tab gebraucht wird -- im Dunkeln neben
+   der Installation soll niemand erst nach oben scrollen muessen. Alles
+   andere, Kopfzeile und die zwei Rueckmeldezeilen eingeschlossen, steht IM
+   Mixer-Tab und scrollt mit.
 
    Umgeschaltet wird ueber [hidden] auf dem Panel, NICHT durch Neu-Rendern:
    die Regler inaktiver Tabs muessen in der controls-Map bleiben, damit ein
@@ -864,11 +876,13 @@ input[type=color] {
 .tab-panel > details { grid-column: 1 / -1; }
 .tab-panel > .seq { margin: 0; }
 .tab-panel > .sc { margin: 0; }
-/* Die zwei umgehaengten Sektionen bringen ihre eigenen Raender mit (sie
+/* Die drei umgehaengten Sektionen bringen ihre eigenen Raender mit (sie
    standen frueher ausserhalb jedes Rasters); im Panel setzt sie das Raster.
-   Die Melodie-Zuordnung laeuft ueber die volle Breite: sie ist der einzige
-   Inhalt ihres Tabs und traegt einen Absatz Fliesstext, der in einer 340-px-
-   Spalte zu einer schmalen Saeule wuerde. */
+   Kopfzeile und Melodie-Zuordnung laufen ueber die volle Breite: die eine
+   traegt zwei Rueckmeldezeilen aus ganzen Saetzen (eine Fehlermeldung in
+   einer 340-px-Spalte waere ein Absatz statt einer Zeile), die andere ist der
+   einzige Inhalt ihres Tabs und traegt einen Absatz Fliesstext. */
+.tab-panel > .headline { margin: 0; grid-column: 1 / -1; }
 .tab-panel > .presets { margin: 0; }
 .tab-panel > .melody { margin: 0; grid-column: 1 / -1; }
 
