@@ -112,6 +112,32 @@ public class PresetStoreTest {
     }
     Check.that("keine Temp-Datei zurueckgeblieben", !tempLeft);
 
+    // ---- Loeschen ----
+    // Der einzige Weg, auf dem eine Preset-Datei verschwindet. Auch das
+    // Web-UI geht darueber (per OSC /preset/delete), damit "nur imPulse
+    // schreibt und loescht in data/presets/" eine Regel ohne Ausnahme bleibt.
+    write(new File(dir, "wegdamit.txt"), "float\t/master/level\t\t0.3\t0\t1\n");
+    Check.that("die Datei ist vorher da", new File(dir, "wegdamit.txt").isFile());
+    Check.that("Loeschen gelingt", store.delete("wegdamit"));
+    Check.that("die Datei ist danach weg", !new File(dir, "wegdamit.txt").isFile());
+    Check.that("der Name steht in der Meldung",
+        store.lastMessage().indexOf("wegdamit") >= 0);
+    Check.eq("und sie taucht nicht mehr in der Liste auf",
+        -1, store.list().indexOf("wegdamit"));
+
+    // Ein zweites Loeschen ist ein Fehler und kein stiller Erfolg: sonst
+    // meldete das Web-UI "geloescht" fuer ein Preset, das jemand anders
+    // gerade umbenannt hat.
+    Check.that("zweites Loeschen meldet false", !store.delete("wegdamit"));
+    Check.that("der Grund steht in der Meldung",
+        store.lastMessage().indexOf("nicht gefunden") >= 0);
+
+    // Derselbe Pfad-Traversal-Schutz wie bei read()/write(): der Name kommt
+    // ueber OSC von aussen, und hier wuerde er eine Datei LOESCHEN.
+    Check.that("unzulaessiger Name wird nicht geloescht", !store.delete("../boese"));
+    Check.that("null wird nicht geloescht", !store.delete(null));
+    Check.that("die anderen Presets stehen noch", store.list().size() > 0);
+
     // ---- Klemmung ----
     Check.near("innerhalb bleibt unveraendert", 0.5, PresetStore.clampToRange(0.5f, 0f, 1f), 1e-6);
     Check.near("oberhalb wird geklemmt", 1.0, PresetStore.clampToRange(5.0f, 0f, 1f), 1e-6);

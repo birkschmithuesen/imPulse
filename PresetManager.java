@@ -41,6 +41,7 @@ class PresetManager implements OscMessageSink {
 	// Datei nicht mitten in der Verteilschleife passiert.
 	private String pendingLoad = null;
 	private String pendingSave = null;
+	private String pendingDelete = null;
 	private boolean pendingNext = false;
 
 	PresetManager(String presetDirectory, OscP5 _oscP5, NetAddress _soundTarget,
@@ -68,6 +69,7 @@ class PresetManager implements OscMessageSink {
 		OscMessageDistributor.registerAdress("/preset/load", this);
 		OscMessageDistributor.registerAdress("/preset/save", this);
 		OscMessageDistributor.registerAdress("/preset/next", this);
+		OscMessageDistributor.registerAdress("/preset/delete", this);
 		System.out.println("Preset-Ordner: " + store.directoryPath());
 	}
 
@@ -82,6 +84,10 @@ class PresetManager implements OscMessageSink {
 		}
 		if (newMessage.checkAddrPattern("/preset/save") && newMessage.arguments().length > 0) {
 			pendingSave = newMessage.get(0).stringValue();
+			return;
+		}
+		if (newMessage.checkAddrPattern("/preset/delete") && newMessage.arguments().length > 0) {
+			pendingDelete = newMessage.get(0).stringValue();
 		}
 	}
 
@@ -104,6 +110,15 @@ class PresetManager implements OscMessageSink {
 			String name = pendingLoad;
 			pendingLoad = null;
 			load(name, nowMillis);
+		}
+		// Nach Speichern und Laden: kaemen beide im selben Frame an, ist
+		// "erst schreiben, dann wegwerfen" die Reihenfolge, die der Absender
+		// gemeint hat - umgekehrt legte das Speichern die eben geloeschte
+		// Datei wieder an.
+		if (pendingDelete != null) {
+			String name = pendingDelete;
+			pendingDelete = null;
+			delete(name);
 		}
 		if (pendingNext) {
 			pendingNext = false;
@@ -254,6 +269,22 @@ class PresetManager implements OscMessageSink {
 		// nicht, ohne Fehlermeldung.
 		forwardToSound("/sc/preset/save", name);
 		writeLastPresetName(name);
+		return true;
+	}
+
+	// Loeschen ist nicht rueckgaengig zu machen, deshalb sitzt die
+	// Rueckfrage dort, wo ein Mensch klickt (Web-UI), und nicht hier: ein
+	// zweiter Bestaetigungsschritt per OSC waere ein Zustand, den ein
+	// abgebrochener Aufruf im Sketch stehenliesse.
+	//
+	// Kein forwardToSound(): supercollider/presets/<name>.txt bleibt liegen,
+	// siehe PresetStore.delete().
+	boolean delete(String name) {
+		if (!store.delete(name)) {
+			System.out.println("Preset loeschen fehlgeschlagen: " + store.lastMessage());
+			return false;
+		}
+		System.out.println(store.lastMessage());
 		return true;
 	}
 
