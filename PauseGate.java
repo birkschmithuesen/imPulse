@@ -115,7 +115,19 @@ class PauseGate {
       return;
     }
 
+    boolean wasPaused = paused;
     paused = beats < pauseEndBeat;
+    if (wasPaused && !paused) {
+      // Eine Pause ist GERADE zu Ende gegangen: sofort neu wuerfeln, statt den
+      // Rest des starren checkIntervalBars-Rasters abzuwarten. Ohne dieses
+      // Vorziehen bezoege sich die probability nicht auf einen Zeitanteil,
+      // sondern auf ein Raster: bei 32 Beats Pruefintervall und 8 Beats
+      // Pausenlaenge lief der Sequencer nach jeder Pause 24 Beats lang ohne
+      // jeden Bezug zur eingestellten Wahrscheinlichkeit weiter, der
+      // tatsaechliche Stille-Anteil war also nur
+      // probability * (Pausenlaenge / Pruefintervall).
+      nextCheckBeat = beats;
+    }
     if (beats < nextCheckBeat) {
       return;
     }
