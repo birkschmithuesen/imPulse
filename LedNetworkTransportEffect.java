@@ -663,8 +663,11 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       // only multiply at nodes that have not been active for a while
       if (currentTime-hitNode.lastActivationTime>nodeDeadTime.getValue()) {
         hitNode.lastActivationTime=currentTime;
-        //send osc Notification
-        sendOscMessage(hitNode, curActivation);
+        // Hier geht KEIN /net/hitNode mehr raus. Der Treffer selbst ist kein
+        // Klangereignis mehr, sondern erst das Kind, das daraus entsteht -
+        // gesendet wird deshalb in spawnSplitChildren() und
+        // releasePendingSplits(), je einmal pro tatsaechlich gestartetem Kind.
+        // Begruendung siehe sendOscMessage().
         float nActivations=hitNode.ledIndices.size();
         //energieerhaltende Variante, bewusst nicht aktiv (siehe CLAUDE.md):
         //float childEnergy=curActivation.energy/nActivations/2.0f;
@@ -704,7 +707,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
                 SplitVariance.jitter(curActivation.speed, speedJitter, Math.random()),
                 childEnergy,
                 SplitVariance.jitter(1f, lifetimeJitter, Math.random()),
-                curActivation.originTree));
+                curActivation.originTree, hitNode));
           }
           //do not go back the same stripe:
           if (ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex || activationLedIdx < nodeLedIdx) {//ledNetInfo[nodeLedIdx].stripeIndex!=ledNetInfo[activationLedIdx].stripeIndex) {
@@ -714,7 +717,7 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
                   SplitVariance.jitter(-curActivation.speed, speedJitter, Math.random()),
                   childEnergy,
                   SplitVariance.jitter(1f, lifetimeJitter, Math.random()),
-                  curActivation.originTree));
+                  curActivation.originTree, hitNode));
             }
           }
         }
@@ -731,8 +734,13 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   // nicht genommen wird, keine Impuls-ID verbrauchen soll: die IDs sind der
   // Schluessel des Positionsstroms /net/impulse, und eine Luecke darin waere
   // auf der Klangseite eine Drohne, die nie kommt.
+  // Der getroffene Knoten wird MITGENOMMEN, nicht nur an die sofort startenden
+  // Kinder weitergereicht: ein zeitversetztes Kind meldet sein /net/hitNode
+  // erst beim Start, und bis dahin ist der Treffer laengst aus dem Aufrufweg
+  // heraus. Uebernommen werden id und Position als Werte, nicht die Referenz -
+  // Begruendung am Feld in SplitStagger.java.
   private PendingSpawn candidate(float ledPos, int stripeIdx, float speed,
-      float energy, float decayScale, int originTree) {
+      float energy, float decayScale, int originTree, LedNetworkNode hitNode) {
     PendingSpawn p = new PendingSpawn();
     p.ledPos=ledPos;
     p.stripeIdx=stripeIdx;
@@ -740,6 +748,9 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     p.energy=energy;
     p.decayScale=decayScale;
     p.originTree=originTree;
+    p.nodeId=hitNode.id;
+    p.nodePosX=hitNode.posX;
+    p.nodePosY=hitNode.posY;
     return p;
   }
 
@@ -787,6 +798,10 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       if (delay <= 0.0) {
         newActivations.add(new TravellingActivation(p.ledPos, p.stripeIdx, p.speed,
             p.energy, p.decayScale, p.originTree));
+        // Ein Kind, ein Klangereignis. Gemeldet wird hier und nicht oben beim
+        // Treffer, weil erst an dieser Stelle feststeht, wieviele Kinder es
+        // wirklich werden.
+        sendOscMessage(p);
       } else {
         p.dueBeats=beats + delay;
         splitStagger.schedule(p);
@@ -804,34 +819,60 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       PendingSpawn p=due.get(i);
       activations.add(new TravellingActivation(p.ledPos, p.stripeIdx, p.speed,
           p.energy, p.decayScale, p.originTree));
+      // Erst JETZT, nicht beim Einreihen: der Klang soll auf dem Beat sitzen,
+      // auf dem das Kind losfaehrt. Beim Scheduling gesendet klaenge die
+      // ganze Aufspaltung wieder als ein einziger Schlag - genau das, was der
+      // Versatz aufloesen soll.
+      sendOscMessage(p);
     }
   }
 
-  private void sendOscMessage(LedNetworkNode hitNode, TravellingActivation curActivation) {
+  // Ein /net/hitNode je tatsaechlich gestartetem Kind-Impuls, NICHT je
+  // Treffer-Ereignis.
+  //
+  // Bis 2026-08-02 stand der Aufruf in activationEncounteredNode(), also
+  // einmal pro Node-Treffer - eine Stelle aus der Zeit, als eine Aufspaltung
+  // noch immer alle moeglichen Zweige im selben Frame nahm. Seit SplitFanout
+  // und SplitStagger werden aus einem Treffer ein, zwei oder mehr Kinder, die
+  // ausserdem zeitversetzt starten koennen; gemeldet wurde trotzdem genau
+  // eines. Symptom: nur der erste Impuls einer Aufspaltung erzeugte Klang,
+  // jeder weitere lief stumm durchs Netz.
+  //
+  // Der Parameter ist der PendingSpawn und nicht die fertige
+  // TravellingActivation: die entsteht am Ort des sofortigen Spawns erst
+  // danach, und beim zeitversetzten Kind traegt ohnehin nur der PendingSpawn
+  // den Knoten, an dem es entstanden ist. Ein Kandidat, der nicht genommen
+  // wird, kommt hier nie an und meldet also auch nichts.
+  //
+  // Folge fuer den seltenen Fall ohne einen einzigen moeglichen Zweig (Knoten
+  // am aeussersten LED-Index): der Treffer bleibt jetzt stumm, wo er vorher
+  // eine Glocke ausloeste. Das ist die Zusage dieses Verhaltens - kein
+  // Impuls, kein Ton -, nicht ein uebersehener Fall.
+  private void sendOscMessage(PendingSpawn child) {
     OscMessage myMessage = new OscMessage("/net/hitNode");
-    myMessage.add(hitNode.id);
-    myMessage.add(curActivation.energy);
+    myMessage.add(child.nodeId);
+    myMessage.add(child.energy);
     // Draufsicht-Position des Knotens in Metern, Ursprung Netzmitte. Kein z -
     // das Netz haengt ueber Kopf, vier Lautsprecher in einer Ebene koennen die
     // Hoehe nicht darstellen.
     //
     // Rueckwaertskompatibel: ein Klang-Sketch, der nur msg[1] und msg[2]
     // liest, ignoriert die zwei zusaetzlichen Argumente.
-    myMessage.add(hitNode.posX);
-    myMessage.add(hitNode.posY);
+    myMessage.add(child.nodePosX);
+    myMessage.add(child.nodePosY);
     // Der Ursprungs-Baum des Impulses (0..3, -1 = unbekannt), rein
     // ANGEHAENGT - genau dasselbe Muster, mit dem /net/hitNode schon um x/y
     // und /net/impulse um speed erweitert wurde: ein Empfaenger, der nur die
     // ersten vier Argumente liest, bleibt unberuehrt.
     //
     // Er ist eine Eigenschaft des IMPULSES, nicht des getroffenen Knotens -
-    // deshalb kommt er von curActivation und nicht von hitNode. Genau darin
+    // deshalb kommt er vom Kind und nicht vom Knoten. Genau darin
     // liegt der Sinn: er ist fuer einen gegebenen Impuls konstant,
     // transponiert also seinen ganzen Weg gleichmaessig und laesst jedes
     // Intervall darauf unangetastet. Ein Bias nach der Region des Knotens
     // wuerde die topologisch gesetzten Intervalle an jeder Quadrantengrenze
     // wieder zerlegen.
-    myMessage.add(curActivation.originTree);
+    myMessage.add(child.originTree);
     oscP5.send(myMessage, remoteLocation);
   }
 

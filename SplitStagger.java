@@ -21,6 +21,21 @@ class PendingSpawn {
   // waere der Klangbias ausgerechnet an den zeitversetzten Zweigen weg, und
   // zwar lautlos.
   int originTree;
+  // Der Knoten, an dem dieses Kind entstanden ist - gebraucht, weil
+  // /net/hitNode erst beim tatsaechlichen Start des Kindes rausgeht und nicht
+  // schon beim Einreihen (siehe LedNetworkTransportEffect.sendOscMessage).
+  //
+  // Als drei Einzelwerte und ausdruecklich NICHT als LedNetworkNode-Referenz,
+  // aus zwei Gruenden. Erstens haengt LedStripeNetworks.java an
+  // processing.core; eine Referenz zoege Processing in diese Datei, die
+  // bewusst ohne auskommt. Zweitens baut applyCrossings bei "R" in der
+  // Kalibrierung ALLE Knotenobjekte neu auf - eine gehaltene Referenz zeigte
+  // danach auf einen Knoten, den es so nicht mehr gibt, waehrend diese drei
+  // Werte den Stand des Treffers tragen, also genau den Punkt, an dem das
+  // Kind entstanden ist.
+  int nodeId = -1;
+  float nodePosX;
+  float nodePosY;
 }
 
 // Warteschlange fuer die zeitversetzten Kinder einer Aufspaltung.

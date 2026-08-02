@@ -145,7 +145,7 @@ Eingehende OSC-Adressen: `/tube/trigger` (int Stripe, 1-basiert; optional float 
 
 Ausgehend an Port 8002 (`oscOutput` in `imPulse.pde`, Auslieferungsziel `127.0.0.1`), beide aus `LedNetworkTransportEffect.java`:
 
-- `/net/hitNode <nodeId:int> <energy:float> <x:float> <y:float>` — ein Node hat gefeuert. `x`/`y` sind die Draufsicht-Position des Knotens in Metern (`LedNetworkNode.posX/posY`, gesetzt von `applyPositions`), rein **angehängt**: ein Empfänger, der nur die ersten zwei Argumente liest, bleibt unberührt.
+- `/net/hitNode <nodeId:int> <energy:float> <x:float> <y:float>` — **ein tatsächlich gestartetes Split-Kind**, nicht ein Treffer-Ereignis (seit 2026-08-02, siehe „Ein `/net/hitNode` je Kind"). `x`/`y` sind die Draufsicht-Position des Knotens in Metern (`LedNetworkNode.posX/posY`, gesetzt von `applyPositions`), rein **angehängt**: ein Empfänger, der nur die ersten zwei Argumente liest, bleibt unberührt.
 - `/net/impulse <impulseId:int> <x:float> <y:float> <energy:float> <speed:float>` — gedrosselter Positionsstrom der reisenden Impulse (`sendImpulseStream()`, Takt und Auswahl aus `ImpulseOscThrottle`). Das fünfte Argument ist der **Betrag** der Geschwindigkeit in LEDs/Sekunde und kam später dazu — rein angehängt, genau wie seinerzeit `x`/`y` bei `/net/hitNode`: ein Empfänger, der nur die ersten vier liest, bleibt unberührt. Die Klangseite koppelt daran die Filterfrequenz des Travel-Sounds; das Vorzeichen trägt die Richtung und ist für die Klangfarbe bedeutungslos. **Ein Datagramm je Impuls**, kein Anzahl-Feld, kein Bündel, keine Ende-Markierung — die Empfangsseite kann also nicht feststellen, wieviele Meldungen zu einem Takt gehören und braucht einen Timeout. Filler werden ausdrücklich übersprungen (sie tragen die ID ihres Elternimpulses). Es gibt **kein Todes-Signal**: ein Impuls kann aus der Auswahl der energiereichsten fallen, ohne zu sterben, deshalb deckt derselbe Timeout beides ab (`klangnetz_bells.scd`: 0,4 s, geprüft alle 0,1 s, Obergrenze 32 Drohnen).
 
 Die zwei zugehörigen Parameter, beide in `LedNetworkTransportEffect`:
@@ -689,6 +689,37 @@ Sieben Dinge, die man beim Ändern kennen muss:
   (512) deckelt die Warteschlange gegen einen Fall, den ein Regler herstellen
   kann (langer Notenwert bei niedriger BPM); abgewiesen wird der **neue**
   Eintrag, nicht ein wartender.
+
+**Ein `/net/hitNode` je Kind, nicht je Treffer** (Bugfix 2026-08-02): der
+Aufruf stand in `activationEncounteredNode()`, also einmal pro Node-Treffer —
+eine Stelle aus der Zeit, als eine Aufspaltung noch immer **alle** möglichen
+Zweige im selben Frame nahm und „ein Treffer" und „ein Impuls" dasselbe
+bedeuteten. Seit `SplitFanout` und `SplitStagger` werden daraus ein, zwei oder
+mehr Kinder, die ausserdem zeitversetzt starten können; gemeldet wurde
+trotzdem genau eines. Symptom: bei einer Aufspaltung in zwei Zweige erzeugte
+nur der erste Impuls Klang, jeder weitere lief stumm durchs Netz. Gesendet
+wird jetzt in `spawnSplitChildren()` (sofortige Kinder) und
+`releasePendingSplits()` (zeitversetzte). Vier Dinge:
+
+- **Erst beim Start, nicht beim Einreihen.** Ein zeitversetztes Kind meldet
+  sich, wenn es losfährt — beim Scheduling gesendet klänge die ganze
+  Aufspaltung wieder als ein einziger Schlag, also genau das, was der Versatz
+  auflösen soll.
+- **`sendOscMessage()` nimmt den `PendingSpawn`**, nicht die
+  `TravellingActivation`: die entsteht am Ort des sofortigen Spawns erst
+  danach, und beim zeitversetzten Kind trägt ohnehin nur der `PendingSpawn`
+  den Knoten, an dem es entstanden ist. Ein Kandidat, der nicht genommen wird,
+  kommt dort nie an und meldet also auch nichts.
+- **`PendingSpawn` trägt `nodeId`/`nodePosX`/`nodePosY` als Werte**, nicht eine
+  `LedNetworkNode`-Referenz. `LedStripeNetworks.java` hängt an
+  `processing.core`, und `SplitStagger.java` soll ohne auskommen; ausserdem
+  baut `applyCrossings` bei `R` in der Kalibrierung **alle** Knotenobjekte neu
+  auf — eine gehaltene Referenz zeigte danach auf einen Knoten, den es so nicht
+  mehr gibt, während die drei Werte den Stand des Treffers tragen.
+- **Ein Treffer ohne einen einzigen möglichen Zweig bleibt jetzt stumm**
+  (Knoten am äussersten LED-Index), wo er vorher eine Glocke auslöste. Das ist
+  die Zusage dieses Verhaltens — kein Impuls, kein Ton —, kein übersehener
+  Fall.
 
 Die gewichtete Ziehung selbst steht in `WeightedChoice.java` und wird von
 `SpeedQuantizer`, `SplitFanout` und `SplitStagger` geteilt. Zwei Kopien wären
