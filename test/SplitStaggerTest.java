@@ -15,15 +15,20 @@ public class SplitStaggerTest {
     return p;
   }
 
-  // Wie oft jede Notenwert-Klasse gezogen wird, wenn der Zufallswert
-  // gleichverteilt von 0 bis 1 durchgefahren wird. Der Index ist der der
-  // Klasse (0 = Ganze .. 4 = Sechzehntel), nicht der Notenwert selbst.
+  // Wie oft jede Klasse gezogen wird, wenn der Zufallswert gleichverteilt von
+  // 0 bis 1 durchgefahren wird. Der Index ist der der Klasse (0 = Ganze ..
+  // 4 = Sechzehntel, 5 = gleichzeitig), nicht der Notenwert selbst.
   static int[] countDraws(float[] weights, int draws) {
-    int[] counts = new int[SplitStagger.NOTE_COUNT];
+    int[] counts = new int[SplitStagger.CLASS_COUNT];
     int unknown = 0;
     for (int i = 0; i < draws; i++) {
       int noteValue = SplitStagger.pickNoteValue(weights, (i + 0.5)/draws);
       int index = -1;
+      if (noteValue == SplitStagger.SIMULTANEOUS_NOTE_VALUE) {
+        // Die sechste Klasse steht bewusst nicht in NOTE_VALUES - sie ist
+        // kein Notenwert, sondern der Sonderfall "kein Versatz".
+        index = SplitStagger.SIMULTANEOUS_INDEX;
+      }
       for (int k = 0; k < OriginSequencer.NOTE_VALUES.length; k++) {
         if (OriginSequencer.NOTE_VALUES[k] == noteValue) {
           index = k;
@@ -38,7 +43,7 @@ public class SplitStaggerTest {
         counts[index]++;
       }
     }
-    Check.eq("jede Ziehung ist eine bekannte Notenwert-Klasse", 0, unknown);
+    Check.eq("jede Ziehung ist eine bekannte Klasse", 0, unknown);
     return counts;
   }
 
@@ -62,16 +67,29 @@ public class SplitStaggerTest {
         SplitStagger.delayBeats(8, 1), SplitStagger.delayBeats(9, 1), 1e-12);
     Check.near("krummer Notenwert rastet nach unten",
         SplitStagger.delayBeats(4, 1), SplitStagger.delayBeats(5, 1), 1e-12);
-    Check.near("Notenwert 0 rastet auf den kleinsten erlaubten",
-        SplitStagger.delayBeats(1, 1), SplitStagger.delayBeats(0, 1), 1e-12);
     Check.near("negativer Slot gibt keinen Versatz",
         0.0, SplitStagger.delayBeats(16, -2), 1e-12);
+
+    // ---- Die Klasse "gleichzeitig" ----
+    // Sie ist der eine Fall, in dem AUCH die spaeteren Slots keinen Versatz
+    // bekommen. Slot 0 startet ohnehin immer sofort - dass er 0 liefert, ist
+    // also gerade NICHT der Nachweis. Der Nachweis sind Slot 1 aufwaerts.
+    for (int slot = 0; slot <= 12; slot++) {
+      Check.near("gleichzeitig heisst kein Versatz, auch fuer Slot " + slot,
+          0.0, SplitStagger.delayBeats(SplitStagger.SIMULTANEOUS_NOTE_VALUE, slot), 1e-12);
+    }
+    // Ohne den Sonderfall VOR der Rasterung machte quantizeNoteValue(0) daraus
+    // die ganze Note (kein erlaubter Notenwert ist <= 0, also gewinnt der
+    // erste der Liste) - aus "alle gleichzeitig" wuerde der weiteste Versatz
+    // der ganzen Tabelle. Diese Zeile haelt genau das fest.
+    Check.that("und ist nicht heimlich die ganze Note",
+        SplitStagger.delayBeats(1, 1) > 0.0);
 
     // ---- pickNoteValue: welchen Notenwert diese Aufspaltung bekommt ----
     // Gezogen wird je Split-Ereignis, nicht je Kind: alle Zweige derselben
     // Aufspaltung stehen damit auf demselben Raster. Das prueft der Aufrufer
     // (LedNetworkTransportEffect, haengt an oscP5); hier steht die Ziehung.
-    float[] onlyEighth = new float[SplitStagger.NOTE_COUNT];
+    float[] onlyEighth = new float[SplitStagger.CLASS_COUNT];
     onlyEighth[3] = 100f;
     Check.eq("ein einziges Gewicht zieht immer sich selbst",
         8, SplitStagger.pickNoteValue(onlyEighth, 0.0));
@@ -81,7 +99,7 @@ public class SplitStaggerTest {
     // Verteilung ueber viele Ziehungen, wie in SplitFanoutTest. Der
     // Zufallswert wird gleichverteilt durchgefahren statt gewuerfelt - der
     // Test soll die Gewichtsrechnung pruefen, nicht Math.random().
-    float[] mix = new float[SplitStagger.NOTE_COUNT];
+    float[] mix = new float[SplitStagger.CLASS_COUNT];
     mix[2] = 20f;  // Viertel
     mix[3] = 30f;  // Achtel
     mix[4] = 50f;  // Sechzehntel
@@ -95,12 +113,53 @@ public class SplitStaggerTest {
 
     // Die Summe muss nicht 100 sein - ein Operator dreht einzelne Regler,
     // ohne den Rest nachzurechnen.
-    float[] raw = new float[SplitStagger.NOTE_COUNT];
+    float[] raw = new float[SplitStagger.CLASS_COUNT];
     raw[3] = 3f;
     raw[4] = 1f;
     int[] rawCounts = countDraws(raw, draws);
     Check.near("3:1 macht 75 % Achtel", 0.75, rawCounts[3]/(double) draws, 0.01);
     Check.near("und 25 % Sechzehntel", 0.25, rawCounts[4]/(double) draws, 0.01);
+
+    // Die sechste Klasse zieht wie jede andere, wenn sie gewichtet ist - und
+    // liefert dabei den Sonderwert, nicht einen Notenwert aus NOTE_VALUES.
+    float[] onlySimultaneous = new float[SplitStagger.CLASS_COUNT];
+    onlySimultaneous[SplitStagger.SIMULTANEOUS_INDEX] = 100f;
+    Check.eq("nur gleichzeitig gewichtet gibt den Sonderwert",
+        SplitStagger.SIMULTANEOUS_NOTE_VALUE,
+        SplitStagger.pickNoteValue(onlySimultaneous, 0.0));
+    Check.eq("auch in der Mitte des Zufallswerts",
+        SplitStagger.SIMULTANEOUS_NOTE_VALUE,
+        SplitStagger.pickNoteValue(onlySimultaneous, 0.5));
+    Check.eq("auch am oberen Rand",
+        SplitStagger.SIMULTANEOUS_NOTE_VALUE,
+        SplitStagger.pickNoteValue(onlySimultaneous, 1.0));
+    Check.near("und der Sonderwert ergibt fuer jeden Slot keinen Versatz",
+        0.0, SplitStagger.delayBeats(
+            SplitStagger.pickNoteValue(onlySimultaneous, 0.5), 3), 1e-12);
+
+    // Verteilung mit allen sechs Klassen: die neue zieht nachweislich, ohne
+    // den anderen etwas wegzunehmen.
+    float[] withSimultaneous = new float[SplitStagger.CLASS_COUNT];
+    withSimultaneous[2] = 10f;  // Viertel
+    withSimultaneous[3] = 20f;  // Achtel
+    withSimultaneous[4] = 30f;  // Sechzehntel
+    withSimultaneous[SplitStagger.SIMULTANEOUS_INDEX] = 40f;
+    int[] simCounts = countDraws(withSimultaneous, draws);
+    Check.eq("Ganze hat weiter Gewicht 0 und kommt nie", 0, simCounts[0]);
+    Check.eq("Halbe hat weiter Gewicht 0 und kommt nie", 0, simCounts[1]);
+    Check.near("Viertel bei 10 %", 0.10, simCounts[2]/(double) draws, 0.01);
+    Check.near("Achtel bei 20 %", 0.20, simCounts[3]/(double) draws, 0.01);
+    Check.near("Sechzehntel bei 30 %", 0.30, simCounts[4]/(double) draws, 0.01);
+    Check.near("gleichzeitig bei 40 %", 0.40,
+        simCounts[SplitStagger.SIMULTANEOUS_INDEX]/(double) draws, 0.01);
+
+    // Ein Gewicht von 0 zieht nie - auch die neue Klasse nicht. Sonst waere
+    // der Auslieferungszustand (Gewicht 0) nicht das bisherige Verhalten,
+    // sondern gelegentlich ein Split ganz ohne Versatz.
+    Check.eq("gleichzeitig mit Gewicht 0 kommt nie vor",
+        0, counts[SplitStagger.SIMULTANEOUS_INDEX]);
+    Check.eq("auch nicht in der zweiten Verteilung",
+        0, rawCounts[SplitStagger.SIMULTANEOUS_INDEX]);
 
     // Der entartete Fall faellt auf Sechzehntel: den kuerzesten Versatz und
     // den Auslieferungswert des einen festen Notenwert-Reglers, den diese
@@ -109,14 +168,14 @@ public class SplitStaggerTest {
     // Takt auseinanderzuziehen - dieselbe Regel wie SplitFanout.NEUTRAL_INDEX
     // ("alle Zweige") und SpeedQuantizer.NEUTRAL_INDEX (1x).
     Check.eq("alle Gewichte 0 gibt Sechzehntel",
-        16, SplitStagger.pickNoteValue(new float[SplitStagger.NOTE_COUNT], 0.5));
+        16, SplitStagger.pickNoteValue(new float[SplitStagger.CLASS_COUNT], 0.5));
     Check.eq("null als Gewichtstabelle gibt Sechzehntel",
         16, SplitStagger.pickNoteValue(null, 0.5));
     Check.eq("zu kurze Gewichtstabelle gibt Sechzehntel",
         16, SplitStagger.pickNoteValue(new float[2], 0.5));
     Check.eq("NaN als Zufallswert gibt Sechzehntel",
         16, SplitStagger.pickNoteValue(mix, Double.NaN));
-    float[] negative = new float[SplitStagger.NOTE_COUNT];
+    float[] negative = new float[SplitStagger.CLASS_COUNT];
     negative[0] = -5f;
     negative[1] = Float.NaN;
     Check.eq("negative und NaN-Gewichte zaehlen als 0",
@@ -130,7 +189,7 @@ public class SplitStaggerTest {
 
     // Was herauskommt, ist immer ein Notenwert, den die Rasterung unveraendert
     // laesst - sonst rastete delayBeats() ihn still auf einen anderen.
-    float[] alle = new float[SplitStagger.NOTE_COUNT];
+    float[] alle = new float[SplitStagger.CLASS_COUNT];
     for (int i = 0; i < alle.length; i++) {
       alle[i] = 1f;
     }
@@ -140,6 +199,13 @@ public class SplitStaggerTest {
     }
     for (int i = 0; i <= 20; i++) {
       int nv = SplitStagger.pickNoteValue(alle, i/20.0);
+      if (nv == SplitStagger.SIMULTANEOUS_NOTE_VALUE) {
+        // Der Sonderwert laeuft nie in die Rasterung (delayBeats faengt ihn
+        // davor ab) und ist der einzige Ausgang mit Versatz 0.
+        Check.near("gleichzeitig gibt keinen Versatz",
+            0.0, SplitStagger.delayBeats(nv, 1), 1e-12);
+        continue;
+      }
       Check.eq("gezogener Notenwert ueberlebt die Rasterung",
           nv, OriginSequencer.quantizeNoteValue(nv));
       Check.that("und ergibt einen Versatz groesser 0",

@@ -93,7 +93,7 @@ Für die **Übersetzungsprüfung** (`test/build.sh`) gilt das nicht mehr: das Sk
 - `OriginSequencerTest` — Feuertakt je Notenwert, `repeatCount` hält den Ursprung, `originStripeOverride`, kein Sofort-Feuern beim Wiedereinschalten, kein Nachholen nach einem Hänger, Rasterung der Notenwerte
 - `StripeTreeStoreTest` — die Baum-Zuordnung: Parsen samt Kommentaren, unbekannter Baumname, Index ausserhalb des Bereichs, doppelter Stripe (letzte Zeile gewinnt), leerer Baum liefert `null`, fehlende Datei, Gegenprobe an der echten `data/stripeTrees.txt`
 - `SplitFanoutTest` — die Zahl der Zweige einer Aufspaltung: der neutrale Auslieferungsfall (`weight/all=100` nimmt immer alle), die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, entartete Gewichte fallen auf „alle" zurück, Knoten mit einem/zwei/vier möglichen Zweigen (bei zwei fallen „einer weniger" und „genau einer" zusammen), nie 0 Zweige bei vorhandenen Kandidaten, und `chooseOrder` liefert verschiedene Indizes im Bereich, in wechselnder Reihenfolge, auch bei unbrauchbaren Zufallswerten
-- `SplitStaggerTest` — die Warteschlange der zeitversetzten Kinder: Slot 0 hat exakt keinen Versatz, Notenwert-Intervalle samt Rasterung, fällig genau auf der Grenze, Reihenfolge nach Fälligkeit, ein Rückwärtssprung der Beat-Position verliert nichts, `MAX_PENDING` weist den neuen Eintrag ab statt einen wartenden zu verwerfen, und die Kindwerte kommen unverändert wieder heraus. Dazu die gewichtete Ziehung des Notenwerts (`pickNoteValue`): die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, nicht-prozentuale Gewichte werden normalisiert, der entartete Fall (alle 0, negativ, NaN, zu kurzes Array) fällt auf Sechzehntel zurück, und jeder gezogene Wert übersteht die Rasterung unverändert
+- `SplitStaggerTest` — die Warteschlange der zeitversetzten Kinder: Slot 0 hat exakt keinen Versatz, Notenwert-Intervalle samt Rasterung, fällig genau auf der Grenze, Reihenfolge nach Fälligkeit, ein Rückwärtssprung der Beat-Position verliert nichts, `MAX_PENDING` weist den neuen Eintrag ab statt einen wartenden zu verwerfen, und die Kindwerte kommen unverändert wieder heraus. Dazu die gewichtete Ziehung des Notenwerts (`pickNoteValue`): die Verteilung über 100 000 Ziehungen, ein Gewicht von 0 wird nie gezogen, nicht-prozentuale Gewichte werden normalisiert, der entartete Fall (alle 0, negativ, NaN, zu kurzes Array) fällt auf Sechzehntel zurück, und jeder gezogene Wert übersteht die Rasterung unverändert. Für die sechste Klasse „gleichzeitig" zusätzlich: `delayBeats(0, slot)` ist für **jeden** Slot 0 (Slot 0 allein wäre gerade nicht der Nachweis), sie zieht nachweislich, wenn sie gewichtet ist, kommt bei Gewicht 0 nie vor, und der Sonderwert läuft nie in die Rasterung
 - `MelodyModesTest` — die acht Modi: Skalen aufsteigend und unter der Oktave, Schlüssel eindeutig und dateinamenstauglich, in jedem Modus ist der Sekundschritt das höchstgewichtete Intervall, die gewichtete Ziehung samt Verteilung über 100 000 Ziehungen, entartete Gewichte, `drawInterval` zieht beide Vorzeichen
 - `MelodyGraphTest` — die Nachbarschaftsableitung: zwei Kreuzungen auf derselben Stripe mit einer dritten dazwischen sind **nicht** benachbart, ein Knoten an zwei Stripes bekommt Nachbarn aus beiden, Mehrfachkante zählt einmal, keine Schleife auf sich selbst, Dreieck-Zyklus, Hub-Schwelle und Default-Startknoten, Gegenprobe an der echten `data/nodeCrossings.txt` (nur Invarianten, keine absoluten Zahlen)
 - `MelodyAssignerTest` — die BFS-Zuweisung: Startknoten in der mittleren Oktave, Determinismus, die Landmarken-Rotation nach `(tiefe+rang) mod 3` an einem konstruierten Graph nachgerechnet, kein Ton-Stapel unter Geschwistern, negative Rohwerte falten korrekt, Dreieck liefert genau eine Rückwärtskante, unerreichbare Knoten werden gezählt, `numOctaves = 1` und `0` brechen nicht, Gegenprobe über alle acht Modi
@@ -681,15 +681,15 @@ werden, und die gewaehlten koennen im BPM-Raster nacheinander starten.
   **100/0/0**) — Gewichte der drei Kategorien, normalisiert in
   `SplitFanout.branchCount()` wie bei den Speed-Klassen
 - `/net/impulse/split/staggerEnabled` (int 0/1, Default **0**)
-- `/net/impulse/split/stagger/weight/{whole,half,quarter,eighth,sixteenth}`
-  (float 0..100, Defaults **0/0/10/30/60**) — ein Gewicht je Notenwert-Klasse,
-  Reihenfolge wie `OriginSequencer.NOTE_VALUES`. Gezogen wird in
-  `SplitStagger.pickNoteValue()`, normalisiert wie überall.
+- `/net/impulse/split/stagger/weight/{whole,half,quarter,eighth,sixteenth,simultaneous}`
+  (float 0..100, Defaults **0/0/10/30/60/0**) — ein Gewicht je Klasse,
+  Reihenfolge wie `OriginSequencer.NOTE_VALUES`, dahinter „gleichzeitig".
+  Gezogen wird in `SplitStagger.pickNoteValue()`, normalisiert wie überall.
 
 Zusammen ergeben die Auslieferungswerte **bitgleich** das vorherige Verhalten
 (`staggerEnabled = 0` — die Gewichte werden dann gar nicht erst gelesen).
 
-Sieben Dinge, die man beim Ändern kennen muss:
+Acht Dinge, die man beim Ändern kennen muss:
 
 - **Die Kategorien sind relativ, nicht absolut.** „Einer weniger" statt
   „2 Zweige": ein Knoten hat je nach Rand des Stripes und Richtung des
@@ -715,6 +715,33 @@ Sieben Dinge, die man beim Ändern kennen muss:
   **Sechzehntel** zurück, den kürzesten Versatz und den früheren Default des
   ersetzten Reglers — dieselbe Regel wie „alle Zweige" bei `SplitFanout` und
   „1x" bei `SpeedQuantizer`. Bei `staggerEnabled = 0` wird nicht gezogen.
+- **„Gleichzeitig" ist die sechste Klasse und kein Notenwert** (seit
+  2026-08-02, Auslieferungsgewicht **0**): sie lässt **alle** Zweige einer
+  Aufspaltung im selben Moment starten, nicht nur den ersten — der startet
+  ohnehin immer sofort (`delayBeats`, `slot <= 0`), das ist also gerade nicht
+  das Gesuchte. Vier Dinge:
+  - **`SplitStagger.SIMULTANEOUS_NOTE_VALUE = 0` ist ein Sentinel**, kein
+    Notenwert. 0 hat als Notenwert keine Bedeutung („null Noten je Ganzer")
+    und taucht in keiner OSC- oder Preset-Datei als echter Wert auf. Er wird
+    in `delayBeats()` **vor** der Rasterung abgefangen: liefe er weiter,
+    machte `OriginSequencer.quantizeNoteValue(0)` daraus die **ganze** Note
+    (kein erlaubter Notenwert ist ≤ 0, also gewinnt der erste der Liste) und
+    aus „alle gleichzeitig" würde der weiteste Versatz der ganzen Tabelle.
+    `MusicalClock.beatsPerNote()` sieht ihn deshalb nie.
+  - **`NOTE_COUNT` (5) und `CLASS_COUNT` (6) sind zwei verschiedene Zahlen.**
+    `NOTE_COUNT` bleibt `OriginSequencer.NOTE_VALUES.length` — die fünf echten
+    Notenwerte sind weiter die mit dem Sequencer **geteilte** Quelle, und
+    „gleichzeitig" ist ausdrücklich SplitStagger-exklusiv, keine Ergänzung des
+    Sequencers. An `CLASS_COUNT` hängt dagegen alles Gezogene: Adressen,
+    Scratch-Array, `WeightedChoice.pick()`.
+  - **Der Index steht hinten** (`SIMULTANEOUS_INDEX = CLASS_COUNT - 1`). Ein
+    eingeschobener Index verschöbe die Zuordnung Regler→Klasse und damit
+    stillschweigend jedes gespeicherte Preset.
+  - **Sie ist NICHT der neue Rückfall.** `NEUTRAL_NOTE_INDEX` bleibt
+    Sechzehntel: der Rückfall soll das Verhalten von vor der jeweiligen
+    Änderung bedeuten, und eine unbrauchbare Gewichtstabelle hat vor der
+    sechsten Klasse Sechzehntel bedeutet. Ihn umzuhängen wäre eine
+    Verhaltensänderung, die kein Regler zeigt.
 - **Der Versatz zählt in Beats, nicht in Millisekunden.** Die Fälligkeit kommt
   aus `MusicalClock`, derselben Phase, auf der der Origin-Sequencer läuft — ein
   Tempowechsel ändert damit die Rate, nicht die Position. Die Uhr läuft

@@ -795,13 +795,14 @@ class SequencerSectionTest(unittest.TestCase):
         self.assertTrue(split["weights"][0]["address"].endswith("/all"))
 
     def test_split_stagger_weights_follow_the_java_note_values(self):
-        """Ein Gewicht je Notenwert-Klasse, in der Reihenfolge der Java-Seite
-        (OriginSequencer.NOTE_VALUES: Ganze .. Sechzehntel). Der Notenwert des
-        Versatzes wird je Aufspaltung gezogen, es gibt also keinen festen
-        Regler mehr, den eine Notenwert-Leiste zeigen koennte."""
+        """Ein Gewicht je Klasse, in der Reihenfolge der Java-Seite
+        (OriginSequencer.NOTE_VALUES: Ganze .. Sechzehntel), dahinter die
+        sechste Klasse "gleichzeitig" mit dem Sentinel-Notenwert 0. Der
+        Notenwert des Versatzes wird je Aufspaltung gezogen, es gibt also
+        keinen festen Regler mehr, den eine Notenwert-Leiste zeigen koennte."""
         split = server.build_split(self._params())
         self.assertEqual([w["noteValue"] for w in split["staggerWeights"]],
-                         [1, 2, 4, 8, 16])
+                         [1, 2, 4, 8, 16, 0])
         for weight in split["staggerWeights"]:
             # Das Symbol allein reicht nicht: nicht jede Windows-Schrift hat
             # U+1D15D..U+1D161, der Name ist der Rueckfall.
@@ -809,6 +810,14 @@ class SequencerSectionTest(unittest.TestCase):
             self.assertTrue(weight["label"])
         self.assertIsNotNone(split["staggerEnabled"])
         self.assertNotIn("staggerNoteValue", split)
+        # Die sechste Klasse traegt ein eigenes Label: in NOTE_VALUES gibt es
+        # keinen Eintrag fuer den Notenwert 0, ein generisches Lookup liefe
+        # dort in einen KeyError statt in eine Beschriftung.
+        simultaneous = split["staggerWeights"][-1]
+        self.assertTrue(
+            simultaneous["address"].endswith("/simultaneous"))
+        self.assertEqual(simultaneous["label"],
+                         server.SPLIT_STAGGER_SIMULTANEOUS_LABEL[1])
 
     def test_split_without_stagger_weights_still_renders(self):
         """Aelterer imPulse-Stand ohne die Gewichte: die Sektion soll die
@@ -1526,8 +1535,9 @@ class AddressLabelTest(unittest.TestCase):
         ]
         addresses += ["/net/sequencer/track%d/originTreeFilter" % i
                       for i in range(server.SEQUENCER_TRACK_COUNT)]
-        # Der Versatz ist seit 2026-08-01 eine Verteilung ueber fuenf
-        # Notenwerte, kein einzelner staggerNoteValue mehr.
+        # Der Versatz ist seit 2026-08-01 eine Verteilung, kein einzelner
+        # staggerNoteValue mehr -- seit 2026-08-02 ueber fuenf Notenwerte
+        # plus die sechste Klasse "gleichzeitig".
         addresses += [server.SPLIT_STAGGER_WEIGHT_PREFIX + suffix
                       for suffix, _note in server.SPLIT_STAGGER_NOTES]
         addresses += ["%s%d/%s" % (server.STRIPE_COLOR_PREFIX, slot, channel)

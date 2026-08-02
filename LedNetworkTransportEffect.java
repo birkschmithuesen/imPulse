@@ -82,18 +82,18 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   // behaelt ein Operator so seine eingestellte Verteilung, waehrend er den
   // Versatz zum Vergleich ab- und wieder anschaltet.
   RemoteControlledIntParameter splitStaggerEnabled;
-  // Ein Gewicht je Notenwert-Klasse, Reihenfolge wie
-  // OriginSequencer.NOTE_VALUES (Ganze .. Sechzehntel). Bis 2026-08-01 stand
+  // Ein Gewicht je Klasse, Reihenfolge wie OriginSequencer.NOTE_VALUES
+  // (Ganze .. Sechzehntel) und dahinter "gleichzeitig". Bis 2026-08-01 stand
   // hier ein einzelner fester Notenwert - er machte jeden Versatz im ganzen
   // Betrieb gleich lang. Gezogen wird je Aufspaltung, nicht je Zweig, damit
   // die Kinder eines Splits auf demselben Raster stehen (siehe
   // SplitStagger.pickNoteValue).
   RemoteControlledFloatParameter[] splitStaggerNoteWeights =
-      new RemoteControlledFloatParameter[SplitStagger.NOTE_COUNT];
+      new RemoteControlledFloatParameter[SplitStagger.CLASS_COUNT];
   // Wiederverwendet statt je Treffer neu angelegt - bei dichtem Betrieb
   // spalten mehrere Impulse je Frame auf.
   private final float[] fanoutScratch = new float[SplitFanout.CATEGORY_COUNT];
-  private final float[] staggerScratch = new float[SplitStagger.NOTE_COUNT];
+  private final float[] staggerScratch = new float[SplitStagger.CLASS_COUNT];
   private final ArrayList<PendingSpawn> splitCandidates = new ArrayList<PendingSpawn>();
   final SplitStagger splitStagger = new SplitStagger();
 
@@ -285,9 +285,17 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     //
     // Adressnamen ausgeschrieben statt "16": eine Zahl in der Adresse liest
     // sich in remoteSettings.txt wie eine Anzahl, nicht wie ein Notenwert.
-    String[] staggerNoteNames = { "whole", "half", "quarter", "eighth", "sixteenth" };
-    float[] staggerNoteDefaults = { 0f, 0f, 10f, 30f, 60f };
-    for (int i=0; i<SplitStagger.NOTE_COUNT; i++) {
+    //
+    // "simultaneous" ist die sechste Klasse und KEIN Notenwert: sie laesst
+    // alle Zweige gleichzeitig starten, nicht nur den ersten (der startet
+    // ohnehin immer sofort, siehe SplitStagger.delayBeats). Auslieferungswert
+    // 0 - wer nichts verstellt, bekommt exakt das bisherige Verhalten; sie
+    // ist da, wenn Birk sie hochzieht. Ihr Gewicht steht hinten, damit die
+    // fuenf bestehenden Klassen ihre Indizes und damit ihre Adressen behalten.
+    String[] staggerNoteNames = { "whole", "half", "quarter", "eighth", "sixteenth",
+                                  "simultaneous" };
+    float[] staggerNoteDefaults = { 0f, 0f, 10f, 30f, 60f, 0f };
+    for (int i=0; i<SplitStagger.CLASS_COUNT; i++) {
       splitStaggerNoteWeights[i]= new RemoteControlledFloatParameter(
           "/net/impulse/split/stagger/weight/"+staggerNoteNames[i],
           staggerNoteDefaults[i], 0f, 100f);
