@@ -6,8 +6,17 @@
 # gleich und die Dramaturgie waere wieder ein Zufallsloop.
 #
 # Level: ruhig | mittel | dynamisch | dramatisch
-# Format: name <TAB> level. '#' leitet einen Kommentar ein, Leerzeilen
-# werden uebersprungen.
+# Format: name <TAB> level <TAB> aktiv. '#' leitet einen Kommentar ein,
+# Leerzeilen werden uebersprungen.
+#
+# Die dritte Spalte (1 oder 0) ist UNABHAENGIG vom Level: sie sagt nicht, wie
+# ein Preset klingt, sondern ob es ueberhaupt zur Wahl steht. Ein Preset kann
+# "mittel" bleiben und trotzdem aus der Rotation genommen sein. Fehlt die
+# Spalte, gilt 1 -- aeltere Zeilen bleiben unveraendert gueltig.
+#
+# Geschrieben wird die Datei auch vom Web-UI (Sektion "Presets", Level-Auswahl
+# und Haekchen je Zeile). Dabei wird dieser Kopfkommentar aus server.py neu
+# gesetzt -- eigene Notizen dazwischen ueberleben das nicht.
 #
 # Das Level ist eine KUENSTLERISCHE Einschaetzung, keine Messung -- es wird
 # von Hand vergeben, wenn ein Preset am Geraet gehoert und gesehen wurde.

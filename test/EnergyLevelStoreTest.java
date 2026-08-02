@@ -87,6 +87,62 @@ public class EnergyLevelStoreTest {
     Check.that("die Ueberschreibung wird gemeldet",
         dup.lastMessage().indexOf("eins") >= 0);
 
+    // ---- Dritte Spalte: in der Rotation ja/nein ----
+    // Das Level sagt, WIE ein Preset klingt; die dritte Spalte sagt, ob es
+    // ueberhaupt zur Wahl steht. Zwei unabhaengige Aussagen: ein Preset kann
+    // "mittel" bleiben und trotzdem aus der Rotation raus.
+    EnergyLevelStore act = new EnergyLevelStore();
+    Check.that("laden gelingt", act.load(temp(
+        "eins\truhig\t1\n"
+        + "zwei\truhig\t0\n"
+        + "drei\truhig\n"
+        + "vier    mittel  0\n").getPath()));
+    Check.eq("vier Zuordnungen", 4, act.assignedCount());
+    Check.eq("keine abgelehnte Zeile", 0, act.rejectedCount());
+    Check.that("aktiv mit dritter Spalte 1", act.isActive("eins"));
+    Check.that("inaktiv mit dritter Spalte 0", !act.isActive("zwei"));
+    Check.that("fehlende dritte Spalte gilt als aktiv", act.isActive("drei"));
+    Check.that("mit Leerzeichen getrennt ebenso", !act.isActive("vier"));
+    Check.that("ein gar nicht getaggtes Preset ist aktiv",
+        act.isActive("nie-erwaehnt"));
+    Check.that("isActive vertraegt null", act.isActive(null));
+    Check.eq("das Level bleibt vom Schalter unberuehrt", 0, act.levelOf("zwei"));
+    Check.eq("zwei inaktive Presets", 2, act.inactiveCount());
+    Check.that("der Bericht nennt die inaktiven",
+        act.report().indexOf("inaktiv") >= 0);
+
+    // Ein unbrauchbarer Wert in der dritten Spalte wird abgelehnt, nicht
+    // geraten - dieselbe Regel wie beim unbekannten Level-Namen. Ein
+    // stillschweigendes "gilt als aktiv" waere ein Preset in der Rotation,
+    // das der Operator herausgenommen zu haben glaubt.
+    EnergyLevelStore badAct = new EnergyLevelStore();
+    Check.that("laden gelingt trotz kaputter dritter Spalte", badAct.load(temp(
+        "eins\truhig\tja\n"
+        + "zwei\tmittel\t1\n").getPath()));
+    Check.eq("eine gueltige Zuordnung", 1, badAct.assignedCount());
+    Check.eq("eine abgelehnte Zeile", 1, badAct.rejectedCount());
+    Check.that("der Grund steht in der Meldung",
+        badAct.lastMessage().indexOf("ja") >= 0);
+    Check.that("die abgelehnte Zeile taggt gar nichts",
+        badAct.isActive("eins"));
+    Check.eq("die abgelehnte Zeile faellt auch beim Level auf den Rueckfall",
+        EnergyLevelStore.FALLBACK_LEVEL, badAct.levelOf("eins"));
+
+    // Bei doppeltem Namen gewinnt die letzte Zeile auch fuer den Schalter -
+    // sonst traegt eine angehaengte Handkorrektur das neue Level, aber den
+    // alten Rotationszustand.
+    EnergyLevelStore dupAct = new EnergyLevelStore();
+    dupAct.load(temp("eins\truhig\t0\neins\tdramatisch\t1\n").getPath());
+    Check.eq("die letzte Zeile gewinnt beim Level", 3, dupAct.levelOf("eins"));
+    Check.that("die letzte Zeile gewinnt beim Schalter", dupAct.isActive("eins"));
+    Check.eq("eine Ueberschreibung", 1, dupAct.overriddenCount());
+    // Und umgekehrt: eine angehaengte Zeile OHNE dritte Spalte setzt den
+    // Schalter auf den Default zurueck, statt den alten Wert zu behalten.
+    EnergyLevelStore dupBack = new EnergyLevelStore();
+    dupBack.load(temp("eins\truhig\t0\neins\truhig\n").getPath());
+    Check.that("ohne dritte Spalte gilt wieder der Default",
+        dupBack.isActive("eins"));
+
     // ---- presetsForLevel ----
     EnergyLevelStore pool = new EnergyLevelStore();
     pool.load(temp("a\truhig\nb\tdynamisch\nc\truhig\nd\tdramatisch\n").getPath());
@@ -112,6 +168,30 @@ public class EnergyLevelStoreTest {
     Check.eq("untaggedCount zaehlt die Namen ohne Eintrag",
         1, pool.untaggedCount(all));
     Check.eq("untaggedCount vertraegt null", 0, pool.untaggedCount(null));
+
+    // ---- presetsForLevel filtert die inaktiven heraus ----
+    // Das ist der Zweck der dritten Spalte: der Director soll ein
+    // herausgenommenes Preset nie ziehen, auch wenn es getaggt bleibt.
+    EnergyLevelStore poolAct = new EnergyLevelStore();
+    poolAct.load(temp("a\truhig\t1\nb\truhig\t0\nc\truhig\n").getPath());
+    List<String> allAct = names("a", "b", "c");
+    Check.eq("ein inaktives Preset kommt nicht in den Pool",
+        "a,c", join(poolAct.presetsForLevel(0, allAct)));
+    Check.eq("das inaktive bleibt trotzdem in seinem Level",
+        0, poolAct.levelOf("b"));
+    // Ein Level, dessen Presets alle herausgenommen sind, liefert eine leere
+    // Liste - SongStructureDirector faellt dann auf ein anderes Level zurueck,
+    // genau wie bei einem Level ohne Presets.
+    EnergyLevelStore poolOff = new EnergyLevelStore();
+    poolOff.load(temp("a\tdynamisch\t0\nb\tdynamisch\t0\n").getPath());
+    Check.eq("ein komplett herausgenommenes Level ist leer",
+        0, poolOff.presetsForLevel(2, names("a", "b")).size());
+    // Ein nicht getaggtes Preset liegt im Rueckfall-Level UND ist aktiv -
+    // sonst verschwaende es still aus der Show, statt nur unklassifiziert zu
+    // sein.
+    Check.eq("ein nicht getaggtes Preset bleibt waehlbar",
+        "x", join(poolOff.presetsForLevel(EnergyLevelStore.FALLBACK_LEVEL,
+            names("x"))));
 
     // ---- Fehlende Datei haelt die Show nicht an ----
     EnergyLevelStore missing = new EnergyLevelStore();

@@ -5,8 +5,10 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 // Haelt die Zuordnung Preset -> Energie-Level und beantwortet daraus die
 // Frage "welche Presets gehoeren zu Level X".
@@ -24,8 +26,15 @@ import java.util.Map;
 // NodeCrossingStore und PresetStore.
 //
 // Datei: data/energyLevels.txt, eine Zeile je Preset:
-//   presetName <TAB> level
+//   presetName <TAB> level [<TAB> aktiv]
 // '#' leitet einen Kommentar ein, Leerzeilen werden uebersprungen.
+//
+// Die dritte Spalte (1 oder 0) ist UNABHAENGIG vom Level: sie sagt nicht, wie
+// ein Preset klingt, sondern ob es ueberhaupt zur Wahl steht. Ein Preset kann
+// "mittel" bleiben und trotzdem aus der Rotation genommen sein - das ist der
+// Unterschied zwischen "gehoert hier nicht hin" und "gerade nicht spielen".
+// Fehlt die Spalte, gilt aktiv: aeltere Dateien und von Hand angehaengte
+// Zweispalten-Zeilen bleiben damit unveraendert gueltig.
 class EnergyLevelStore {
 
   // Reihenfolge ist die Indexreihenfolge ueberall: in der Uebergangsmatrix,
@@ -62,7 +71,15 @@ class EnergyLevelStore {
     return LEVEL_NAMES[level];
   }
 
+  // Fehlt die dritte Spalte, steht das Preset zur Wahl. Rueckwaertskompatibel
+  // zu jeder Zweispalten-Zeile, die es schon gibt.
+  static final boolean FALLBACK_ACTIVE = true;
+
   private final Map<String, Integer> levelOfPreset = new HashMap<String, Integer>();
+  // Nur die AUSDRUECKLICH herausgenommenen Presets stehen hier - alles andere
+  // ist aktiv. Eine Menge statt einer zweiten Map von Name auf Boolean: der
+  // Rueckfall ist damit strukturell "aktiv" und kein Sonderfall im Lesen.
+  private final Set<String> inactivePresets = new HashSet<String>();
 
   private int assigned = 0;
   private int rejected = 0;
@@ -99,6 +116,26 @@ class EnergyLevelStore {
     return (level == null) ? FALLBACK_LEVEL : level.intValue();
   }
 
+  // Steht dieses Preset in der Rotation der Song-Struktur zur Wahl?
+  //
+  // Bewusst unabhaengig von levelOf(): ein Preset behaelt sein Level, waehrend
+  // es herausgenommen ist. Wer es wieder hereinnimmt, bekommt es an derselben
+  // Stelle der Dramaturgie zurueck, ohne das Level erneut einschaetzen zu
+  // muessen.
+  boolean isActive(String presetName) {
+    if (presetName == null) {
+      return FALLBACK_ACTIVE;
+    }
+    return !inactivePresets.contains(presetName);
+  }
+
+  // Wie viele Presets ausdruecklich herausgenommen sind. Gezaehlt wird ueber
+  // die Datei, nicht ueber einen Preset-Ordner: ein Eintrag ohne Datei zaehlt
+  // hier mit und faellt beim Filtern gegen allNames ohnehin heraus.
+  int inactiveCount() {
+    return inactivePresets.size();
+  }
+
   // Die Presets dieses Levels, in der Reihenfolge von allNames.
   //
   // Gefiltert wird ausdruecklich GEGEN allNames und nicht aus der Datei
@@ -117,7 +154,10 @@ class EnergyLevelStore {
     }
     for (int i = 0; i < allNames.size(); i++) {
       String name = allNames.get(i);
-      if (levelOf(name) == level) {
+      // Der Schalter greift genau hier und nirgends sonst: ein
+      // herausgenommenes Preset bleibt in der Datei, in der Anzeige und in
+      // seinem Level - es wird nur nie gezogen.
+      if (levelOf(name) == level && isActive(name)) {
         result.add(name);
       }
     }
@@ -154,6 +194,9 @@ class EnergyLevelStore {
       sb.append(LEVEL_NAMES[i]).append(' ').append(perLevel[i]);
     }
     sb.append(')');
+    if (!inactivePresets.isEmpty()) {
+      sb.append(", ").append(inactivePresets.size()).append(" inaktiv");
+    }
     if (rejected > 0) {
       sb.append(", ").append(rejected).append(" Zeilen abgelehnt");
     }
@@ -169,6 +212,7 @@ class EnergyLevelStore {
   // vollstaendig, nur die Dramaturgie flach.
   boolean load(String path) {
     levelOfPreset.clear();
+    inactivePresets.clear();
     assigned = 0;
     rejected = 0;
     overridden = 0;
@@ -206,6 +250,23 @@ class EnergyLevelStore {
               + "\" - erlaubt sind ruhig, mittel, dynamisch, dramatisch");
           continue;
         }
+        // Dritte Spalte optional. Ein unbrauchbarer Wert wird abgelehnt und
+        // nicht geraten - dieselbe Regel wie beim unbekannten Level-Namen.
+        // "Gilt halt als aktiv" waere ein Preset in der Rotation, das der
+        // Operator herausgenommen zu haben glaubt.
+        boolean active = FALLBACK_ACTIVE;
+        if (fields.length >= 3) {
+          if (fields[2].equals("1")) {
+            active = true;
+          } else if (fields[2].equals("0")) {
+            active = false;
+          } else {
+            rejected++;
+            problems.add("Zeile " + lineNo + ": unbrauchbare dritte Spalte \""
+                + fields[2] + "\" - erlaubt sind 1 (in der Rotation) und 0");
+            continue;
+          }
+        }
         String name = fields[0];
         // Die LETZTE Zeile gewinnt: die Datei wird von Hand korrigiert, und
         // die natuerliche Handkorrektur ist eine angehaengte Zeile am Ende.
@@ -219,6 +280,15 @@ class EnergyLevelStore {
           assigned++;
         }
         levelOfPreset.put(name, Integer.valueOf(level));
+        // Auch der Schalter kommt aus der LETZTEN Zeile: eine angehaengte
+        // Handkorrektur ohne dritte Spalte setzt ihn zurueck auf den Default,
+        // statt den Wert der frueheren Zeile weiterzutragen. Sonst stuende in
+        // der Datei etwas anderes als im Kopf dessen, der sie geschrieben hat.
+        if (active) {
+          inactivePresets.remove(name);
+        } else {
+          inactivePresets.add(name);
+        }
       }
     } catch (IOException e) {
       message = "Energie-Level-Datei nicht lesbar: " + e;
