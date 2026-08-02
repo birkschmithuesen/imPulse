@@ -626,14 +626,61 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       TravellingActivation curActivation = iter.next();
       int curLedIndex=curActivation.getLedIndex(); // global led position
       float fade=(float)Math.pow(curActivation.energy, gamma);
+      // Die Kopffarbe wird EINMAL bestimmt und danach auf die zwei LEDs
+      // verteilt, zwischen denen der Kopf gerade steht. Beide Farbquellen
+      // gehen hindurch - die zentrale Impulsfarbe (useSpecificColor == 1)
+      // genauso wie die Farbe des Stripes. Der Slot des Stripe-Falls gilt
+      // fuer beide Ziel-LEDs, weil das Blending nie ueber den Stripe-Rand
+      // hinaus schreibt (siehe blendHead()).
+      float headR, headG, headB;
       if (useSpecificColor == 1) {
-        bufferLedColors[curLedIndex].set(spotR*fade*curActivation.energy, spotG*fade*curActivation.energy, spotB*fade*curActivation.energy);
+        headR=spotR*fade*curActivation.energy;
+        headG=spotG*fade*curActivation.energy;
+        headB=spotB*fade*curActivation.energy;
       } else {
         // Acht Slots, es gibt aber 30 Stripes - das Muster wiederholt sich
         int slot = ledNetInfo[curLedIndex].stripeIndex % StripeColorDefaults.COUNT;
-        bufferLedColors[curLedIndex].set(stripeColorR[slot].getValue()*fade,
-                                         stripeColorG[slot].getValue()*fade,
-                                         stripeColorB[slot].getValue()*fade);
+        headR=stripeColorR[slot].getValue()*fade;
+        headG=stripeColorG[slot].getValue()*fade;
+        headB=stripeColorB[slot].getValue()*fade;
+      }
+      if (curActivation.getClass() == TravellingActivationFiller.class) {
+        // Filler bleiben ausdruecklich beim harten Schreiben auf EINE LED.
+        // Sie loesen das umgekehrte Problem - hohe Geschwindigkeit,
+        // uebersprungene LEDs - und sitzen per Konstruktion auf ganzzahligen
+        // Positionen, ein Bruchteil ist bei ihnen also immer 0. Sie hier
+        // mitzublenden aenderte nichts am Bild und brauechte trotzdem eine
+        // zweite Begruendung.
+        bufferLedColors[curLedIndex].set(headR, headG, headB);
+      } else {
+        // Sub-Pixel-Blending des Impulskopfes.
+        //
+        // Problem: getLedIndex() rundet die float-Position auf die
+        // naechstliegende LED. Bei kleinem /net/impulse/speed steht der
+        // Impuls dadurch mehrere Frames auf derselben LED und springt dann
+        // hart eine weiter - die Bewegung ruckelt sichtbar.
+        //
+        // Formel: der Kopf steht zwischen floor(ledIdxPos) und der LED
+        // darueber und wird linear zwischen beide aufgeteilt.
+        //
+        //   lowerIdx = floor(ledIdxPos)
+        //   frac     = ledIdxPos - lowerIdx        // 0..1
+        //   lowerIdx bekommt Gewicht (1 - frac), lowerIdx+1 bekommt frac
+        //
+        // Bei frac == 0 - der Kopf sitzt exakt auf einer LED - bleibt das
+        // volle Gewicht 1.0 auf lowerIdx: die Spitzenhelligkeit ist
+        // unveraendert, es aendert sich ausschliesslich, wie der Kopf von
+        // einer LED zur naechsten wandert.
+        //
+        // Das Vorzeichen von speed spielt hier bewusst KEINE Rolle: die zwei
+        // Nachbarn klammern die Position von beiden Seiten ein, egal in
+        // welche Richtung der Impuls laeuft. Welcher der beiden der
+        // "vorauslaufende" ist, entscheidet allein frac, und beide gehen
+        // durch dieselbe Randpruefung.
+        int lowerIdx=(int)Math.floor(curActivation.ledIdxPos);
+        float frac=curActivation.ledIdxPos-lowerIdx;
+        blendHead(lowerIdx, curActivation.stripeIdx, 1f-frac, headR, headG, headB);
+        blendHead(lowerIdx+1, curActivation.stripeIdx, frac, headR, headG, headB);
       }
       //if the travelling activation is a filler remove it
       if (curActivation.getClass() == TravellingActivationFiller.class) {
@@ -644,6 +691,54 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     }
     sendImpulseStream(currentTime);
     return bufferLedColors;
+  }
+
+  // Traegt einen Anteil der Kopffarbe in eine LED ein - die eine Haelfte des
+  // Sub-Pixel-Blendings aus drawMe(), dort steht auch die Formel.
+  private void blendHead(int ledIdx, int stripeIdx, float weight, float r, float g, float b) {
+    if (!(weight > 0f)) { // faengt auch NaN ab
+      return;
+    }
+    // Der Nachbar darf weder aus dem globalen LED-Array laufen noch ueber den
+    // Stripe-Rand in den naechsten Stripe: der globale Index ist dort zwar
+    // fortlaufend, physisch liegt die LED aber an einer voellig anderen
+    // Stelle im Netz, und der Kopf wuerde dort einen Punkt aufblitzen lassen,
+    // an dem kein Impuls ist. Dieselbe Pruefung wie in activationIsValid(),
+    // ohne dessen Energiebedingung - die Energie steckt beim Zeichnen schon
+    // in der uebergebenen Farbe.
+    if (ledIdx < 0 || ledIdx >= ledNetInfo.length) {
+      return;
+    }
+    if (ledNetInfo[ledIdx].stripeIndex != stripeIdx) {
+      return;
+    }
+    // Zusammengefuehrt wird je Kanal mit max(), nicht mit set(). Ein
+    // Teilgewicht hart geschrieben wuerde den vorhandenen Pufferinhalt
+    // UNTERschreiten: den nachleuchtenden Schweif, den LedColor.mult() weiter
+    // oben in diesem Frame gedaempft hat, ebenso wie den Kopf eines zweiten
+    // Impulses, der dieselbe LED anteilig trifft (vorher galt "letzter
+    // gewinnt", der schwaechere Beitrag verschwand). Beides waere ein
+    // Flackern genau dort, wo das Blending die Bewegung glaetten soll.
+    //
+    // max() ist ausserdem der Grund, warum der Kopf trotz der Aufteilung
+    // nicht dunkler WIRKT, obwohl bei frac == 0.5 rechnerisch nur die Haelfte
+    // auf jede der beiden LEDs faellt: die LED, die der Kopf gerade verlaesst,
+    // haelt ihren Wert aus dem Vorframe, gedaempft nur um den
+    // fadeOut-Faktor. Die vordere LED steigt an, die hintere klingt ab - das
+    // ist genau der weiche Uebergang, um den es geht.
+    LedColor target=bufferLedColors[ledIdx];
+    float wr=r*weight;
+    float wg=g*weight;
+    float wb=b*weight;
+    if (wr > target.x) {
+      target.x = wr;
+    }
+    if (wg > target.y) {
+      target.y = wg;
+    }
+    if (wb > target.z) {
+      target.z = wb;
+    }
   }
 
   private boolean activationIsValid(int activationLedIdx, TravellingActivation curActivation) {

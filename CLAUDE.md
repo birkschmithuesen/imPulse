@@ -569,6 +569,53 @@ Zwei Mechanismen, die man beim Ändern kennen muss:
 - **Filler**: Bei hoher Geschwindigkeit überspringt ein Impuls LEDs zwischen zwei Frames. Für die übersprungenen Positionen werden `TravellingActivationFiller` erzeugt, gezeichnet und am Ende desselben Frames wieder entfernt. Ein Filler übernimmt die `id` seines Elternimpulses, statt eine neue zu verbrauchen — strukturell erzwungen, weil die Filler-Klasse nur den Konstruktor mit ausdrücklicher ID anbietet. Im Positionsstrom werden Filler zusätzlich explizit übersprungen, sonst sähe die Klangseite einen einzigen Impuls, der im selben Takt zwischen mehreren Positionen hin- und herspringt.
 - **nodeDeadTime**: Ein Node feuert erst wieder nach `/net/impulse/nodeDeadTime` Sekunden. Ohne diese Totzeit würde ein Impuls denselben Node in aufeinanderfolgenden Frames endlos neu triggern.
 
+**Sub-Pixel-Blending des Impulskopfes** (Zeichenblock am Ende von `drawMe()`,
+Hilfsmethode `blendHead()`): `getLedIndex()` rundet die float-Position auf die
+nächstliegende LED. Bei kleinem `/net/impulse/speed` steht ein Impuls dadurch
+mehrere Frames auf derselben LED und springt dann hart eine weiter — die
+Bewegung ruckelt sichtbar. Der Kopf wird deshalb linear auf die zwei LEDs
+verteilt, zwischen denen er gerade steht:
+
+```
+lowerIdx = floor(ledIdxPos)
+frac     = ledIdxPos - lowerIdx      // 0..1
+lowerIdx bekommt Gewicht (1 - frac), lowerIdx+1 bekommt frac
+```
+
+Beide Farbquellen gehen hindurch (zentrale Impulsfarbe **und** Stripe-Farbe),
+die Kopffarbe selbst — `fade`, Energie, Slot — ist unverändert. **Es gibt
+keinen Regler dafür**: das ist Renderqualität, kein gestalterischer
+Parameter, also immer an.
+
+Vier Dinge, die man beim Ändern kennen muss:
+
+- **Bei `frac == 0` bleibt das volle Gewicht 1.0 auf einer LED.** Die
+  Spitzenhelligkeit ist unverändert, es ändert sich ausschliesslich, wie der
+  Kopf von einer LED zur nächsten wandert.
+- **Zusammengeführt wird je Kanal mit `max()`, nicht mit `set()`.** Ein
+  Teilgewicht hart geschrieben würde den vorhandenen Pufferinhalt
+  *unterschreiten* — den nachleuchtenden Schweif, den `LedColor.mult()` weiter
+  oben im selben Frame gedämpft hat, ebenso wie den Kopf eines zweiten
+  Impulses auf derselben LED (vorher galt „letzter gewinnt", der schwächere
+  Beitrag verschwand). Beides wäre ein Flackern genau dort, wo das Blending
+  glätten soll. `max()` ist ausserdem der Grund, warum der Kopf trotz der
+  Aufteilung nicht dunkler *wirkt*, obwohl bei `frac == 0.5` rechnerisch nur
+  die Hälfte auf jede der beiden LEDs fällt: die LED, die er gerade verlässt,
+  hält ihren Wert aus dem Vorframe, gedämpft nur um den `fadeOut`-Faktor.
+- **Das Vorzeichen von `speed` spielt keine Rolle.** Die zwei Nachbarn
+  klammern die Position von beiden Seiten ein, egal in welche Richtung der
+  Impuls läuft; welcher der vorauslaufende ist, entscheidet allein `frac`.
+  Beide gehen durch dieselbe Randprüfung: innerhalb des globalen Arrays und
+  **auf demselben Stripe** wie die Aktivierung (dieselbe Bedingung wie in
+  `activationIsValid()`). Über den Stripe-Rand hinaus ist der globale Index
+  zwar fortlaufend, physisch liegt die LED aber an einer ganz anderen Stelle
+  im Netz — der Kopf liesse dort einen Punkt aufblitzen, an dem kein Impuls
+  ist.
+- **Filler bleiben beim harten Schreiben auf eine LED.** Sie lösen das
+  umgekehrte Problem (hohe Geschwindigkeit, übersprungene LEDs) und sitzen per
+  Konstruktion auf ganzzahligen Positionen, ein Bruchteil ist bei ihnen also
+  immer 0.
+
 **Zwei Farbquellen, ein Schalter** (`/net/impulse/color/useSpecificColor`, int
 0/1, Default 1): bei 1 bekommt jeder Impuls die eine zentral gesetzte Farbe
 (`impulseR/G/B`), bei 0 die Farbe seines Stripes. Der Schalter hiess bis
