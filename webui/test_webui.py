@@ -924,12 +924,14 @@ class TabLayoutTest(unittest.TestCase):
 
     def test_seven_tabs_in_the_briefed_order(self):
         tabs = self._snapshot()["tabs"]
-        # Die fuenf Kern-Tabs behalten ihre Reihenfolge, "farben" und "song"
-        # haengen hinten an -- die Struktur aus dem Fuenf-Tab-Umbau wird nicht
-        # umsortiert, nur ergaenzt.
+        # Die fuenf Kern-Tabs behalten ihre Reihenfolge, "tonleiter" haengt
+        # hinter "noten" (thematisch benachbart: Melodie-Zuordnung entscheidet
+        # WELCHE Note, Noten-Verhalten WANN/WIE), "farben" und "song" hinten
+        # an. Seit 2026-08-02: Melodie-Zuordnung hat einen eigenen Tab statt
+        # einer festen Sektion ueber der Tab-Leiste.
         self.assertEqual([t["id"] for t in tabs],
-                         ["mixer", "sound", "spawn", "noten", "physik",
-                          "farben", "song"])
+                         ["mixer", "sound", "spawn", "noten", "tonleiter",
+                          "physik", "farben", "song"])
 
     def test_colour_addresses_land_in_the_colour_tab(self):
         for address in ("/net/impulse/color/r",
@@ -1005,7 +1007,9 @@ class TabLayoutTest(unittest.TestCase):
         self.assertIn("speedClasses", tabs["noten"]["sections"])
         self.assertIn("split", tabs["noten"]["sections"])
         self.assertIn("songStructure", tabs["song"]["sections"])
-        self.assertEqual(tabs["mixer"]["sections"], [])
+        # Seit 2026-08-02 steht die Presets-Sektion ganz oben im Mixer-Tab
+        # (vorher: fest ueber der Tab-Leiste) -- deshalb nicht mehr leer.
+        self.assertEqual(tabs["mixer"]["sections"], ["presets"])
 
     def test_song_tab_holds_nothing_but_its_own_panel(self):
         """Alle /songStructure/-Adressen rendert das Panel selbst. Bliebe eine

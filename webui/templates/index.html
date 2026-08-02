@@ -29,54 +29,67 @@
        aendert. -->
   <p class="autocommit" id="autocommit" role="status">&nbsp;</p>
 
-  <section class="presets" id="presets">
-    <h2>Presets</h2>
-    <div class="preset-rows">
-      <div class="preset-row">
-        <select id="presetSelect" aria-label="Preset auswaehlen"></select>
-        <button type="button" id="presetLoad" title="Gewaehltes Preset laden (/preset/load)">Laden</button>
-      </div>
-      <div class="preset-row">
-        <input type="text" id="presetName" placeholder="neuer-preset-name" maxlength="64"
-               autocomplete="off" spellcheck="false" aria-label="Name fuer das neue Preset">
-        <button type="button" id="presetSave" title="Aktuelle Werte unter diesem Namen speichern (/preset/save)">Speichern</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- Melodie-Zuordnung. Steht wie die Presets UEBER der Tab-Leiste: sie
-       gilt fuer alles, und ein Knopf, der nur auf einem Tab sichtbar waere,
-       waere eine Falle. Bleibt versteckt, solange der Server keine
-       melody-Daten liefert (aelterer imPulse-Stand ohne /net/melody/*). -->
-  <section class="melody" id="melody" hidden>
-    <h2>Melodie-Zuordnung</h2>
-    <p class="melody-note">
-      Diese Werte wirken erst beim Neuberechnen &ndash; ein Verstellen allein
-      aendert nichts. Das Neuberechnen gibt <strong>allen Knoten neue
-      Toene</strong>, ueberschreibt <code>data/nodeMelody_&lt;modus&gt;.txt</code>
-      (auch von Hand korrigierte Zeilen) und laesst sich nicht zuruecknehmen.
-      Ein weiches Ueberblenden gibt es nicht.
-    </p>
-    <div class="melody-fields" id="melodyFields"></div>
-    <div class="melody-actions">
-      <label class="melody-confirm">
-        <input type="checkbox" id="melodyConfirm">
-        Ja, alle Knoten neu vertonen
-      </label>
-      <button type="button" id="melodyRecompute" disabled
-              title="Zuordnung neu berechnen und schreiben (/net/melody/recompute)">
-        Zuordnung neu berechnen
-      </button>
-    </div>
-  </section>
-
-  <!-- Sieben Themen-Tabs. Die Zuordnung kommt vom Server
+  <!-- Acht Themen-Tabs. Die Zuordnung kommt vom Server
        (TAB_TITLES/TAB_RULES in server.py); app.js baut ALLE Panels und
        schaltet nur die
        Sichtbarkeit um, damit Preset-Laden und der applied/echoed-Ruecklauf
        auch Regler auf inaktiven Tabs erreichen. -->
   <nav class="tab-bar" id="tabBar" role="tablist"></nav>
   <main id="tabPanels"></main>
+
+  <!-- Abstellplatz. Presets und Melodie-Zuordnung stehen seit 2026-08-02
+       IN den Tabs (Presets ganz oben im Mixer-Tab, die Melodie-Zuordnung als
+       einziger Inhalt des Tonleiter-Tabs) und nicht mehr fest ueber der
+       Tab-Leiste, wo man an ihnen vorbeiscrollen musste, bevor der erste
+       Regler sichtbar wurde.
+
+       Ihr Markup bleibt trotzdem HIER und wird von buildTabs() nur
+       umgehaengt: app.js haengt seine Listener beim Laden an feste IDs, und
+       MarkupWiringTest prueft genau diese Verdrahtung ohne jsdom. Der
+       Abstellplatz ist ausserdem der Ort, an den die zwei Sektionen vor
+       jedem Neuaufbau zurueckkehren -- tabPanelsEl.innerHTML = '' wuerde sie
+       sonst aus dem Dokument werfen. -->
+  <div id="parked" hidden>
+    <section class="presets" id="presets">
+      <h2>Presets</h2>
+      <div class="preset-rows">
+        <div class="preset-row">
+          <select id="presetSelect" aria-label="Preset auswaehlen"></select>
+          <button type="button" id="presetLoad" title="Gewaehltes Preset laden (/preset/load)">Laden</button>
+        </div>
+        <div class="preset-row">
+          <input type="text" id="presetName" placeholder="neuer-preset-name" maxlength="64"
+                 autocomplete="off" spellcheck="false" aria-label="Name fuer das neue Preset">
+          <button type="button" id="presetSave" title="Aktuelle Werte unter diesem Namen speichern (/preset/save)">Speichern</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Bleibt versteckt, solange der Server keine melody-Daten liefert
+         (aelterer imPulse-Stand ohne /net/melody/*). Dann gibt es auch den
+         Tonleiter-Tab nicht, und die Sektion bleibt hier stehen. -->
+    <section class="melody" id="melody" hidden>
+      <h2>Melodie-Zuordnung</h2>
+      <p class="melody-note">
+        Diese Werte wirken erst beim Neuberechnen &ndash; ein Verstellen allein
+        aendert nichts. Das Neuberechnen gibt <strong>allen Knoten neue
+        Toene</strong>, ueberschreibt <code>data/nodeMelody_&lt;modus&gt;.txt</code>
+        (auch von Hand korrigierte Zeilen) und laesst sich nicht zuruecknehmen.
+        Ein weiches Ueberblenden gibt es nicht.
+      </p>
+      <div class="melody-fields" id="melodyFields"></div>
+      <div class="melody-actions">
+        <label class="melody-confirm">
+          <input type="checkbox" id="melodyConfirm">
+          Ja, alle Knoten neu vertonen
+        </label>
+        <button type="button" id="melodyRecompute" disabled
+                title="Zuordnung neu berechnen und schreiben (/net/melody/recompute)">
+          Zuordnung neu berechnen
+        </button>
+      </div>
+    </section>
+  </div>
 
   <!-- Rueckfall fuer einen aelteren Server ohne Tab-Daten, siehe
        buildTabs() in app.js. -->

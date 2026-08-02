@@ -40,15 +40,37 @@ Datei nach einem imPulse-Neustart sofort neu ein.
 Vollstaendige Range-/Sections-Analyse aller OSC-Parameter:
 `docs/webui-parameter-review-2026-07-30.md`.
 
-### Sechs Themen-Tabs
+### Acht Themen-Tabs
 
-Statt einer langen Liste liegen die Regler auf sechs Tabs: **Mixer**, **Sound
-Design**, **Spawn-Verhalten**, **Noten-Verhalten**, **Impuls-Verhalten**,
-**Farben**. Welche Adresse in welchen Tab gehoert, entscheiden `TAB_RULES`
-und `TAB_PRIMARY` in `server.py` — dort ist es pruefbar, und `test_webui.py`
-stellt sicher, dass **jeder** Regler in genau einem Tab landet und keiner
-doppelt. Oben je Tab die kuratierten Regler, darunter ein eingeklapptes
-`Erweitert` mit dem Rest.
+Statt einer langen Liste liegen die Regler auf acht Tabs: **Mixer**, **Sound
+Design**, **Spawn-Verhalten**, **Noten-Verhalten**, **Tonleiter**,
+**Impuls-Verhalten**, **Farben**, **Song-Struktur**. Welche Adresse in
+welchen Tab gehoert, entscheiden `TAB_RULES` und `TAB_PRIMARY` in
+`server.py` — dort ist es pruefbar, und `test_webui.py` stellt sicher,
+dass **jeder** Regler in genau einem Tab landet und keiner doppelt. Oben je
+Tab die kuratierten Regler, darunter ein eingeklapptes `Erweitert` mit dem
+Rest.
+
+**Der Tonleiter-Tab traegt keine generischen Regler.** Sein einziger Inhalt
+ist die Melodie-Zuordnung (siehe eigener Abschnitt unten) — deshalb keine
+Zeile in `TAB_RULES`, `TAB_PRIMARY[TAB_SCALE]` bleibt leer. Liefert der
+Server keine `melody`-Daten (aelterer imPulse-Stand ohne `/net/melody/*`),
+faellt der Tab komplett weg, statt leer dazustehen — dieselbe Regel wie
+vorher beim `hidden`-Attribut der Sektion, nur eine Ebene hoeher
+(`build_tabs()` in `server.py`).
+
+**Seit 2026-08-02 stehen Presets und Melodie-Zuordnung IN den Tabs**, nicht
+mehr fest ueber der Tab-Leiste: Presets ganz oben im Mixer-Tab (vor den
+kuratierten Reglern), Melodie-Zuordnung als einziger Inhalt des
+Tonleiter-Tabs. Vorher zwangen beide Sektionen jeden Aufruf, an ihnen
+vorbeizuscrollen, bevor ueberhaupt ein Tuning-Regler sichtbar wurde. Ihr
+Markup liegt trotzdem weiterhin in `templates/index.html`, jetzt in einem
+`<div id="parked" hidden>`-Abstellplatz — `buildTabs()` in `app.js` haengt
+die beiden `<section>`-Elemente nur um, statt sie neu zu bauen: `app.js`
+verdrahtet seine Listener beim Laden an feste IDs (`presetSelect`,
+`melodyRecompute` usw.), und dieselben Elemente muessen bei jedem
+Tab-Neuaufbau (`tabPanelsEl.innerHTML = ''`) wieder in den Abstellplatz
+zurueck, statt aus dem Dokument zu fallen.
 
 Drei Dinge, die man beim Aendern kennen muss:
 
@@ -122,7 +144,7 @@ koennen.
 
 ### Melodie-Zuordnung: eine Sektion, in der Regler nichts tun
 
-Ueber den Tabs, neben den Presets, sitzt **Melodie-Zuordnung** mit den vier
+Im Tab **Tonleiter**, oben, sitzt **Melodie-Zuordnung** mit den vier
 Werten `/net/melody/{mode,startNode,rootMidiNote,numOctaves}` und einem
 Knopf. Sie ist die einzige Stelle im UI, an der das **Verstellen eines
 Feldes nichts sendet**.
@@ -269,7 +291,8 @@ Daraus folgt der Rest:
 
 ## Presets
 
-Ganz oben, ueber den Reglern, sitzt die Sektion **Presets**: ein Dropdown mit
+Im Mixer-Tab, ganz oben ueber den kuratierten Reglern, sitzt die Sektion
+**Presets**: ein Dropdown mit
 allen vorhandenen Presets plus **Laden**, darunter ein Textfeld plus
 **Speichern**.
 

@@ -21,12 +21,14 @@ const statusEl = document.getElementById('status');
 const metaEl = document.getElementById('meta');
 const couplingEl = document.getElementById('coupling');
 const reloadEl = document.getElementById('reload');
+const presetsEl = document.getElementById('presets');
 const presetSelectEl = document.getElementById('presetSelect');
 const presetLoadEl = document.getElementById('presetLoad');
 const presetNameEl = document.getElementById('presetName');
 const presetSaveEl = document.getElementById('presetSave');
 const autocommitEl = document.getElementById('autocommit');
 const melodyEl = document.getElementById('melody');
+const parkedEl = document.getElementById('parked');
 const melodyFieldsEl = document.getElementById('melodyFields');
 const melodyConfirmEl = document.getElementById('melodyConfirm');
 const melodyRecomputeEl = document.getElementById('melodyRecompute');
@@ -2869,13 +2871,29 @@ function buildRecordSection(host) {
 
 const TAB_STORAGE_KEY = 'imPulse.activeTab';
 
+/* Presets und Melodie-Zuordnung sind FESTES Markup aus index.html (ihre
+ * Listener haengen an festen IDs, siehe MarkupWiringTest) und werden hier nur
+ * umgehaengt. Vor jedem Neuaufbau muessen sie zurueck auf den Abstellplatz:
+ * tabPanelsEl.innerHTML = '' wuerde sie sonst mitsamt dem alten Panel aus dem
+ * Dokument werfen, und ein "Neu laden" liesse die Presets verschwinden. */
+function parkFixedSections() {
+  if (!parkedEl) { return; }
+  if (presetsEl) { parkedEl.appendChild(presetsEl); }
+  if (melodyEl) { parkedEl.appendChild(melodyEl); }
+}
+
 function buildTabs(data) {
+  parkFixedSections();
   tabBarEl.innerHTML = '';
   tabPanelsEl.innerHTML = '';
   const tabs = data.tabs || [];
   if (!tabs.length) {
     // Aelterer Server ohne Tab-Daten: alles in einen Block, damit die
-    // Oberflaeche nicht leer bleibt.
+    // Oberflaeche nicht leer bleibt. Die zwei festen Sektionen kommen dann
+    // wieder nach oben -- ohne Tabs gibt es keinen Platz, an den sie sonst
+    // gehoerten, und ein Preset-Dropdown im Abstellplatz waere unsichtbar.
+    if (presetsEl) { tabPanelsEl.appendChild(presetsEl); }
+    if (melodyEl) { tabPanelsEl.appendChild(melodyEl); }
     tabPanelsEl.appendChild(groupsEl);
     return;
   }
@@ -2905,9 +2923,16 @@ function buildTabs(data) {
     panel.className = 'tab-panel';
     panel.setAttribute('role', 'tabpanel');
 
-    // 1. Spezial-Sektionen (Sequencer-Panel, Speed-Klassen, Split-Verhalten,
-    //    Palette, Song-Struktur)
+    // 1. Spezial-Sektionen (Presets, Melodie-Zuordnung, Sequencer-Panel,
+    //    Speed-Klassen, Split-Verhalten, Palette, Song-Struktur)
     (tab.sections || []).forEach((name) => {
+      // Die zwei festen Sektionen werden umgehaengt, nicht gebaut: ihr
+      // Markup steht in index.html und traegt die IDs, an denen die Listener
+      // schon haengen. Der Server entscheidet ueber tab.sections, WO sie
+      // landen -- Presets als erstes im Mixer-Tab, die Melodie-Zuordnung als
+      // einziger Inhalt des Tonleiter-Tabs.
+      if (name === 'presets' && presetsEl) { panel.appendChild(presetsEl); }
+      if (name === 'melody' && melodyEl) { panel.appendChild(melodyEl); }
       if (name === 'sequencer') { buildSequencer(data, panel); }
       if (name === 'speedClasses') { buildSpeedClasses(data, panel); }
       if (name === 'impulseColor') { buildImpulseColor(data, panel); }

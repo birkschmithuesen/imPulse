@@ -137,8 +137,11 @@ details > summary::before { content: '▸ '; }
 details[open] > summary::before { content: '▾ '; }
 details[open] > summary { border-bottom: 1px solid var(--line); }
 
-/* Preset-Sektion: steht ausserhalb des main-Rasters, braucht die Raender
-   deshalb selbst. Rahmen und Titel erbt sie von den section-Regeln oben. */
+/* Preset-Sektion: sitzt seit 2026-08-02 als erste Karte im Mixer-Tab. Die
+   Raender gelten nur noch fuer den Rueckfall ohne Tabs (aelterer Server), wo
+   sie ausserhalb jedes Rasters steht; im Panel nimmt sie das Raster (siehe
+   .tab-panel > .presets weiter unten). Rahmen und Titel erbt sie von den
+   section-Regeln oben. */
 .presets { margin: 1rem 1rem 0; }
 
 .preset-rows { padding: 0.55rem 0.8rem; display: grid; gap: 0.5rem; }
@@ -158,9 +161,10 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
 .preset-row select:focus, .preset-row input[type=text]:focus { outline: 1px solid var(--accent); }
 .preset-row select:disabled { color: var(--muted); }
 
-/* Melodie-Zuordnung. Steht wie die Presets ueber den Tabs. Der Warnton ist
-   Absicht: die Aktion dahinter ueberschreibt eine Datei und laesst sich nicht
-   zuruecknehmen. */
+/* Melodie-Zuordnung. Fuellt seit 2026-08-02 den Tonleiter-Tab allein; die
+   Raender gelten wie bei den Presets nur noch fuer den Rueckfall ohne Tabs.
+   Der Warnton ist Absicht: die Aktion dahinter ueberschreibt eine Datei und
+   laesst sich nicht zuruecknehmen. */
 .melody { margin: 1rem 1rem 0; }
 .melody-note {
   margin: 0;
@@ -860,6 +864,13 @@ input[type=color] {
 .tab-panel > details { grid-column: 1 / -1; }
 .tab-panel > .seq { margin: 0; }
 .tab-panel > .sc { margin: 0; }
+/* Die zwei umgehaengten Sektionen bringen ihre eigenen Raender mit (sie
+   standen frueher ausserhalb jedes Rasters); im Panel setzt sie das Raster.
+   Die Melodie-Zuordnung laeuft ueber die volle Breite: sie ist der einzige
+   Inhalt ihres Tabs und traegt einen Absatz Fliesstext, der in einer 340-px-
+   Spalte zu einer schmalen Saeule wuerde. */
+.tab-panel > .presets { margin: 0; }
+.tab-panel > .melody { margin: 0; grid-column: 1 / -1; }
 
 /* Ein Tab mit expanded-Flag (Farben) haengt seinen tab-extra-Block direkt
    ins Panel statt in ein <details>. Das Panel bringt seinen Rand schon mit,
