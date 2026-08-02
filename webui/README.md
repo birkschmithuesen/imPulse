@@ -152,10 +152,18 @@ liefert dafuer Struktur (`build_sequencer`, `build_speed_classes`,
   dort pruefbar ist), und je Track erscheint eine Warnzeile **nur dann**,
   wenn ein gesetzter `originStripeOverride` den Filter gerade aushebelt.
 - **Palette**: siehe unten, eigener Abschnitt.
-- **Speed-Klassen**: die fuenf Gewichte aus
+- **Grundtempo und Speed-Klassen**: ganz oben der Grundregler
+  `/net/impulse/speed` selbst, darunter Ein/Aus und die fuenf Gewichte aus
   `/net/impulse/speedQuantize/weight/*` plus ein Verteilungsbalken, der sie
   normiert als Prozente zeigt. Die Gewichte selbst muessen sich nicht auf 100
   summieren — normalisiert wird auf der Java-Seite (`SpeedQuantizer.pick`).
+  Der Grundregler steht seit 2026-08-02 hier und nicht mehr im Tab
+  **Impuls-Verhalten**: die Klassen 0,5x..8x tun nichts anderes, als ihn zu
+  vervielfachen, und ein Tabwechsel zwischen dem Wert und seinen Vielfachen
+  ist genau die Trennung, die den frueheren zweiten Basis-Regler
+  (`/net/impulse/speedQuantize/baseSpeed`) plausibel gemacht hat — siehe
+  „Ein Grundtempo, kein zweites" unten. Er sitzt **ueber** dem
+  Ein/Aus-Schalter, weil er in beiden Zustaenden gilt.
 - **Sound (SuperCollider)**: siehe unten, eigener Port.
 - **Mitschnitt**: der Aufnahme-Knopf ganz oben im Sound-Tab, siehe unten,
   eigener Abschnitt.
@@ -476,6 +484,64 @@ IMPULSE_AUTOCOMMIT=0 python3 server.py
 python3 server.py --autocommit-interval 3600   # oder nur seltener
 ```
 
+## Gesicherter Anzeigezustand (`webuiState.json`)
+
+Die Regler zeigen beim Start die Werte aus `data/remoteSettings.txt` — also
+den **Boot-Zustand von imPulse**, nicht das, was seither eingestellt wurde.
+Bis 2026-08-02 hiess das: jeder Neustart des UI-Prozesses (Rechner neu
+gestartet, Task neu angeworfen, `--debug`-Autoreload) stellte die Anzeige
+zurueck auf die Code-Defaults, obwohl die Installation laengst etwas anderes
+fuhr. Der Operator sah nicht mehr, wo er steht, und musste jeden Wert von Hand
+nachziehen.
+
+Deshalb schreibt der Server jede ueber **dieses UI** gesendete Wertaenderung
+zusaetzlich in eine kleine JSON-Datei, `webuiState.json` neben
+`remoteSettings.txt` (Pfad ueber `--ui-state` / `IMPULSE_UI_STATE`). Beim
+naechsten Start legt er sie ueber die frisch gelesenen Boot-Werte.
+
+```json
+{
+ "/net/impulse/nodeDeadTime": 0.35,
+ "/net/impulse/speed": 320
+}
+```
+
+Sechs Dinge, die man beim Aendern kennen muss:
+
+- **Beim Laden geht kein OSC raus.** Der Neustart eines *Anzeige*prozesses
+  ist kein Eingriff in die laufende Show. imPulse faehrt weiter seinen
+  eigenen Zustand; das UI zeigt nur wieder, was zuletzt darueber gesetzt
+  wurde, damit der Operator es nicht neu eintippen muss, falls er es erneut
+  senden will.
+- **Die Datei enthaelt ausschliesslich, was ueber dieses UI kam.** Was jemand
+  per `osc_send.py`, aus der IDE oder per Telegram an den Sketch schickt,
+  steht hier nicht — es gibt keinen Rueckkanal von imPulse hierher, und einen
+  zu bauen war ausdruecklich nicht gewuenscht (Birk, 2026-08-02). Dass eine
+  Aenderung ausserhalb des UI hier nicht auftaucht, ist gewolltes Verhalten,
+  kein Fehler.
+- **Ueberlagert wird genau EINMAL, beim Start des Servers.** Ein spaeteres
+  Neulesen von `remoteSettings.txt` (die mtime hat sich geaendert) heisst
+  „imPulse wurde neu gestartet" — dann faehrt der Sketch wirklich seine
+  Boot-Werte, und die alte Anzeige darueber zu legen behauptete einen
+  Zustand, den es gerade nicht mehr gibt.
+- **Eine eigene Datei, nicht `remoteSettings.txt`.** Die schreibt imPulse bei
+  jedem Start komplett neu; ein Fremdschreiber darin waere beim naechsten
+  Sketch-Start weg, und schlimmer: er wuerde ausgerechnet die mtime
+  veraendern, an der der Server einen imPulse-Neustart erkennt.
+- **Werte fuer Adressen, die es nicht mehr gibt, werden verworfen** — kein
+  Fehler, sondern der Normalfall nach einem umbenannten Parameter. Geklemmt
+  wird auf den Bereich aus `remoteSettings.txt`, dieselbe Regel wie beim
+  Preset-Laden.
+- **Kein Preset-Ersatz.** Presets sind benannte, vollstaendige Wertesaetze,
+  die imPulse selbst schreibt und laedt. Das hier ist Anzeigezustand einer
+  Maschine, steht in `.gitignore` und wird vom Auto-Commit bewusst **nicht**
+  gesichert (`WATCHED_PATTERNS` in `autocommit.py`): es aendert sich bei jedem
+  Reglerzug, das ergaebe alle zehn Minuten einen Commit.
+
+Ein Schreibfehler laesst die Aenderung nicht scheitern — die ist laengst per
+OSC raus, die Datei ist nur ihr Gedaechtnis. Er steht unter
+`GET /api/parameters` in `settings.uiState.error`.
+
 ## Normalisierung (der Fallstrick)
 
 `RemoteControlledFloatParameter.digestMessage` mappt eingehende Floats selbst:
@@ -499,6 +565,43 @@ Nebenbei: `Master/trace` und `Master/0/opacity/0.Impulse` sind in `mixer.java`
 Adressen ab, deshalb hat `server.py` einen eigenen, minimalen OSC-Encoder, der
 fuer genau diese Adressen einspringt (byte-identisch fuer alle uebrigen, siehe
 `test_webui.py`).
+
+## Ein Grundtempo, kein zweites
+
+`/net/impulse/speed` ist die **einzige** Quelle der Grundgeschwindigkeit.
+
+Bis 2026-08-02 gab es daneben `/net/impulse/speedQuantize/baseSpeed`
+(Bereich 0,1..2,0). Sobald die Tempo-Klassen eingeschaltet waren, verwarf
+`spawnSpeed()` in `LedNetworkTransportEffect.java` den Grundregler (Bereich
+1..1500) komplett und multiplizierte die Klassen auf den zweiten Wert. Drei
+Folgen, alle ohne Fehlermeldung:
+
+- Das Grundtempo war **unbedienbar** — die hoechste ueberhaupt erreichbare
+  Geschwindigkeit lag winzig unter dem, was der Regler versprach.
+- Die Speed-Kopplung unten rechnete `lifetime`, `nodeDeadTime` und
+  `randomSpawn/interval` auf einen Wert um, den gar niemand fuhr.
+- Es widersprach dem eigenen Kommentar im Code und in `CLAUDE.md`:
+  „Referenz der 1x-Klasse ist `/net/impulse/speed` selbst, kein eigener
+  Parameter".
+
+Der Parameter ist deshalb **ersatzlos entfernt** — auf der Java-Seite, im UI
+und in `ADDRESS_LABELS`. Die Klassen multiplizieren jetzt sichtbar auf den
+Regler, der in derselben Sektion direkt darueber steht. Ein aelteres Preset,
+das die Adresse noch mitbringt, meldet sie beim Laden als unbekannt und laesst
+alles andere unberuehrt; es klemmt nichts.
+
+Zwei Tests halten das fest (`SpeedConsolidationTest` in `test_webui.py`): die
+Adresse wird nirgends mehr registriert, und `spawnSpeed()` weist `base` genau
+**einmal** zu. Ein Java-Unit-Test kaeme nicht heran — die Methode haengt an
+vier `RemoteControlled*Parameter` und damit an oscP5, das `test/run.sh`
+bewusst nicht hat.
+
+Die Platzierung im Noten-Tab geht ueber `TAB_EXACT` in `server.py`, eine
+kleine Tabelle mit **exakter** Adressgleichheit, die vor `TAB_RULES`
+nachgeschlagen wird. Als Praefix ginge es nicht: `"/net/impulse/speed"` faengt
+auch `/net/impulse/speed/randomize/*` (der Sinus-Randomizer, gehoert zur
+Physik und teilt sich dort eine Gruppe mit dem Lifetime-Randomizer) und
+`/net/impulse/speedQuantize/*`.
 
 ## Speed-Kopplung
 
@@ -567,6 +670,7 @@ Parameterdatei mitgeben.
 | `--presets` / `IMPULSE_PRESETS`           | `presets/` neben `--settings`    |
 | `--palette` / `IMPULSE_PALETTE`           | `colorPalettes.txt` neben `--settings` |
 | `--state` / `IMPULSE_SONG_STATE`          | `songStructureState.txt` neben `--settings` |
+| `--ui-state` / `IMPULSE_UI_STATE`         | `webuiState.json` neben `--settings` |
 | `--osc-host` / `IMPULSE_OSC_HOST`         | `127.0.0.1`                 |
 | `--osc-port` / `IMPULSE_OSC_PORT`         | `8001`                      |
 | `--host` / `IMPULSE_WEBUI_HOST`           | `0.0.0.0`                   |
@@ -646,11 +750,35 @@ Feldern liefert, dass ein aelterer imPulse-Stand `None` statt einer leeren
 Sektion ergibt, dass kein Parameter doppelt gerendert wird (an einem echten
 Snapshot geprueft) und dass `SC_PARAMS` in beide Richtungen zur `.scd` passt.
 
-Dazu die Tab-Zuordnung: sechs Tabs in der festgelegten Reihenfolge, jede
+Dazu die Tab-Zuordnung: acht Tabs in der festgelegten Reihenfolge, jede
 Adresse in genau einem Tab, die Farb-Adressen in „Farben" und die
 Physik-Adressen weiterhin in „Impuls-Verhalten" (die Farb-Regeln stehen vor
 den allgemeinen, greifen sie zu breit, leert sich der Physik-Tab lautlos),
-und dass **keine** Gruppe aus allen Tabs herausfaellt.
+und dass **keine** Gruppe aus allen Tabs herausfaellt. Dazu `TAB_EXACT`:
+`/net/impulse/speed` landet bei den Noten, seine Nachbarn unter
+`/net/impulse/speed/randomize/` bleiben in der Physik — waere die Regel ein
+Praefix, wanderten sie mit.
+
+Dazu die Speed-Konsolidierung (`SpeedConsolidationTest`): die Adresse
+`/net/impulse/speedQuantize/baseSpeed` wird auf der Java-Seite nirgends mehr
+registriert, `spawnSpeed()` weist `base` genau einmal zu, die Sektion rendert
+den Grundregler selbst und nimmt ihn dafuer aus dem generischen Rendering, ein
+aelterer imPulse-Stand ohne `/net/impulse/speed` faellt auf `base: None`
+zurueck statt zu stuerzen, und die Speed-Kopplung haengt unveraendert an
+derselben Adresse.
+
+Dazu der gesicherte Anzeigezustand (`UiStateFileTest`,
+`UiStatePersistenceTest`, `UiStateEndpointTest`): Rundlauf schreiben→lesen,
+fehlende Datei als Normalfall, kaputte Datei als gemeldeter statt
+verschluckter Fehler, unbrauchbare Eintraege (Text, Liste, `true`, `NaN`,
+`Infinity`) einzeln uebersprungen, atomares Schreiben ohne Temp-Rest. Dazu der
+simulierte Neustart — eine zweite `ParameterStore`-Instanz auf demselben
+Pfadpaar: der gesetzte Wert kommt wieder, eine verschwundene Adresse wird
+verworfen, ein Wert ausserhalb der Range wird auf `remoteSettings.txt`
+geklemmt, ein imPulse-Neustart (neue mtime) ueberlagert **nicht** erneut, und
+ohne `ui_state_path` schreibt der Store gar nichts. Ueber die echten Endpoints
+schliesslich: `/api/set` und `/api/fadeout` landen in der Datei, ein frischer
+Server zeigt den Wert wieder — und beim Laden geht **kein** OSC raus.
 
 Dazu der Mitschnitt: der OSC-Encoder **und der neue Decoder** byteweise
 (Nachricht ohne Argument, Rundlauf mit int/float/String, nicht unterstuetzter

@@ -962,7 +962,16 @@ class TabLayoutTest(unittest.TestCase):
     def test_non_colour_impulse_and_node_addresses_stay_in_physics(self):
         # Die Farb-Regeln stehen VOR den allgemeinen -- greifen sie zu breit,
         # leert sich der Physik-Tab, ohne dass irgendwo ein Fehler entsteht.
-        for address in ("/net/impulse/speed", "/net/impulse/lifetime",
+        #
+        # /net/impulse/speed steht seit 2026-08-02 NICHT mehr in dieser Liste:
+        # er ist der einzige Eintrag in TAB_EXACT und gehoert zu den Noten
+        # (siehe test_addresses_go_where_the_brief_says). Seine Nachbarn unter
+        # /net/impulse/speed/randomize/ sind aber weiterhin Physik -- genau
+        # das ist der Grund, warum TAB_EXACT auf Gleichheit prueft und nicht
+        # eine sechste Praefix-Regel geworden ist.
+        for address in ("/net/impulse/lifetime",
+                        "/net/impulse/speed/randomize/enabled",
+                        "/net/impulse/speed/randomize/period",
                         "/net/impulse/splitSpeedJitter",
                         "/nodes/radius/central", "/nodes/times/recover"):
             self.assertEqual(server.tab_for_address(address),
@@ -1063,7 +1072,14 @@ class TabLayoutTest(unittest.TestCase):
             server.tab_for_address("/net/impulse/splitSpeedJitter"), "physik")
         self.assertEqual(
             server.tab_for_address("/net/impulse/splitLifetimeJitter"), "physik")
-        self.assertEqual(server.tab_for_address("/net/impulse/speed"), "physik")
+        # Der Grundregler steht seit 2026-08-02 bei den Noten, in derselben
+        # Sektion wie die Klassen 0,5x..8x, die ihn vervielfachen. Das geht
+        # nur ueber TAB_EXACT: als Praefix zoege "/net/impulse/speed" auch
+        # den Sinus-Randomizer und speedQuantize mit.
+        self.assertEqual(server.tab_for_address("/net/impulse/speed"), "noten")
+        self.assertEqual(
+            server.tab_for_address("/net/impulse/speed/randomize/enabled"),
+            "physik")
         # Farbe gehoert zu den Farben, NICHT zur Physik - dieselbe
         # Reihenfolge-Falle wie bei speedQuantize.
         self.assertEqual(server.tab_for_address("/net/impulse/color/r"), "farben")
@@ -1526,7 +1542,10 @@ class AddressLabelTest(unittest.TestCase):
             "/net/impulse/split/weight/all",
             "/net/impulse/split/weight/oneLess",
             "/net/impulse/split/weight/single",
-            "/net/impulse/speedQuantize/baseSpeed",
+            # /net/impulse/speedQuantize/baseSpeed stand hier bis 2026-08-02.
+            # Den Parameter gibt es nicht mehr (siehe
+            # SpeedConsolidationTest) -- ein Titel dafuer waere ein Eintrag
+            # in ADDRESS_LABELS, den nie wieder jemand aufraeumt.
             "/net/activateNode",
             "/net/activateStripe",
             "/preset/scheduler/enabled",
@@ -2552,6 +2571,386 @@ class RecordScdTest(unittest.TestCase):
     def test_the_command_port_matches_the_scd(self):
         # Die Kommandos gehen an denselben Port wie die Sound-Parameter.
         self.assertIn("~oscListenPort = %d;" % server.SC_OSC_PORT, self.scd)
+
+
+class SpeedConsolidationTest(unittest.TestCase):
+    """Ein einziger Grundregler fuer das Tempo, und er steht bei den Klassen.
+
+    Bis 2026-08-02 gab es zwei: /net/impulse/speed (Bereich 1..1500) und
+    /net/impulse/speedQuantize/baseSpeed (Bereich 0,1..2,0). Bei
+    eingeschalteten Tempo-Klassen verwarf spawnSpeed() den ersten komplett
+    und nahm den zweiten -- das Grundtempo war damit unbedienbar, und die
+    Zeitbasis-Kopplung im Web-UI (lifetime, nodeDeadTime,
+    randomSpawn/interval haengen an /net/impulse/speed) rechnete auf einem
+    Wert, den gar niemand fuhr.
+    """
+
+    JAVA = "LedNetworkTransportEffect.java"
+
+    def _java(self):
+        path = os.path.join(server.REPO_ROOT, self.JAVA)
+        if not os.path.exists(path):
+            self.skipTest("%s nicht gefunden" % self.JAVA)
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_java_side_registers_no_second_speed_parameter(self):
+        """Die Adresse darf nirgends mehr REGISTRIERT werden.
+
+        Geprueft wird auf den String in einem Parameter-Konstruktor, nicht
+        auf sein blosses Vorkommen: der Kommentar in spawnSpeed(), der den
+        Fehler erklaert, nennt die alte Adresse ausdruecklich und soll das
+        auch duerfen.
+        """
+        java = self._java()
+        self.assertNotIn('RemoteControlledFloatParameter('
+                         '"/net/impulse/speedQuantize/baseSpeed"', java)
+        self.assertNotIn("speedQuantizeBaseSpeed", java)
+
+    def test_the_java_side_keeps_impulse_speed_as_the_base(self):
+        """spawnSpeed() darf ``base`` nach der Zuweisung nicht ueberschreiben.
+
+        Das war der Fehler in genau einer Zeile: ``base=...`` ein zweites
+        Mal, nach dem Ein/Aus-Zweig. Ein Java-Unit-Test kaeme nicht heran --
+        die Methode haengt an vier RemoteControlled*Parameter und damit an
+        oscP5, das test/run.sh bewusst nicht hat.
+        """
+        java = self._java()
+        match = re.search(r"private float spawnSpeed\(\)\s*\{(.*?)\n  \}",
+                          java, re.S)
+        self.assertIsNotNone(match, "spawnSpeed() nicht gefunden")
+        body = match.group(1)
+        self.assertIn("float base=impulseSpeed.getValue();", body)
+        # Genau eine Zuweisung an base, und das ist die Deklaration.
+        assignments = re.findall(r"^\s*(?:float\s+)?base\s*=", body, re.M)
+        self.assertEqual(len(assignments), 1,
+                         "base wird in spawnSpeed() mehrfach gesetzt: %s"
+                         % assignments)
+
+    def test_the_section_carries_the_base_slider_itself(self):
+        by_address = {p.address: p for p in parse_settings("\n".join([
+            "int\t/net/impulse/speed\tx\t160\t1\t1500",
+            "int\t/net/impulse/speedQuantize/enabled\tx\t0\t0\t1",
+            "float\t/net/impulse/speedQuantize/jitter\tx\t0\t0\t1",
+        ] + ["float\t%s%s\tx\t0\t0\t100" % (server.SPEED_WEIGHT_PREFIX, s)
+             for s, _label in server.SPEED_CLASSES]))}
+        speed = server.build_speed_classes(by_address)
+        self.assertIsNotNone(speed)
+        self.assertEqual(speed["base"]["address"], server.SPEED_ADDRESS)
+        # Der zweite Regler ist weg, nicht nur unbenutzt.
+        self.assertNotIn("baseSpeed", speed)
+
+    def test_the_base_slider_is_taken_out_of_the_generic_rendering(self):
+        """Sonst stuende der Grundregler zweimal auf der Seite.
+
+        Dieselbe Regel wie bei sequencer_addresses() ueberall sonst: was eine
+        Spezial-Sektion selbst rendert, darf nicht noch einmal als
+        generischer Schieber erscheinen.
+        """
+        by_address = {p.address: p for p in parse_settings("\n".join([
+            "int\t/net/impulse/speed\tx\t160\t1\t1500",
+            "int\t/net/impulse/speedQuantize/enabled\tx\t0\t0\t1",
+        ] + ["float\t%s%s\tx\t0\t0\t100" % (server.SPEED_WEIGHT_PREFIX, s)
+             for s, _label in server.SPEED_CLASSES]))}
+        speed = server.build_speed_classes(by_address)
+        taken = server.sequencer_addresses(None, speed, None)
+        self.assertIn(server.SPEED_ADDRESS, taken)
+
+    def test_an_older_impulse_build_without_the_base_still_renders(self):
+        """Kein Absturz, wenn /net/impulse/speed fehlt -- ``base`` ist None."""
+        by_address = {p.address: p for p in parse_settings("\n".join([
+            "int\t/net/impulse/speedQuantize/enabled\tx\t0\t0\t1",
+        ] + ["float\t%s%s\tx\t0\t0\t100" % (server.SPEED_WEIGHT_PREFIX, s)
+             for s, _label in server.SPEED_CLASSES]))}
+        speed = server.build_speed_classes(by_address)
+        self.assertIsNotNone(speed)
+        self.assertIsNone(speed["base"])
+        self.assertNotIn(server.SPEED_ADDRESS,
+                         server.sequencer_addresses(None, speed, None))
+
+    def test_the_base_slider_is_not_listed_as_a_physics_primary(self):
+        """Ein Eintrag dort waere still wirkungslos und damit irrefuehrend."""
+        self.assertNotIn(server.SPEED_ADDRESS,
+                         server.TAB_PRIMARY[server.TAB_PHYSICS])
+
+    def test_the_coupling_still_hangs_on_the_base_address(self):
+        """Auftrag: nur die PLATZIERUNG aendert sich, nicht die Rechnung."""
+        self.assertEqual(server.SPEED_ADDRESS, "/net/impulse/speed")
+        self.assertNotIn(server.SPEED_ADDRESS, server.SPEED_COUPLED)
+        self.assertEqual(sorted(server.SPEED_COUPLED),
+                         ["/net/impulse/lifetime",
+                          "/net/impulse/nodeDeadTime",
+                          "/net/randomSpawn/interval"])
+
+    def test_exact_rules_beat_prefix_rules(self):
+        """TAB_EXACT ist der Grund, warum die Nachbarn nicht mitwandern."""
+        self.assertEqual(server.TAB_EXACT, {server.SPEED_ADDRESS: server.TAB_NOTES})
+        for prefix, _tab in server.TAB_RULES:
+            self.assertNotEqual(prefix, server.SPEED_ADDRESS,
+                                "als Praefix zoege er seine Nachbarn mit")
+
+
+class UiStateFileTest(unittest.TestCase):
+    """Lesen und Schreiben der Zustandsdatei, ohne Store und ohne Flask."""
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.path = os.path.join(self.directory, server.UI_STATE_FILENAME)
+
+    def test_a_missing_file_is_the_normal_case_not_an_error(self):
+        values, error = server.read_ui_state(self.path)
+        self.assertEqual(values, {})
+        self.assertIsNone(error)
+
+    def test_round_trip(self):
+        server.write_ui_state(self.path, {"/a": 1.5, "/b": 2})
+        values, error = server.read_ui_state(self.path)
+        self.assertIsNone(error)
+        self.assertEqual(values, {"/a": 1.5, "/b": 2.0})
+
+    def test_a_broken_file_is_reported_not_swallowed(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("{das ist kein JSON")
+        values, error = server.read_ui_state(self.path)
+        self.assertEqual(values, {})
+        self.assertTrue(error)
+
+    def test_a_json_array_is_reported_too(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("[1, 2, 3]")
+        values, error = server.read_ui_state(self.path)
+        self.assertEqual(values, {})
+        self.assertTrue(error)
+
+    def test_unusable_entries_are_skipped_without_costing_the_rest(self):
+        """Wie beim Parsen von remoteSettings.txt: eine kaputte Zeile darf
+        nicht den ganzen Rest kosten. ``true`` faellt bewusst mit heraus --
+        in Python ist bool eine int-Unterklasse, ein Schalter im UI ist aber
+        ein Zahlenwert und keine Wahrheit."""
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write('{"/gut": 3, "/text": "x", "/liste": [1],'
+                         ' "/bool": true, "/nichts": null}')
+        values, error = server.read_ui_state(self.path)
+        self.assertIsNone(error)
+        self.assertEqual(values, {"/gut": 3.0})
+
+    def test_infinities_and_nan_do_not_get_through(self):
+        """json.load nimmt Infinity/NaN klaglos an -- ein solcher Wert
+        landete sonst in einem Regler und machte die Anzeige unbrauchbar."""
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write('{"/a": Infinity, "/b": NaN, "/c": 1}')
+        values, _error = server.read_ui_state(self.path)
+        self.assertEqual(values, {"/c": 1.0})
+
+    def test_the_write_is_atomic_and_leaves_no_temp_file(self):
+        server.write_ui_state(self.path, {"/a": 1})
+        self.assertEqual(os.listdir(self.directory),
+                         [server.UI_STATE_FILENAME])
+
+    def test_writing_replaces_instead_of_appending(self):
+        server.write_ui_state(self.path, {"/a": 1, "/b": 2})
+        server.write_ui_state(self.path, {"/a": 3})
+        values, _error = server.read_ui_state(self.path)
+        self.assertEqual(values, {"/a": 3.0})
+
+    def test_the_default_path_sits_next_to_the_settings_file(self):
+        settings = os.path.join(self.directory, "remoteSettings.txt")
+        self.assertEqual(server.default_ui_state_path(settings), self.path)
+
+    def test_the_default_path_is_not_the_boot_snapshot(self):
+        """Es MUSS eine eigene Datei sein: remoteSettings.txt schreibt
+        imPulse bei jedem Start neu, und an ihrer mtime erkennt der Server,
+        dass der Sketch neu gestartet wurde."""
+        settings = os.path.join(self.directory, "remoteSettings.txt")
+        self.assertNotEqual(server.default_ui_state_path(settings), settings)
+
+
+class UiStatePersistenceTest(unittest.TestCase):
+    """Der eigentliche Zweck: ein Neustart des UI-Servers verliert nichts.
+
+    Ein "Neustart" ist hier eine neue ParameterStore-Instanz auf demselben
+    Pfadpaar -- genau das, was ein neu gestarteter Prozess tut.
+    """
+
+    SETTINGS = ("int\t/net/impulse/speed\tx\t160\t1\t1500\n"
+                "float\t/net/impulse/nodeDeadTime\tx\t0.5\t0\t10\n"
+                "int\t/net/sequencer/enabled\tx\t0\t0\t1\n")
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.settings = os.path.join(self.directory, "remoteSettings.txt")
+        self._write_settings(self.SETTINGS)
+        self.state = os.path.join(self.directory, server.UI_STATE_FILENAME)
+
+    def _write_settings(self, text):
+        with open(self.settings, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def _boot(self):
+        store = ParameterStore(path=self.settings, ui_state_path=self.state)
+        store.refresh(force=True)
+        return store
+
+    def test_a_value_set_through_the_ui_survives_a_restart(self):
+        first = self._boot()
+        self.assertEqual(first.values["/net/impulse/speed"], 160)
+        first.store("/net/impulse/speed", 320)
+
+        second = self._boot()
+        self.assertEqual(second.values["/net/impulse/speed"], 320)
+        # Die unberuehrten Adressen kommen weiter aus remoteSettings.txt.
+        self.assertEqual(second.values["/net/sequencer/enabled"], 0)
+
+    def test_nothing_is_written_without_a_state_path(self):
+        """Die Vorgabe bleibt nebenwirkungsfrei -- die Tests, die einen Store
+        direkt auf eine Preset-Datei im Checkout richten, duerfen dort keine
+        Datei anlegen."""
+        store = ParameterStore(path=self.settings)
+        store.refresh(force=True)
+        store.store("/net/impulse/speed", 320)
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_a_value_for_a_vanished_address_is_dropped_not_an_error(self):
+        server.write_ui_state(self.state, {"/net/impulse/speed": 320,
+                                           "/gibt/es/nicht": 7})
+        store = self._boot()
+        self.assertEqual(store.values["/net/impulse/speed"], 320)
+        self.assertNotIn("/gibt/es/nicht", store.values)
+        self.assertIsNone(store.ui_state_error)
+        # Und er wird beim naechsten Schreiben auch nicht wieder mitgefuehrt.
+        store.store("/net/impulse/speed", 100)
+        values, _error = server.read_ui_state(self.state)
+        self.assertNotIn("/gibt/es/nicht", values)
+
+    def test_a_saved_value_is_clamped_to_the_range_from_remote_settings(self):
+        """Dieselbe Regel wie beim Preset-Laden: massgeblich ist der Bereich
+        aus remoteSettings.txt, nicht der aus der zweiten Datei."""
+        server.write_ui_state(self.state, {"/net/impulse/nodeDeadTime": 99})
+        store = self._boot()
+        self.assertEqual(store.values["/net/impulse/nodeDeadTime"], 10.0)
+
+    def test_a_saved_value_keeps_the_type_of_its_parameter(self):
+        """Gerundet, nicht abgeschnitten -- derselbe coerce()-Weg wie beim
+        Einlesen von remoteSettings.txt und beim Preset-Laden. Die
+        Zustandsdatei traegt reines JSON und damit ueberall Floats; ohne
+        coerce() stuende in einem Int-Regler 320.7."""
+        server.write_ui_state(self.state, {"/net/impulse/speed": 320.7})
+        store = self._boot()
+        self.assertEqual(store.values["/net/impulse/speed"], 321)
+        self.assertIsInstance(store.values["/net/impulse/speed"], int)
+
+    def test_a_broken_state_file_does_not_stop_the_server(self):
+        with open(self.state, "w", encoding="utf-8") as handle:
+            handle.write("kaputt")
+        store = self._boot()
+        # Boot-Werte stehen, der Fehler ist nachschlagbar statt verschwiegen.
+        self.assertEqual(store.values["/net/impulse/speed"], 160)
+        self.assertTrue(store.ui_state_error)
+        self.assertTrue(store.snapshot()["settings"]["uiState"]["error"])
+
+    def test_an_impulse_restart_does_not_re_apply_the_old_display(self):
+        """Ein spaeteres Neulesen heisst: imPulse wurde neu gestartet.
+
+        Dann faehrt der Sketch wirklich seine Boot-Werte, und die alte
+        UI-Anzeige darueber zu legen behauptete einen Zustand, den es gerade
+        nicht mehr gibt. Ueberlagert wird deshalb nur EINMAL, beim Start des
+        Servers.
+        """
+        store = self._boot()
+        store.store("/net/impulse/speed", 320)
+        self._write_settings(self.SETTINGS.replace("\t160\t", "\t42\t"))
+        store.refresh(force=True)
+        self.assertEqual(store.values["/net/impulse/speed"], 42)
+
+    def test_repeated_stores_of_the_same_value_do_not_rewrite_the_file(self):
+        """Waehrend eines Reglerzugs kommt derselbe Wert mehrfach an."""
+        store = self._boot()
+        store.store("/net/impulse/speed", 320)
+        before = os.stat(self.state).st_mtime_ns
+        store.store("/net/impulse/speed", 320)
+        self.assertEqual(os.stat(self.state).st_mtime_ns, before)
+
+    def test_the_snapshot_reports_where_the_state_lives(self):
+        store = self._boot()
+        store.store("/net/impulse/speed", 320)
+        ui_state = store.snapshot()["settings"]["uiState"]
+        self.assertEqual(ui_state["path"], self.state)
+        self.assertEqual(ui_state["count"], 1)
+        self.assertIsNone(ui_state["error"])
+
+
+class UiStateEndpointTest(unittest.TestCase):
+    """Dasselbe ueber die echten Endpoints, mitsamt der Zusage "kein OSC".
+
+    Braucht Flask und wird sonst uebersprungen -- dasselbe Muster wie beim
+    Fade-Endpoint weiter oben.
+    """
+
+    def setUp(self):
+        if server.Flask is None:
+            self.skipTest("Flask nicht installiert")
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.settings = os.path.join(self.directory, "remoteSettings.txt")
+        with open(self.settings, "w", encoding="utf-8") as handle:
+            handle.write("int\t/net/impulse/speed\tx\t160\t1\t1500\n")
+            for channel, value in (("r", 0.97), ("g", 0.96), ("b", 0.56)):
+                handle.write("float\t/net/impulse/fadeOut/%s\tx\t%s\t0\t1\n"
+                             % (channel, value))
+        self.state = os.path.join(self.directory, server.UI_STATE_FILENAME)
+
+    def _client(self):
+        app = server.create_app(self.settings, "127.0.0.1", 9999,
+                                os.path.join(self.directory, "presets"),
+                                os.path.join(self.directory, "palette.txt"))
+        app.config["TESTING"] = True
+        return app.test_client()
+
+    def test_api_set_lands_in_the_state_file(self):
+        client = self._client()
+        payload = client.post("/api/set",
+                              json={"address": "/net/impulse/speed",
+                                    "value": 80, "couple": False}).get_json()
+        self.assertTrue(payload["ok"])
+        values, error = server.read_ui_state(self.state)
+        self.assertIsNone(error)
+        self.assertEqual(values, {"/net/impulse/speed": 80.0})
+
+    def test_api_fadeout_lands_in_the_state_file(self):
+        client = self._client()
+        self.client_payload = client.post(
+            "/api/fadeout",
+            json={"r": 1.0, "g": 0.5, "b": 0.0, "decay": 0.9}).get_json()
+        self.assertTrue(self.client_payload["ok"])
+        values, _error = server.read_ui_state(self.state)
+        self.assertEqual(sorted(values),
+                         ["/net/impulse/fadeOut/b", "/net/impulse/fadeOut/g",
+                          "/net/impulse/fadeOut/r"])
+
+    def test_a_fresh_server_shows_the_value_again(self):
+        client = self._client()
+        client.post("/api/set", json={"address": "/net/impulse/speed",
+                                      "value": 80, "couple": False})
+        restarted = self._client()
+        payload = restarted.get("/api/parameters").get_json()
+        self.assertEqual(payload["values"]["/net/impulse/speed"], 80)
+
+    def test_loading_the_state_sends_no_osc(self):
+        """Die zentrale Zusage: der Neustart eines ANZEIGEprozesses ist kein
+        Eingriff in die laufende Show. imPulse faehrt weiter seinen eigenen
+        Boot-Zustand; das UI zeigt nur wieder, was zuletzt gesetzt wurde.
+        """
+        server.write_ui_state(self.state, {"/net/impulse/speed": 80})
+        sent = []
+        original = server.OscSender.send
+        server.OscSender.send = lambda self, *a, **k: sent.append(a)
+        self.addCleanup(setattr, server.OscSender, "send", original)
+        client = self._client()
+        payload = client.get("/api/parameters").get_json()
+        self.assertEqual(payload["values"]["/net/impulse/speed"], 80)
+        self.assertEqual(sent, [])
 
 
 if __name__ == "__main__":
