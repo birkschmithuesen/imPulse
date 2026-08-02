@@ -271,6 +271,7 @@ class GroupingTest(unittest.TestCase):
         text = "\n".join([
             "int\t/net/impulse/energyExponent\td\t2\t1\t10",
             "int\t/net/impulse/oscMaxCount\td\t32\t0\t256",
+            "float\t/net/hitNode/rateHz\td\t100.0\t1.0\t200.0",
             "int\t/net/impulse/speed\td\t160\t1\t1500",
         ])
         groups = {g["key"]: g for g in build_groups(parse_settings(text))}
@@ -278,10 +279,38 @@ class GroupingTest(unittest.TestCase):
         advanced_addrs = {c["address"] for c in groups[ADVANCED_GROUP_KEY]["controls"]}
         self.assertEqual(advanced_addrs, ADVANCED_ADDRESSES & {
             "/net/impulse/energyExponent", "/net/impulse/oscMaxCount",
+            "/net/hitNode/rateHz",
         })
         self.assertEqual(groups[ADVANCED_GROUP_KEY]["title"], "Advanced")
         # speed bleibt in seiner regulaeren Gruppe, wandert nicht mit
         self.assertNotIn("/net/impulse/speed", advanced_addrs)
+        # Und die Notbremse bekommt keine eigene Gruppe "/net/hitNode", in der
+        # sie als einziger Schieber unter einer rohen Adresse als Ueberschrift
+        # staende -- genau der Fall, den GROUP_TITLE_OVERRIDES sonst abfangen
+        # muesste.
+        self.assertNotIn("net/hitNode", groups)
+
+    def test_the_advanced_group_stays_on_the_physics_tab(self):
+        """build_tabs() ordnet eine Gruppe ueber die Adresse ihres ERSTEN
+        Reglers zu, und die Regler sind nach Adresse sortiert.
+
+        /net/hitNode/rateHz sortiert vor /net/impulse/* und bestimmt damit
+        seit 2026-08-02 den Tab der ganzen Advanced-Gruppe. Festgehalten wird
+        hier das Ergebnis, nicht die Regel: schoebe jemand /net/hitNode/ auf
+        einen anderen Tab, naehme es die zwei Impuls-Regler stillschweigend
+        mit -- ohne Fehler, sie waeren nur woanders.
+        """
+        text = "\n".join([
+            "int\t/net/impulse/energyExponent\td\t2\t1\t10",
+            "int\t/net/impulse/oscMaxCount\td\t32\t0\t256",
+            "float\t/net/hitNode/rateHz\td\t100.0\t1.0\t200.0",
+        ])
+        groups = build_groups(parse_settings(text))
+        advanced = [g for g in groups if g["key"] == ADVANCED_GROUP_KEY][0]
+        self.assertEqual(advanced["controls"][0]["address"], "/net/hitNode/rateHz")
+        tabs = {t["id"]: t for t in server.build_tabs(groups, None, None)}
+        self.assertIn(ADVANCED_GROUP_KEY,
+                      [g["key"] for g in tabs[server.TAB_PHYSICS]["groups"]])
 
     def test_advanced_group_sorts_after_regular_groups(self):
         text = "\n".join([
@@ -1195,6 +1224,9 @@ class TabLayoutTest(unittest.TestCase):
         # Farbe gehoert zu den Farben, NICHT zur Physik - dieselbe
         # Reihenfolge-Falle wie bei speedQuantize.
         self.assertEqual(server.tab_for_address("/net/impulse/color/r"), "farben")
+        # Der Sendetakt der Knotentoene ist Netzlast, nicht Klangfarbe: er
+        # gehoert zu den Impuls-Reglern und nicht ins Sound-Design.
+        self.assertEqual(server.tab_for_address("/net/hitNode/rateHz"), "physik")
         self.assertEqual(server.tab_for_address("/nodes/times/recover"), "physik")
         self.assertEqual(server.tab_for_address("/songStructure/enabled"), "song")
         self.assertEqual(
@@ -1660,6 +1692,8 @@ class AddressLabelTest(unittest.TestCase):
             # in ADDRESS_LABELS, den nie wieder jemand aufraeumt.
             "/net/activateNode",
             "/net/activateStripe",
+            # Der Sendetakt der Knotentoene, seit 2026-08-02 (HitNodeOscThrottle).
+            "/net/hitNode/rateHz",
             "/preset/scheduler/enabled",
             "/preset/scheduler/interval",
             "/songStructure/enabled",

@@ -49,6 +49,20 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   RemoteControlledFloatParameter impulseOscRate;      // Hz, 0 schaltet ab
   RemoteControlledIntParameter impulseOscMaxCount;    // Obergrenze je Takt
 
+  // Sendetakt fuer /net/hitNode - die Nachricht, die auf der Klangseite
+  // wirklich Synths erzeugt. Anders als impulseThrottle waehlt diese Drossel
+  // nicht aus, sie STRECKT: jeder Treffer kommt, nur nicht alle in derselben
+  // Millisekunde. Begruendung und Vorfall stehen in HitNodeOscThrottle.java.
+  final HitNodeOscThrottle hitNodeThrottle = new HitNodeOscThrottle();
+  RemoteControlledFloatParameter hitNodeOscRate;      // Hz, Notbremse
+  // Stand des Verwurfszaehlers bei der letzten Meldung, und wann die war.
+  // Am Deckel verworfene Treffer sind ausbleibende Toene und sollen nicht
+  // still passieren - eine Meldung je Treffer waere bei Dauerueberlast
+  // allerdings genau die Log-Flut, die dieser Fix verhindern will.
+  private int lastReportedHitNodeDrops = 0;
+  private double lastHitNodeDropReport = Double.NEGATIVE_INFINITY;
+  private static final double DROP_REPORT_INTERVAL_S = 5.0;
+
   //settings
   RemoteControlledFloatParameter nodeDeadTime; // Time between two activations of a node
   // Energiezerfall pro Sekunde, also umgekehrt proportional zur Lebensdauer eines
@@ -404,6 +418,25 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     impulseOscRate = new RemoteControlledFloatParameter("/net/impulse/oscRate", 10f, 0f, 40f);
     impulseOscMaxCount = new RemoteControlledIntParameter("/net/impulse/oscMaxCount", 32, 0, 256);
 
+    // Hoechste Rate, mit der Node-Treffer an die Klangseite gehen. Es ist eine
+    // NOTBREMSE gegen den Extremfall, kein gestalterischer Regler: der
+    // Auslieferungswert liegt bewusst so hoch, dass er im Normalbetrieb nie
+    // greift.
+    //
+    // Die Rechnung dahinter: 92 Knoten, jeder durch /net/impulse/nodeDeadTime
+    // (Auslieferungswert 5 s) auf hoechstens einen Treffer je 5 s begrenzt,
+    // macht rund 18 Treffer/s. Aus einem Treffer werden bis zu drei gemeldete
+    // Kinder (SplitFanout), also grob 55 Meldungen/s als obere Schranke bei
+    // Auslieferungswerten - und das ist schon der theoretische Vollausbau, bei
+    // dem jeder Knoten dauernd am Anschlag feuert. 100 Hz liegt darueber und
+    // fuegt damit keine hoerbare Latenz hinzu.
+    //
+    // Nach unten offen bis 1 Hz, damit der Wert an der Installation auch
+    // wirklich als Bremse taugt; die Untergrenze ist NICHT 0. Ein
+    // /net/hitNode-Strom "aus" waere eine stumme Installation, kein Not-Aus -
+    // anders als bei /net/impulse/oscRate, wo genau das der Sinn ist.
+    hitNodeOscRate = new RemoteControlledFloatParameter("/net/hitNode/rateHz", 100f, 1f, 200f);
+
     OscMessageDistributor.registerAdress("/net/activateNode", this);
     OscMessageDistributor.registerAdress("/net/activateStripe", this);
 
@@ -693,6 +726,11 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
         iter.remove();
       }
     }
+    // Erst die Knotentoene, dann der Positionsstrom - dieselbe Reihenfolge
+    // wie vor der Drossel, als sendOscMessage() noch mitten in der Schleife
+    // sendete. Auf der Klangseite kommt die Glocke damit weiterhin vor der
+    // Drohne desselben Impulses.
+    sendHitNodeStream(currentTime);
     sendImpulseStream(currentTime);
     return bufferLedColors;
   }
@@ -947,7 +985,47 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   // am aeussersten LED-Index): der Treffer bleibt jetzt stumm, wo er vorher
   // eine Glocke ausloeste. Das ist die Zusage dieses Verhaltens - kein
   // Impuls, kein Ton -, nicht ein uebersehener Fall.
+  //
+  // Gesendet wird hier NICHT sofort, sondern eingereiht: das Datagramm geht in
+  // sendHitNodeStream() raus, sobald /net/hitNode/rateHz es erlaubt. Im
+  // Normalbetrieb ist das derselbe Frame - die Drossel ist eine Notbremse
+  // gegen Bursts, siehe HitNodeOscThrottle.java.
   private void sendOscMessage(PendingSpawn child) {
+    hitNodeThrottle.enqueue(child);
+  }
+
+  // Die faelligen Treffer aus der Warteschlange rausschicken.
+  //
+  // Steht wie sendImpulseStream() am Ende von drawMe() und nicht am Anfang:
+  // die Treffer dieses Frames entstehen in der Zeichenschleife darueber, und
+  // ein Treffer soll in dem Frame rausgehen, in dem er entstanden ist, statt
+  // einen Frame lang zu warten.
+  private void sendHitNodeStream(double currentTime) {
+    List<PendingSpawn> due=hitNodeThrottle.due(currentTime, hitNodeOscRate.getValue());
+    for (int i=0; i<due.size(); i++) {
+      emitHitNode(due.get(i));
+    }
+    // Am Deckel verworfene Treffer sind Toene, die ausbleiben. Sie zu melden
+    // ist der Unterschied zwischen einem bekannten Kompromiss und einem
+    // stillen Fehler - hoechstens alle DROP_REPORT_INTERVAL_S Sekunden, weil
+    // eine Meldung je Treffer bei Dauerueberlast dieselbe Flut im Log waere,
+    // die auf der Klangseite gerade behoben wird.
+    int drops=hitNodeThrottle.droppedCount();
+    if (drops > lastReportedHitNodeDrops
+        && currentTime-lastHitNodeDropReport >= DROP_REPORT_INTERVAL_S) {
+      System.out.println("WARNUNG: /net/hitNode ueberlastet - "
+          +(drops-lastReportedHitNodeDrops)+" Treffer verworfen ("+drops
+          +" insgesamt). /net/hitNode/rateHz steht auf "
+          +hitNodeOscRate.getValue()+" Hz.");
+      lastReportedHitNodeDrops=drops;
+      lastHitNodeDropReport=currentTime;
+    }
+  }
+
+  // Das eigentliche Datagramm. Getrennt von sendOscMessage(), damit die
+  // Entscheidung "wann" und der Aufbau "was" nicht in derselben Methode
+  // stehen - der Aufbau ist unveraendert.
+  private void emitHitNode(PendingSpawn child) {
     OscMessage myMessage = new OscMessage("/net/hitNode");
     myMessage.add(child.nodeId);
     myMessage.add(child.energy);
