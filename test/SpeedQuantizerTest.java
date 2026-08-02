@@ -93,6 +93,24 @@ public class SpeedQuantizerTest {
           3, SpeedQuantizer.pick(nurVier, i/100.0));
     }
 
+    // ---- decayScaleFor: Kopplung Speed-Klasse -> Zerfall (Kettenreaktions-Fix) ----
+    // Dieselbe Zahl wie multiplierAt() fuer jede der fuenf Klassen - ein
+    // M-fach schneller Impuls soll M-mal schneller zerfallen, damit die
+    // zurueckgelegte Grunddistanz unabhaengig von der Speed-Klasse bleibt.
+    for (int i = 0; i < SpeedQuantizer.MULTIPLIERS.length; i++) {
+      Check.near("decayScaleFor(" + i + ") == multiplierAt(" + i + ")",
+          SpeedQuantizer.multiplierAt(i), SpeedQuantizer.decayScaleFor(i), 1e-9);
+    }
+    Check.near("0.5x-Klasse zerfaellt halb so schnell",
+        0.5, SpeedQuantizer.decayScaleFor(0), 1e-9);
+    Check.near("8x-Klasse zerfaellt achtfach so schnell",
+        8.0, SpeedQuantizer.decayScaleFor(4), 1e-9);
+    // Entartete Indizes verhalten sich wie bei multiplierAt(): Normalfall
+    Check.near("Index unter 0 gibt den Normalfall-Zerfall",
+        1.0, SpeedQuantizer.decayScaleFor(-1), 1e-9);
+    Check.near("Index ueber der Liste gibt den Normalfall-Zerfall",
+        1.0, SpeedQuantizer.decayScaleFor(99), 1e-9);
+
     System.exit(Check.report("SpeedQuantizerTest"));
   }
 }

@@ -752,7 +752,7 @@ erreichbar. Sie sind jetzt 24 `RemoteControlledFloatParameter` unter
   fest). Ein beim Umbau vertauschter Kanal fiele sonst erst an der
   Installation auf, und dann als „die Farben stimmen irgendwie nicht mehr".
 
-Bei einem Node-Treffer erhält jeder Zweig aktuell die **volle** Energie des Elternimpulses (`childEnergy = curActivation.energy`) — ein bewusster Quick-Fix, jede Aufspaltung vervielfacht also die Gesamtenergie. Die auskommentierte Zeile darüber zeigt die energieerhaltende Variante.
+Bei einem Node-Treffer erhält jeder Zweig je nach `/net/impulse/split/energyConservation` (int 0/1, Default **0**) entweder die **volle** Energie des Elternimpulses (`childEnergy = curActivation.energy`, Default-Verhalten, live gefahren) oder eine anteilig **und** halbiert geteilte Energie (`childEnergy = curActivation.energy/nActivations/2.0f`, bei 1). Ohne Teilung vervielfacht jede Aufspaltung die Gesamtenergie im Netz — mit hoher Speed (und dadurch vielen Kreuzungstreffern, siehe Kettenreaktions-Fix unten) verschärft das den Effekt zusätzlich zum unkontrollierten `decayScale`. Der Parameter war bis 2026-08-02 nur eine auskommentierte Zeile im Code; siehe `activationEncounteredNode()` für die Formel.
 
 **Split-Varianz** (`SplitVariance.java`, angewandt in `activationEncounteredNode()`):
 jedes Kind einer Aufspaltung kann eine leicht abweichende Geschwindigkeit und
@@ -777,10 +777,53 @@ für alle Zweige eines Treffers würde die Geschwister wieder gleichschalten,
 also genau das nicht lösen, worum es geht.
 
 `SplitVariance.jitter()` klemmt den Faktor nach unten auf `MIN_FACTOR = 0.05`.
-Bei voller Stärke und einem Zufallswert von 0 wäre er sonst exakt 0 — ein Kind
+Bei voller Stärke und einem Zufallswert von 0 wäre er sonst exakt 0 - ein Kind
 mit Speed 0 stünde für immer still, eines mit `decayScale` 0 verlöre nie
 Energie und stürbe nie. Zwei unsterbliche Zustände, die das Netz über eine
 Nacht volllaufen lassen.
+
+**Kettenreaktion bei hoher Speed - Fix (2026-08-02):** bis dahin war
+`decayScale` an zwei Stellen entkoppelt von der tatsächlichen
+Impulsgeschwindigkeit, mit demselben Grundproblem: der Energiezerfall ist
+zeitbasiert (`energy -= timeStep*impulseLifetime*decayScale`), nicht
+streckenbasiert. Ein schneller Impuls legt in seiner Lebensdauer also eine
+proportional größere Strecke zurück, trifft mehr Kreuzungen, splittet sich
+dort öfter - und wenn die Kinder die hohe Speed erben, aber normal langsam
+zerfallen, eskaliert jede Generation weiter.
+
+- **Spawn-Kopplung** (`SpeedQuantizer.decayScaleFor()`, angewandt in
+  `spawnSpeed()`): wenn `speedQuantize` eine Klasse mit Multiplikator M
+  zieht, bekommt der gespawnte Impuls `decayScale = M` (`decayScaleFor()` ==
+  `multiplierAt()`, eigene Methode fürs lesbare Vokabular an der
+  Aufrufstelle, nicht weil die Zahlen unterschiedlich wären). Ein 8x-Impuls
+  zerfällt jetzt achtfach so schnell, die Grunddistanz bis zum Energie-Aus
+  bleibt über alle Speed-Klassen gleich. `spawnSpeed()` merkt sich den
+  gezogenen decayScale im Feld `lastSpawnDecayScale`, `spawnDecayScale()`
+  liest ihn - beide Werte MÜSSEN aus derselben Ziehung stammen (ein zweiter,
+  unabhängiger `SpeedQuantizer.pick()`-Aufruf träfe eine andere Klasse und
+  ließe Geschwindigkeit und Zerfall auseinanderlaufen, ohne dass sich das an
+  einer der beiden Zahlen zeigt). Alle fünf Spawn-Pfade rufen deshalb
+  `spawnSpeed()` und direkt danach `spawnDecayScale()` für denselben Impuls.
+  Bei `speedQuantizeEnabled=0` bleibt `decayScale=1.0`, bitgleich dem
+  vorherigen Verhalten.
+- **Split-Vererbung**: die beiden `SplitVariance.jitter(...)`-Aufrufe in
+  `activationEncounteredNode()` streuen jetzt um `curActivation.decayScale`
+  als Basis, nicht mehr um `1f`. Vorher fiel jedes Split-Kind beim Zerfall auf
+  den Normalwert zurück, unabhängig davon, wie hoch (oder niedrig) der
+  Elternimpuls stand - ein schnelles Kind (hohe geerbte Speed) zerfiel dann
+  normal langsam und legte dadurch MEHR Strecke zurück als sein Elternimpuls.
+- **Obergrenze `SplitVariance.MAX_DECAY_SCALE = 32`**: ein `MAX_FACTOR`
+  analog zu `MIN_FACTOR` direkt in `jitter()` hätte das eigentliche Problem
+  nicht gelöst - der Faktor je Aufruf ist durch `amount<=1` schon auf
+  höchstens das Doppelte begrenzt, das ist keine Kettenreaktion, sondern eine
+  einzelne Streuung. Das Risiko entsteht erst durch WIEDERHOLTES Anwenden
+  über mehrere Split-Generationen (Kind erbt den schon gestreuten Wert des
+  Elternimpulses als neue Basis). Die Klemmung sitzt deshalb im separaten
+  `SplitVariance.clampDecayScale()`, angewandt auf das Ergebnis von
+  `jitter()` an beiden Aufrufstellen in `activationEncounteredNode()`, nicht
+  in der Formel selbst. 32 = ein zweiter voller Verdopplungsschritt über der
+  höchsten Speed-Klasse (8x); bei `splitLifetimeJitter=0` (Auslieferungswert)
+  greift die Klemmung nie.
 
 **Split-Anzahl und Split-Versatz** (`SplitFanout.java`, `SplitStagger.java`,
 angewandt in `activationEncounteredNode()` / `spawnSplitChildren()` /
