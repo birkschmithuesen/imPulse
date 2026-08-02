@@ -731,6 +731,33 @@ input[type=color] {
 .help.warn { color: var(--warn); }
 
 /* ---------------------------------------------------------------------------
+   Ruhemomente (Pause).
+
+   Drei benannte Bloecke statt sieben Schiebern in einer Reihe: wann kann eine
+   Pause beginnen, wie lange dauert sie, wen schaltet sie stumm. Die
+   Ueberschrift eines Blocks ist eine ausgeschriebene Frage und gehoert
+   sichtbar ueber seine Regler -- ohne sie war "0,25" eine Zahl ohne Bezug.
+
+   Die Beschriftungsspalte ist hier breiter als in den Track-Karten des
+   Sequencers: dort steht "Wdh." neben fuenf gleichartigen Feldern, hier
+   traegt die Beschriftung die Einheit ("Pruefintervall (Takte)") und darf
+   nicht umbrechen.
+   --------------------------------------------------------------------------- */
+
+.pause-block { display: grid; gap: 0.3rem; }
+
+.pause-block-name {
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+}
+
+.pause-block .mini-row > span { flex-basis: 10.5rem; }
+
+.pause-targets { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+/* ---------------------------------------------------------------------------
    Vierkanal-Mitschnitt.
 
    Ein grosser Knopf, weil er waehrend eines Drehs im Vorbeigehen und oft auf
@@ -802,6 +829,9 @@ input[type=color] {
   .seq, .sc, .rec { margin-left: 0.6rem; margin-right: 0.6rem; }
   .seq-tracks { grid-template-columns: 1fr; padding: 0.6rem; }
   .mini-row > span { flex-basis: 4.4rem; }
+  /* Auch schmal bleibt die Einheit stehen -- sie ist der Punkt der
+     Beschriftung, nicht ihr Schmuck. Zwei Zeilen sind hier hinnehmbar. */
+  .pause-block .mini-row > span { flex-basis: 7rem; }
   /* Auf dem Telefon bleibt vom 4x4-Gitter nur ein Streifen je Zelle uebrig;
      die Zahl ist dort wichtiger als der Schieber. */
   .song-cell .mini-row output { flex-basis: 1.8rem; }

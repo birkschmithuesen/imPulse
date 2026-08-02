@@ -1633,6 +1633,54 @@ function weightBank(weights, values, emptyText, options) {
   return { bar: bar, sliders: group, redraw: redraw };
 }
 
+/* Ein Not-Aus im Stil der Sektionen: Leuchtpunkt, Klartext-Zustand, in der
+ * controls-Map eingetragen (sonst erreichte ihn kein Preset).
+ *
+ * Dieselbe Bauform wie die von Hand gebauten Schalter in buildSequencer/
+ * buildSpeedClasses/buildSplit -- hier als Funktion, weil die Ruhemomente
+ * allein drei davon brauchen: an/aus plus die zwei Ebenen, die eine Pause
+ * stummschaltet.
+ *
+ * onChange bekommt den Zustand als BOOLEAN und wird auch beim stillen ersten
+ * Setzen gerufen; daran haengen die Hinweiszeilen, die nur dann dastehen,
+ * wenn sie zutreffen. */
+function sectionToggle(param, initial, onText, offText, onChange) {
+  const power = document.createElement('label');
+  power.className = 'seq-power';
+  power.style.justifySelf = 'start';
+  power.title = param.address + (param.help ? ' – ' + param.help : '');
+
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.setAttribute('aria-label', param.label || param.address);
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  const text = document.createElement('span');
+  power.appendChild(box);
+  power.appendChild(dot);
+  power.appendChild(text);
+
+  function apply(value, silent) {
+    const on = Number(value) >= 1;
+    box.checked = on;
+    power.classList.toggle('on', on);
+    text.textContent = on ? onText : offText;
+    if (!silent) { queueSend(param.address, on ? 1 : 0); }
+    if (onChange) { onChange(on); }
+  }
+  box.addEventListener('change', () => apply(box.checked ? 1 : 0, false));
+  apply(initial, true);
+
+  const handle = {
+    element: power,
+    set: (value, silent) => apply(value, silent !== false),
+    get: () => (box.checked ? 1 : 0),
+    flash: () => {},
+  };
+  controls.set(param.address, handle);
+  return handle;
+}
+
 /* Notenwert-Leiste: Symbol UND Kuerzel nebeneinander. Nicht jede
  * Windows-Schrift hat U+1D15D..U+1D161 -- ein Symbol allein waere dort ein
  * leeres Kaestchen und der Track unbeschriftet. */
@@ -2032,6 +2080,219 @@ function buildSequencer(data, host) {
     section.appendChild(help);
   }
 
+  host.appendChild(section);
+}
+
+/* Takte als Zahl: ganze ohne Nachkomma, krumme mit einer Stelle. Die
+ * Pausen-Regler sind Floats mit einer feinen Schrittweite, "8.0 Takte" liest
+ * sich aber wie eine Messung statt wie eine Einstellung. */
+function formatBars(value) {
+  const v = Number(value);
+  if (!isFinite(v)) { return '?'; }
+  return v % 1 === 0 ? String(v) : v.toFixed(1);
+}
+
+/* Ruhemomente (Pause): der Gate, der beiden Spawn-Ebenen gelegentlich den
+ * Mund verbietet.
+ *
+ * Eigene Sektion und nicht sieben Schieber zwischen den RandomSpawn-Reglern:
+ * die sieben Werte sind EIN Mechanismus. Zwei Erklaerungen darin sind
+ * dynamisch und keine feste Zeile, weil sie sonst in dem Moment veralten, in
+ * dem jemand den Regler bewegt, auf den sie sich beziehen:
+ *
+ *  - die Wahrscheinlichkeit nennt das Pruefintervall, auf das sie sich
+ *    bezieht ("alle 8 Takte"), und rechnet den mittleren Abstand aus. Ohne
+ *    das ist "0,25" eine Zahl ohne Einheit -- genau der Einwand, mit dem
+ *    diese Sektion angefangen hat.
+ *  - die Pausendauer ist eine SPANNE, aus der gleichverteilt gezogen wird
+ *    (PauseGate.drawLength), keine zwei unabhaengigen Zahlen. */
+function buildPause(data, host) {
+  const pause = data.pause;
+  if (!pause) {
+    // Aelterer imPulse-Stand ohne /net/pause/*: nichts zeigen, die Parameter
+    // waeren dann ohnehin nicht da.
+    return;
+  }
+
+  const section = document.createElement('section');
+  section.className = 'seq';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Ruhemomente (Pause)';
+  section.appendChild(title);
+
+  const body = document.createElement('div');
+  body.style.padding = '0.7rem 0.8rem';
+  body.style.display = 'grid';
+  body.style.gap = '0.6rem';
+
+  // --- An/Aus, dazu der Hinweis auf einen Zustand ohne Wirkung ------------
+  // Beides muss vor dem Schalter stehen: sein onChange laeuft schon beim
+  // stillen ersten Setzen.
+  const targetStates = [];
+  let pauseOn = false;
+  const idle = document.createElement('p');
+  idle.className = 'help warn';
+  idle.hidden = true;
+  idle.textContent = 'Keine Ebene angehakt – es entstehen zwar Pausen, aber '
+    + 'stumm geschaltet wird nichts.';
+
+  function refreshIdle() {
+    idle.hidden = !(pauseOn && targetStates.length
+                    && targetStates.every((on) => !on));
+  }
+
+  body.appendChild(sectionToggle(pause.enabled,
+    data.values[pause.enabled.address],
+    'wuerfelt Pausen', 'nie Pause',
+    (on) => { pauseOn = on; refreshIdle(); }).element);
+
+  if (pause.help) {
+    const help = document.createElement('p');
+    help.className = 'help';
+    help.textContent = pause.help;
+    body.appendChild(help);
+  }
+
+  const titles = pause.blockTitles || {};
+
+  /* Ein benannter Block: Ueberschrift, Schieber, Erklaerungssatz. Die drei
+   * Fragen (wann, wie wahrscheinlich, wie lange) stehen damit ALS FRAGE ueber
+   * ihren Reglern statt nur in einem Fliesstext darunter - der Block ist auch
+   * dann eindeutig, wenn jemand nur die Beschriftungen ueberfliegt. */
+  function pauseBlock(titleKey) {
+    const block = document.createElement('div');
+    block.className = 'pause-block';
+    if (titles[titleKey]) {
+      const name = document.createElement('span');
+      name.className = 'pause-block-name';
+      name.textContent = titles[titleKey];
+      block.appendChild(name);
+    }
+    return block;
+  }
+
+  // --- (a) nach wieviel Takten, (b) mit welcher Wahrscheinlichkeit --------
+  const chance = document.createElement('p');
+  chance.className = 'help';
+  let probValue = pause.probability
+    ? Number(data.values[pause.probability.address]) : NaN;
+  let barsValue = pause.checkIntervalBars
+    ? Number(data.values[pause.checkIntervalBars.address]) : NaN;
+
+  function refreshChance() {
+    if (!isFinite(probValue) || !isFinite(barsValue)) {
+      // Unvollstaendiger Dump: lieber gar kein Satz als einer mit einer
+      // Luecke darin.
+      chance.hidden = true;
+      return;
+    }
+    chance.hidden = false;
+    let text = 'Alle ' + formatBars(barsValue) + ' Takte faellt eine '
+      + 'Entscheidung; mit ' + Math.round(probValue*100) + ' % beginnt dann '
+      + 'eine Pause.';
+    text += probValue > 0
+      ? ' Im Mittel also etwa alle '
+        + formatBars(Math.round(barsValue/probValue)) + ' Takte eine.'
+      : ' Bei 0 % beginnt nie eine.';
+    chance.textContent = text;
+  }
+
+  // Erst das Intervall, dann die Chance darauf - in derselben Reihenfolge,
+  // in der der Satz darunter sie nennt und in der Java sie auswertet
+  // (PauseGate.tick: erst nextCheckBeat, dann der Wurf).
+  const when = pauseBlock('when');
+  if (pause.checkIntervalBars) {
+    // Die Einheit steht in der Beschriftung, nicht im Ausgabefeld: dort ist
+    // Platz fuer eine Zahl (.mini-row output), "8 Takte" liefe heraus.
+    when.appendChild(miniSlider(pause.checkIntervalBars.label,
+      pause.checkIntervalBars,
+      data.values[pause.checkIntervalBars.address],
+      formatBars,
+      (v) => { barsValue = v; refreshChance(); }).element);
+  }
+  if (pause.probability) {
+    when.appendChild(miniSlider(pause.probability.label, pause.probability,
+      data.values[pause.probability.address],
+      (v) => Math.round(v*100) + ' %',
+      (v) => { probValue = v; refreshChance(); }).element);
+  }
+  if (when.querySelector('.mini-row')) {
+    body.appendChild(when);
+    refreshChance();
+    when.appendChild(chance);
+  }
+
+  // --- (c) wie lange: EINE Spanne, nicht zwei Zahlen ---------------------
+  const span = document.createElement('p');
+  span.className = 'help';
+  let minValue = pause.lengthMin
+    ? Number(data.values[pause.lengthMin.address]) : NaN;
+  let maxValue = pause.lengthMax
+    ? Number(data.values[pause.lengthMax.address]) : NaN;
+
+  function refreshSpan() {
+    if (!isFinite(minValue) || !isFinite(maxValue)) {
+      span.hidden = true;
+      return;
+    }
+    span.hidden = false;
+    const lo = Math.min(minValue, maxValue);
+    const hi = Math.max(minValue, maxValue);
+    let text = 'So lange dauert eine ausgeloeste Pause: ' + formatBars(lo)
+      + ' bis ' + formatBars(hi) + ' Takte, gleichverteilt gezogen.';
+    if (minValue > maxValue) {
+      // PauseGate.drawLength() tauscht vertauschte Grenzen, statt
+      // abzustuerzen. Das zu verschweigen hiesse, der Regler stuende falsch
+      // und niemand saehe es.
+      text += ' Die Grenzen stehen vertauscht – imPulse tauscht sie beim '
+        + 'Ziehen.';
+    }
+    span.textContent = text;
+  }
+
+  const range = pauseBlock('length');
+  if (pause.lengthMin) {
+    range.appendChild(miniSlider(pause.lengthMin.label, pause.lengthMin,
+      data.values[pause.lengthMin.address], formatBars,
+      (v) => { minValue = v; refreshSpan(); }).element);
+  }
+  if (pause.lengthMax) {
+    range.appendChild(miniSlider(pause.lengthMax.label, pause.lengthMax,
+      data.values[pause.lengthMax.address], formatBars,
+      (v) => { maxValue = v; refreshSpan(); }).element);
+  }
+  if (range.querySelector('.mini-row')) {
+    body.appendChild(range);
+    refreshSpan();
+    range.appendChild(span);
+  }
+
+  // --- Wen die Pause stummschaltet ---------------------------------------
+  if (pause.targets && pause.targets.length) {
+    const block = pauseBlock('targets');
+    const targets = document.createElement('div');
+    targets.className = 'pause-targets';
+    pause.targets.forEach((target, i) => {
+      targetStates[i] = false;
+      targets.appendChild(sectionToggle(target, data.values[target.address],
+        target.label + ' stumm', target.label + ' laeuft weiter',
+        (on) => { targetStates[i] = on; refreshIdle(); }).element);
+    });
+    block.appendChild(targets);
+    block.appendChild(idle);
+    refreshIdle();
+
+    if (pause.targetHelp) {
+      const help = document.createElement('p');
+      help.className = 'help';
+      help.textContent = pause.targetHelp;
+      block.appendChild(help);
+    }
+    body.appendChild(block);
+  }
+
+  section.appendChild(body);
   host.appendChild(section);
 }
 
@@ -2966,6 +3227,9 @@ function buildTabs(data) {
       if (name === 'presets' && presetsEl) { panel.appendChild(presetsEl); }
       if (name === 'melody' && melodyEl) { panel.appendChild(melodyEl); }
       if (name === 'sequencer') { buildSequencer(data, panel); }
+      // Direkt unter dem Sequencer, im selben Tab: der Server setzt die
+      // Reihenfolge in tab.sections, hier wird sie nur abgearbeitet.
+      if (name === 'pause') { buildPause(data, panel); }
       if (name === 'speedClasses') { buildSpeedClasses(data, panel); }
       if (name === 'impulseColor') { buildImpulseColor(data, panel); }
       if (name === 'fade') { buildFade(data, panel); }

@@ -856,6 +856,118 @@ class SequencerSectionTest(unittest.TestCase):
         self.assertIsNotNone(snapshot["split"])
 
 
+class PauseSectionTest(unittest.TestCase):
+    """build_pause/pause_addresses -- dieselbe Grundregel wie bei den
+    Speed-Klassen: die Struktur entsteht aus den Adressen des Dumps, und was
+    die Sektion selbst rendert, faellt aus dem generischen Rendering heraus."""
+
+    def _params(self, skip=()):
+        lines = [
+            "int\t/net/pause/enabled\tx\t0\t0\t1",
+            "float\t/net/pause/checkIntervalBars\tx\t8\t1\t64",
+            "float\t/net/pause/probability\tx\t0.25\t0\t1",
+            "float\t/net/pause/lengthMinBars\tx\t2\t0.5\t32",
+            "float\t/net/pause/lengthMaxBars\tx\t6\t0.5\t32",
+            "int\t/net/pause/affectsSequencer\tx\t1\t0\t1",
+            "int\t/net/pause/affectsRandomSpawn\tx\t1\t0\t1",
+        ]
+        lines = [l for l in lines
+                 if l.split("\t")[1] not in {server.PAUSE_PREFIX + s
+                                             for s in skip}]
+        return {p.address: p for p in parse_settings("\n".join(lines))}
+
+    def test_missing_addresses_yield_none_not_an_empty_section(self):
+        """Aelterer imPulse-Stand ohne Ruhemomente: das UI faellt still auf
+        das generische Rendering zurueck."""
+        self.assertIsNone(server.build_pause({}))
+        self.assertEqual(server.pause_addresses(None), set())
+
+    def test_section_carries_the_whole_mechanism(self):
+        pause = server.build_pause(self._params())
+        self.assertIsNotNone(pause)
+        self.assertEqual(pause["enabled"]["address"],
+                         server.PAUSE_PREFIX + "enabled")
+        self.assertEqual(pause["probability"]["address"],
+                         server.PAUSE_PREFIX + "probability")
+        self.assertEqual(pause["checkIntervalBars"]["address"],
+                         server.PAUSE_PREFIX + "checkIntervalBars")
+        # Die Dauer geht als PAAR heraus, nicht als zwei unabhaengige Werte.
+        self.assertEqual(pause["lengthMin"]["address"],
+                         server.PAUSE_PREFIX + "lengthMinBars")
+        self.assertEqual(pause["lengthMax"]["address"],
+                         server.PAUSE_PREFIX + "lengthMaxBars")
+        self.assertEqual([t["address"] for t in pause["targets"]],
+                         [server.PAUSE_PREFIX + s
+                          for s, _label in server.PAUSE_TARGETS])
+
+    def test_every_field_is_labelled(self):
+        """Der Anlass des Umbaus: ein Schalter, der nur "Enabled" heisst, und
+        eine Wahrscheinlichkeit ohne Bezugsgroesse."""
+        pause = server.build_pause(self._params())
+        for key in ("probability", "checkIntervalBars", "lengthMin", "lengthMax"):
+            self.assertTrue(pause[key]["label"].strip(),
+                            "%s ohne Beschriftung" % key)
+        for target in pause["targets"]:
+            self.assertTrue(target["label"].strip())
+        self.assertTrue(pause["help"].strip())
+        self.assertTrue(pause["targetHelp"].strip())
+        self.assertEqual(set(pause["blockTitles"]), {"when", "length", "targets"})
+
+    def test_a_single_missing_control_keeps_the_section(self):
+        """Anders als bei der Song-Matrix ist hier jeder Wert fuer sich
+        lesbar -- ein fehlender ist keine stille Luecke."""
+        pause = server.build_pause(self._params(skip=("lengthMaxBars",)))
+        self.assertIsNotNone(pause)
+        self.assertIsNone(pause["lengthMax"])
+        self.assertNotIn(server.PAUSE_PREFIX + "lengthMaxBars",
+                         server.pause_addresses(pause))
+
+    def test_taken_addresses_are_exactly_the_rendered_ones(self):
+        """Eine Adresse, die hier steht und in der Struktur fehlt, waere aus
+        dem UI verschwunden -- weder Panel noch generischer Schieber."""
+        params = self._params()
+        pause = server.build_pause(params)
+        self.assertEqual(server.pause_addresses(pause), set(params))
+
+    def test_section_sits_directly_under_the_sequencer(self):
+        """Reihenfolge im Spawn-Tab: erst der Sequencer, dann die Pause, die
+        ihn stummschaltet -- kein eigener Tab (Birk, 2026-08-02)."""
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, "remoteSettings.txt")
+        lines = ["float\t/net/sequencer/bpm\tx\t60\t20\t200",
+                 "int\t/net/sequencer/enabled\tx\t0\t0\t1"]
+        for i in range(server.SEQUENCER_TRACK_COUNT):
+            base = "/net/sequencer/track%d/" % i
+            lines.append("int\t%senabled\tx\t0\t0\t1" % base)
+            for name in server.SEQUENCER_TRACK_FIELDS:
+                lines.append("int\t%s%s\tx\t0\t-1\t29" % (base, name))
+        for address, param in self._params().items():
+            lines.append("%s\t%s\tx\t%g\t%g\t%g"
+                         % (param.type, address, param.value,
+                            param.minimum, param.maximum))
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        store = ParameterStore(path=path)
+        store.refresh(force=True)
+        snapshot = store.snapshot()
+        spawn = next(t for t in snapshot["tabs"] if t["id"] == server.TAB_SPAWN)
+        sections = spawn["sections"]
+        self.assertIn("pause", sections)
+        self.assertEqual(sections.index("pause"),
+                         sections.index("sequencer") + 1)
+        # Und kein Pause-Regler steht zusaetzlich als generischer Schieber
+        # daneben.
+        rendered = {c.get("address")
+                    for group in snapshot["groups"]
+                    for c in group["controls"]}
+        self.assertEqual(rendered & server.pause_addresses(snapshot["pause"]),
+                         set())
+        primary = {c["address"] for c in spawn["primary"]}
+        self.assertEqual(primary & server.pause_addresses(snapshot["pause"]),
+                         set())
+
+
 class TabLayoutTest(unittest.TestCase):
     """Die Tab-Zuordnung -- der Punkt, an dem ein Parameter verschwinden kann."""
 

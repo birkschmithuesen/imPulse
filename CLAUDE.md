@@ -292,10 +292,10 @@ löst danach `/net/melody/recompute` aus. Vier Dinge dazu:
 `MelodyModes.ALL` und `~melodyModes` in der `.scd`); ein Test vergleicht sie
 mit der Java-Datei.
 
-**Sieben Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
+**Acht Spezial-Sektionen** stehen neben dem generischen Rendering, weil eine
 flache Liste aus 38 Sequencer-Reglern unbedienbar wäre. Der Server liefert
 dafür Struktur statt einer Reglerliste (`build_sequencer`,
-`build_speed_classes`, `build_split`, `build_song_structure`,
+`build_speed_classes`, `build_split`, `build_pause`, `build_song_structure`,
 `sc_param_groups` in `server.py`), das Aussehen macht `app.js`. Dazu kommen die
 zwei Farb-Sektionen des Farben-Tabs (`build_colors`, `build_fade`), die unter
 „Farben werden ausschliesslich am Farbwähler eingestellt" beschrieben sind:
@@ -315,6 +315,13 @@ zwei Farb-Sektionen des Farben-Tabs (`build_colors`, `build_fade`), die unter
 - **Split-Verhalten** — zwei Verteilungen untereinander (Zweigzahl, Notenwert
   des Versatzes), im selben Tab wie die Speed-Klassen. Details unter
   „Split-Anzahl und Split-Versatz".
+- **Ruhemomente (Pause)** — die sieben `/net/pause/`-Adressen als **ein**
+  Mechanismus in drei Blöcken (wann kann eine Pause beginnen, wie lange
+  dauert sie, wen schaltet sie stumm) statt als sieben Schieber. Sie steht im
+  Spawn-Tab **direkt unter dem Sequencer** und ausdrücklich nicht in einem
+  eigenen Reiter (Birk, 2026-08-02) — eine Pause schaltet Sequencer *und*
+  Zufalls-Spawns stumm, gehört also zwischen die beiden. Details unter
+  „Ruhemomente im Web-UI".
 - **Song-Struktur** — Not-Aus, Live-Zustand, die Übergangsmatrix als
   **4×4-Gitter** und die vier Verweildauer-Spannen, dazu vier Knöpfe für den
   manuellen Levelsprung. Ein Gitter und keine Liste aus sechzehn Reglern:
@@ -329,8 +336,33 @@ zwei Farb-Sektionen des Farben-Tabs (`build_colors`, `build_fade`), die unter
 - **Mitschnitt** — der Aufnahmeknopf ganz oben im Sound-Tab, siehe unten.
 
 Palette und Mitschnitt brauchen als einzige keine Adresse aus
-`remoteSettings.txt` und sind deshalb bedingungslos da; die anderen fünf lassen
-sich ohne ihre Parameter nicht bauen.
+`remoteSettings.txt` und sind deshalb bedingungslos da; die anderen sechs
+lassen sich ohne ihre Parameter nicht bauen.
+
+**Ruhemomente im Web-UI** (`build_pause`/`pause_addresses` in `server.py`,
+`buildPause()` in `app.js`, seit 2026-08-02): vorher lagen die sieben
+`/net/pause/`-Adressen als generische Regler im Spawn-Tab verstreut, zwei
+davon kuratiert, fünf im Erweitert-Bereich zwischen den RandomSpawn-Reglern.
+Vier Dinge, die man beim Ändern kennen muss:
+
+- **Die Wahrscheinlichkeit steht nie ohne ihre Bezugsgröße.** „0,25" heisst
+  nichts, solange nicht daneben steht, dass alle `checkIntervalBars` Takte
+  **einmal** gewürfelt wird; die Zahl im Erklärtext kommt deshalb aus dem
+  Regler daneben und wird beim Ziehen mitgeführt, statt als toter Text zu
+  veralten.
+- **Min und Max der Dauer gehen als Paar heraus** (`lengthMin`/`lengthMax` im
+  Snapshot), weil `PauseGate.drawLength()` gleichverteilt dazwischen zieht.
+  Zwei einzelne Schieber lesen sich als zwei unabhängige Werte — genau der
+  Zustand, in dem Birk die Pausendauer live am Gerät nicht gefunden hat.
+- **Die Reihenfolge im Tab macht `build_tabs()`**, nicht `app.js`: die
+  Sektion wird in `sections` direkt hinter `"sequencer"` angehängt, und
+  `buildTabs()` arbeitet diese Liste der Reihe nach ab.
+- **`pause_addresses()` nimmt die sieben Adressen aus dem generischen
+  Rendering** und sie sind aus `TAB_PRIMARY[TAB_SPAWN]` entfernt — dieselbe
+  Regel wie bei `sequencer_addresses()`, sonst stünde jede zweimal auf der
+  Seite. Ein fehlender einzelner Regler lässt die Sektion stehen und die
+  Zeile weg; erst ein fehlendes `/net/pause/enabled` liefert `None` und das
+  UI fällt still auf das generische Rendering zurück (älterer imPulse-Stand).
 
 **Der Baum-Filter je Track ist ein Auswahlbalken, kein 0..4-Schieber.** Fünf
 Klartext-Zustände (`alle`/`vorn`/`hinten`/`rechts`/`links`), gleiche Bauform
