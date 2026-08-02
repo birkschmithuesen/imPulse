@@ -215,6 +215,20 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     }
   };
 
+  // Ruhemomente, orthogonal zu Sequencer und RandomSpawn: tickt auf
+  // derselben Uhr (musicalClock) und blockiert bei Bedarf neue Spawns in
+  // beiden Ebenen, laesst schon fliegende Impulse aber unbeeindruckt
+  // weiterlaufen. Siehe PauseGate.java und /net/pause/* unten.
+  final PauseGate pauseGate = new PauseGate();
+  private final PauseGateConfig pauseGateConfig = PauseGateConfig.withDefaults();
+  RemoteControlledIntParameter pauseEnabled;
+  RemoteControlledFloatParameter pauseCheckIntervalBars;
+  RemoteControlledFloatParameter pauseProbability;
+  RemoteControlledFloatParameter pauseLengthMinBars;
+  RemoteControlledFloatParameter pauseLengthMaxBars;
+  RemoteControlledIntParameter pauseAffectsSequencer;
+  RemoteControlledIntParameter pauseAffectsRandomSpawn;
+
   LedNetworkTransportEffect(String _id, int _numLeds, int _nStripes, int _nLedsInStripe,
       LedInNetInfo[] _ledNetInfo, ArrayList <LedNetworkNode> nodes_,
       LedPositionMap _positionMap, OscP5 _oscP5, NetAddress _remoteLocation) {
@@ -349,6 +363,19 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
       trackOriginTree[i]= new RemoteControlledIntParameter(base+"originTreeFilter", 0, 0, StripeTreeStore.TREE_NAMES.length);
       trackConfigs[i]= new TrackConfig();
     }
+
+    // Ruhemomente: global aus im Auslieferungszustand, wie Sequencer und
+    // SongStructure - eine neue Ebene darf eine laufende Show nicht ohne
+    // Zutun stumm schalten. checkIntervalBars/lengthMin/lengthMaxBars in
+    // TAKTEN (nicht Beats), damit ein Operator in derselben Einheit denkt
+    // wie beim Notenwert-Raster des Sequencers.
+    pauseEnabled= new RemoteControlledIntParameter("/net/pause/enabled", 0, 0, 1);
+    pauseCheckIntervalBars= new RemoteControlledFloatParameter("/net/pause/checkIntervalBars", 8f, 1f, 64f);
+    pauseProbability= new RemoteControlledFloatParameter("/net/pause/probability", 0.25f, 0f, 1f);
+    pauseLengthMinBars= new RemoteControlledFloatParameter("/net/pause/lengthMinBars", 2f, 0.5f, 32f);
+    pauseLengthMaxBars= new RemoteControlledFloatParameter("/net/pause/lengthMaxBars", 6f, 0.5f, 32f);
+    pauseAffectsSequencer= new RemoteControlledIntParameter("/net/pause/affectsSequencer", 1, 0, 1);
+    pauseAffectsRandomSpawn= new RemoteControlledIntParameter("/net/pause/affectsRandomSpawn", 1, 0, 1);
 
     // Auslieferungswerte: aus. Die Gewichte darunter sind der Zustand, den
     // ein Operator vorfindet, wenn er einschaltet - 1x bleibt der weit
@@ -539,6 +566,12 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     // spawnRandomImpulses() und tickSequencer() lesen impulseSpeed ueber
     // spawnSpeed()
     applyRandomizers(currentTime);
+    // Gemeinsame Beat-Uhr fuer Sequencer UND Pause-Gate - vorgezogen aus
+    // tickSequencer(), damit der Gate dieselbe Beat-Position sieht, bevor
+    // beide Spawn-Ebenen fuer diesen Frame entscheiden.
+    musicalClock.advance(currentTime, sequencerBpm.getValue());
+    updatePauseGateConfig();
+    pauseGate.tick(musicalClock.beats(), pauseGateConfig, mathRandom);
 
     spawnRandomImpulses(currentTime);
     // schreibt auch die MusicalClock fort, auf der der Split-Versatz laeuft -
@@ -896,6 +929,14 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     if (randomSpawnEnabled.getValue() != 1) {
       return;
     }
+    if (pauseGate.blocksRandomSpawn()) {
+      // Ruhemoment: der Intervall-Timer laeuft bewusst NICHT weiter (kein
+      // lastRandomSpawnTime-Update) - sonst waere direkt nach Pausenende ein
+      // Intervall bereits verstrichen und es kaeme sofort ein Spawn, statt
+      // dass der normale Rhythmus einfach fortgesetzt wird. Dieselbe
+      // Zurueckhaltung wie tickSequencer() bei blockiertem Sequencer.
+      return;
+    }
     float jitter=randomSpawnJitter.getValue();
     float jitterFactor=1f + jitter*(float) (Math.random()*2.0 - 1.0); // 0 => exakt periodisch, 1 => 0..2x interval
     float effectiveInterval=Math.max(randomSpawnInterval.getValue()*jitterFactor, 0.02f); // Mindestabstand gegen 0/negative Intervalle durch Jitter
@@ -972,6 +1013,19 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
     stripeTrees=store;
   }
 
+  // Liest die /net/pause/*-Parameter in den wiederverwendeten Konfig-
+  // Behaelter - dasselbe Muster wie der Trackconfig-Fuellblock in
+  // tickSequencer(). Vor jedem pauseGate.tick() zu rufen.
+  private void updatePauseGateConfig() {
+    pauseGateConfig.enabled=pauseEnabled.getValue()==1;
+    pauseGateConfig.checkIntervalBars=pauseCheckIntervalBars.getValue();
+    pauseGateConfig.probability=pauseProbability.getValue();
+    pauseGateConfig.lengthMinBars=pauseLengthMinBars.getValue();
+    pauseGateConfig.lengthMaxBars=pauseLengthMaxBars.getValue();
+    pauseGateConfig.affectsSequencer=pauseAffectsSequencer.getValue()==1;
+    pauseGateConfig.affectsRandomSpawn=pauseAffectsRandomSpawn.getValue()==1;
+  }
+
   // Strukturierter Spawn-Layer, siehe /net/sequencer/* in CLAUDE.md. Laeuft
   // unabhaengig neben spawnRandomImpulses() - beide Layer sind gleichzeitig
   // aktivierbar, der eine ist der chaotische Ambient-Teppich, der andere die
@@ -979,10 +1033,20 @@ public class LedNetworkTransportEffect implements runnableLedEffect, OscMessageS
   //
   // Die Uhr laeuft AUCH bei sequencerEnabled=0 weiter: sie ist die gemeinsame
   // Phase, und ein Stillstand waehrend der Aus-Phase machte das
-  // Wiedereinschalten von der Dauer der Pause abhaengig.
+  // Wiedereinschalten von der Dauer der Pause abhaengig. Fortgeschrieben wird
+  // sie bereits in drawMe() (vor dem Pause-Gate-Tick) - hier nur noch
+  // gelesen, kein zweiter advance() noetig.
   private void tickSequencer(double currentTime) {
-    musicalClock.advance(currentTime, sequencerBpm.getValue());
     if (sequencerEnabled.getValue() != 1) {
+      return;
+    }
+    if (pauseGate.blocksSequencer()) {
+      // Ruhemoment: keine neuen Treffer, aber der Sequencer bleibt fachlich
+      // "an" - repeatsLeft/nextBeat laufen unten trotzdem NICHT weiter,
+      // sondern das Update wird komplett uebersprungen. Das ist bewusst wie
+      // ein ausgeschalteter Track: verpasste Schlaege werden nicht
+      // nachgeholt (dieselbe Kein-Nachholen-Regel wie OriginSequencer selbst),
+      // und beim Ende der Pause faengt der naechste faellige Beat normal an.
       return;
     }
     for (int i=0; i<OriginSequencer.TRACK_COUNT; i++) {

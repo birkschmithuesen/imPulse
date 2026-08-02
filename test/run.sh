@@ -45,6 +45,7 @@ SOURCES="LedColor.java ArtNetOutput.java"
 [ -f EnergyLevelStore.java ] && SOURCES="$SOURCES EnergyLevelStore.java"
 [ -f StripeColorDefaults.java ] && SOURCES="$SOURCES StripeColorDefaults.java"
 [ -f SongStructureDirector.java ] && SOURCES="$SOURCES SongStructureDirector.java"
+[ -f PauseGate.java ] && SOURCES="$SOURCES PauseGate.java"
 [ -f MelodyModes.java ] && SOURCES="$SOURCES MelodyModes.java"
 [ -f MelodyGraph.java ] && SOURCES="$SOURCES MelodyGraph.java"
 [ -f MelodyAssigner.java ] && SOURCES="$SOURCES MelodyAssigner.java"
@@ -69,6 +70,7 @@ if [ "$#" -eq 0 ]; then
                   StripeTreeStoreTest SplitFanoutTest SplitStaggerTest \
                   WeightedChoiceTest \
                   EnergyLevelStoreTest SongStructureDirectorTest \
+                  PauseGateTest \
                   StripeColorDefaultsTest \
                   MelodyModesTest MelodyGraphTest \
                   MelodyAssignerTest NodeMelodyStoreTest; do
