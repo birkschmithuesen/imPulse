@@ -71,10 +71,38 @@ class SplitStagger {
     }
   };
 
-  // Zahl der Notenwert-Klassen, aus denen der Versatz gezogen wird -
+  // Zahl der ECHTEN Notenwert-Klassen, aus denen der Versatz gezogen wird -
   // dieselben wie beim Sequencer und in derselben Reihenfolge
   // (Index 0 = Ganze ... Index 4 = Sechzehntel).
   static final int NOTE_COUNT = OriginSequencer.NOTE_VALUES.length;
+
+  // Der Sonderwert der Klasse "gleichzeitig": alle Zweige starten ohne
+  // Versatz, nicht nur der erste.
+  //
+  // 0 als Sentinel und nicht etwa -1, weil 0 als Notenwert ohnehin keine
+  // Bedeutung hat ("null Noten je Ganzer") und in einer OSC- oder
+  // Preset-Datei nie als echter Wert auftaucht. Er darf allerdings NIE in
+  // OriginSequencer.quantizeNoteValue() laufen: das rastet auf den
+  // naechstniedrigeren erlaubten Notenwert und liefert fuer 0 die GANZE Note,
+  // also ausgerechnet den weitesten Versatz statt gar keinem. Abgefangen wird
+  // er deshalb in delayBeats() vor der Rasterung; MusicalClock.beatsPerNote()
+  // wird mit ihm gar nicht erst gerufen (dort waere er ein Viertel).
+  static final int SIMULTANEOUS_NOTE_VALUE = 0;
+
+  // Zahl ALLER ziehbaren Klassen: die fuenf Notenwerte plus "gleichzeitig".
+  //
+  // Bewusst nicht als "NOTE_COUNT = 6" geschrieben: "gleichzeitig" ist kein
+  // Notenwert, und OriginSequencer.NOTE_VALUES bleibt die geteilte Quelle der
+  // fuenf echten - eine sechste Klasse dort waere eine Ergaenzung des
+  // Sequencers, und das ist sie ausdruecklich nicht. Die Gewichtstabelle
+  // haengt an dieser Zahl (Adressen, Scratch-Array, WeightedChoice.pick).
+  static final int CLASS_COUNT = NOTE_COUNT + 1;
+
+  // Position von "gleichzeitig" in der Gewichtstabelle: hinten angehaengt,
+  // damit die fuenf bestehenden Klassen ihre Indizes behalten - ein
+  // eingeschobener Index verschoebe die Zuordnung Regler->Klasse und damit
+  // stillschweigend jedes gespeicherte Preset.
+  static final int SIMULTANEOUS_INDEX = CLASS_COUNT - 1;
 
   // Der Rueckfall fuer den entarteten Fall: Sechzehntel, der kuerzeste
   // Versatz. Bis 2026-08-01 war das der Auslieferungswert des einen festen
@@ -82,6 +110,12 @@ class SplitStagger {
   // Gewichtstabelle soll die Aufspaltung also lassen, wie sie war, statt sie
   // ueber einen ganzen Takt auseinanderzuziehen. Dieselbe Regel wie
   // SplitFanout.NEUTRAL_INDEX und SpeedQuantizer.NEUTRAL_INDEX.
+  //
+  // Ausdruecklich NICHT "gleichzeitig", obwohl das der harmloseste Zustand
+  // waere: der Rueckfall soll das Verhalten von vor der jeweiligen Aenderung
+  // bedeuten, und eine unbrauchbare Gewichtstabelle hat vor der sechsten
+  // Klasse Sechzehntel bedeutet. Ihn umzuhaengen waere eine
+  // Verhaltensaenderung, die kein Regler zeigt.
   static final int NEUTRAL_NOTE_INDEX = NOTE_COUNT - 1;
 
   // Der Notenwert EINER Aufspaltung, gezogen nach Gewichten.
@@ -96,9 +130,17 @@ class SplitStagger {
   // Die Ziehung selbst steht in WeightedChoice, geteilt mit SplitFanout und
   // SpeedQuantizer: ein Gewicht von 0 zieht nie, NaN und negative Werte
   // gelten als 0, die Summe muss nicht 100 sein.
+  //
+  // Die sechste Klasse ("gleichzeitig", Auslieferungsgewicht 0) faellt hier
+  // aus dem Index-nach-Notenwert-Weg heraus: OriginSequencer.noteValueAt()
+  // kennt nur die fuenf echten und lieferte fuer den sechsten Index still ein
+  // Viertel - also einen Versatz statt keinem.
   static int pickNoteValue(float[] weights, double random01) {
-    return OriginSequencer.noteValueAt(
-        WeightedChoice.pick(weights, NOTE_COUNT, NEUTRAL_NOTE_INDEX, random01));
+    int index = WeightedChoice.pick(weights, CLASS_COUNT, NEUTRAL_NOTE_INDEX, random01);
+    if (index == SIMULTANEOUS_INDEX) {
+      return SIMULTANEOUS_NOTE_VALUE;
+    }
+    return OriginSequencer.noteValueAt(index);
   }
 
   // Versatz des slot-ten Kindes in Beats. Slot 0 ist der Zweig, der sofort
@@ -110,8 +152,16 @@ class SplitStagger {
   // quantizeNoteValue), damit "Sechzehntel" im ganzen Sketch dasselbe heisst -
   // RemoteControlledIntParameter kann keine Aufzaehlung, der Regler steht
   // zwischendurch also auf krummen Werten.
+  //
+  // SIMULTANEOUS_NOTE_VALUE ist der eine bewusste Sonderfall und steht VOR
+  // der Rasterung: er bedeutet "kein Versatz fuer JEDEN Slot", nicht nur fuer
+  // Slot 0. Liefe er weiter, machte quantizeNoteValue(0) daraus die GANZE Note
+  // (es gibt keinen erlaubten Notenwert <= 0, also gewinnt der erste der
+  // Liste) und MusicalClock.beatsPerNote() beantwortete das mit vier Beats -
+  // aus "alle gleichzeitig" wuerde also der weiteste Versatz der ganzen
+  // Tabelle. Deshalb hier abgefangen und nicht dort.
   static double delayBeats(int noteValue, int slot) {
-    if (slot <= 0) {
+    if (slot <= 0 || noteValue == SIMULTANEOUS_NOTE_VALUE) {
       return 0.0;
     }
     return slot*MusicalClock.beatsPerNote(OriginSequencer.quantizeNoteValue(noteValue));

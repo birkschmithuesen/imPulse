@@ -239,13 +239,26 @@ SPLIT_WEIGHTS: List[Tuple[str, str]] = [
 # Der Versatz hatte bis 2026-08-01 einen einzigen festen Notenwert; jetzt
 # wird er je Aufspaltung aus diesen Klassen gezogen. Deshalb steht hier eine
 # Verteilung wie bei den Speed-Klassen und keine Notenwert-Leiste mehr.
+#
+# Die sechste Klasse ist KEIN Notenwert: "gleichzeitig" laesst alle Zweige
+# ohne Versatz starten. Auf der Java-Seite ist sie der Sentinel-Notenwert 0
+# (SplitStagger.SIMULTANEOUS_NOTE_VALUE), hier steht sie deshalb hinten und
+# mit einem eigenen Label -- in NOTE_VALUES oben gibt es keinen Eintrag fuer
+# 0, ein generisches Lookup liefe dort in einen KeyError.
 SPLIT_STAGGER_WEIGHT_PREFIX = SPLIT_PREFIX + "stagger/weight/"
+SPLIT_STAGGER_SIMULTANEOUS = 0
+# Symbol und Name wie bei den fuenf Notenwerten, nur ohne Musik-Unicode: das
+# Symbol allein ist nie die ganze Beschriftung (app.js setzt "symbol label"
+# zusammen), und U+2261 (Identisch-Zeichen) liegt anders als die Notensymbole
+# U+1D15D.. in jeder Windows-Schrift.
+SPLIT_STAGGER_SIMULTANEOUS_LABEL: Tuple[str, str] = ("≡", "Gleichzeitig")
 SPLIT_STAGGER_NOTES: List[Tuple[str, int]] = [
     ("whole", 1),
     ("half", 2),
     ("quarter", 4),
     ("eighth", 8),
     ("sixteenth", 16),
+    ("simultaneous", SPLIT_STAGGER_SIMULTANEOUS),
 ]
 
 # Die Titel und Kurzerklaerungen aller Regler stehen weiter unten in
@@ -372,7 +385,13 @@ def build_split(by_address: Dict[str, "Parameter"]) -> Optional[Dict[str, Any]]:
         param = by_address.get(SPLIT_STAGGER_WEIGHT_PREFIX + suffix)
         if param is None:
             continue
-        symbol, name = note_labels[note_value]
+        # Der Sonderfall steht VOR dem generischen Lookup und nicht als
+        # dict.get()-Rueckfall: ein unbekannter echter Notenwert soll weiter
+        # auffallen (KeyError) statt still als "Gleichzeitig" durchzurutschen.
+        if note_value == SPLIT_STAGGER_SIMULTANEOUS:
+            symbol, name = SPLIT_STAGGER_SIMULTANEOUS_LABEL
+        else:
+            symbol, name = note_labels[note_value]
         entry = param.as_dict()
         entry["noteValue"] = note_value
         entry["symbol"] = symbol
@@ -851,6 +870,12 @@ ADDRESS_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
         "Wie oft die Zweige einer Aufspaltung ein Sechzehntel auseinander "
         "starten. Gezogen wird je Aufspaltung, nicht je Zweig - die Kinder "
         "EINES Splits stehen also immer auf demselben Raster."),
+    "/net/impulse/split/stagger/weight/simultaneous": (
+        "Gewicht: gleichzeitig",
+        "Wie oft eine Aufspaltung ohne jeden Versatz losgeht - ALLE Zweige "
+        "im selben Moment, nicht nur der erste. Die einzige Klasse, die kein "
+        "Notenwert ist; bei lauter Nullen gilt weiterhin Sechzehntel, nicht "
+        "diese hier."),
 
     # --- Impuls-Farbe -----------------------------------------------------
     # Die drei Kanaele sind Birks Beispiel fuer "selbsterklaerend": ein
