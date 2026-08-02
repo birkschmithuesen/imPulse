@@ -1305,7 +1305,7 @@ def sequencer_addresses(sequencer: Optional[Dict[str, Any]],
 # ---------------------------------------------------------------------------
 # Tabs
 #
-# Fuenf Themen-Tabs statt einer langen Liste. Die Zuordnung steht HIER und
+# Acht Themen-Tabs statt einer langen Liste. Die Zuordnung steht HIER und
 # nicht in app.js, weil sie eine inhaltliche Entscheidung ist und hier
 # pruefbar bleibt: test_webui.py stellt sicher, dass jede Adresse aus
 # remoteSettings.txt genau einem Tab gehoert. Im JS waere das nur mit einem
@@ -1320,6 +1320,7 @@ TAB_MIXER = "mixer"
 TAB_SOUND = "sound"
 TAB_SPAWN = "spawn"
 TAB_NOTES = "noten"
+TAB_SCALE = "tonleiter"
 TAB_PHYSICS = "physik"
 TAB_COLORS = "farben"
 TAB_SONG = "song"
@@ -1329,6 +1330,13 @@ TAB_TITLES: List[Tuple[str, str]] = [
     (TAB_SOUND, "Sound Design"),
     (TAB_SPAWN, "Spawn-Verhalten"),
     (TAB_NOTES, "Noten-Verhalten"),
+    # Direkt hinter dem Noten-Verhalten: die Melodie-Zuordnung entscheidet,
+    # WELCHE Note ein Knoten bekommt, das Noten-Verhalten daneben, WANN und
+    # WIE sie gespielt wird -- thematisch benachbart, deshalb auch im UI.
+    # Ein eigener Tab und keine Sektion IM Noten-Tab, weil hier als einziger
+    # Stelle im UI das Verstellen eines Feldes nichts sendet: zwischen
+    # Reglern, die sofort wirken, waeren die vier Felder eine Falle.
+    (TAB_SCALE, "Tonleiter"),
     (TAB_PHYSICS, "Impuls-Verhalten"),
     # Haengt hinten an: die Kern-Reihenfolge der fuenf Themen-Tabs bleibt,
     # wie sie ist. Farbe ist Gestaltung und wird am Stueck angefasst, nicht
@@ -1417,6 +1425,12 @@ TAB_PRIMARY: Dict[str, List[str]] = {
         "/net/randomSpawn/count",
     ],
     TAB_NOTES: [],
+    # Leer wie TAB_SONG: der Tonleiter-Tab besteht ausschliesslich aus der
+    # Melodie-Sektion, die ihre vier Adressen selbst rendert (siehe
+    # melody_addresses()). Stuende hier eine davon, waere sie zweimal auf der
+    # Seite -- einmal mit Bestaetigungsknopf und einmal als Schieber, der so
+    # aussieht, als taete er etwas.
+    TAB_SCALE: [],
     TAB_PHYSICS: [
         "/net/impulse/speed",
         "/net/impulse/lifetime",
@@ -1737,7 +1751,8 @@ def build_tabs(groups: List[Dict[str, Any]],
                split: Optional[Dict[str, Any]] = None,
                song: Optional[Dict[str, Any]] = None,
                colors: Optional[Dict[str, Any]] = None,
-               fade: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+               fade: Optional[Dict[str, Any]] = None,
+               melody: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Verteilt Gruppen, Spezial-Sektionen und SC-Parameter auf die Tabs.
 
     Eine Gruppe geht als GANZES in einen Tab (bestimmt von ihrem ersten
@@ -1760,6 +1775,20 @@ def build_tabs(groups: List[Dict[str, Any]],
         }
 
     # Spezial-Sektionen
+    #
+    # Die Presets stehen GANZ OBEN im Mixer-Tab und brauchen wie Palette und
+    # Mitschnitt keine Adresse aus remoteSettings.txt -- sie sind deshalb
+    # bedingungslos da. Oben, weil ein Preset der erste Griff ist: man waehlt
+    # eine Szene und stellt danach daran. Bis 2026-08-02 stand die Sektion
+    # fest ueber der Tab-Leiste; dort zwang sie jeden Nutzer, an ihr vorbei zu
+    # scrollen, bevor ueberhaupt ein Regler sichtbar wurde.
+    by_tab[TAB_MIXER]["sections"].insert(0, "presets")
+    # Die Melodie-Zuordnung ist der ganze Inhalt ihres Tabs. Ohne
+    # melody-Daten (aelterer imPulse-Stand ohne /net/melody/*) faellt der Tab
+    # unten komplett weg, statt leer dazustehen -- dieselbe Regel wie beim
+    # frueheren hidden-Attribut der Sektion, nur eine Ebene hoeher.
+    if melody:
+        by_tab[TAB_SCALE]["sections"].append("melody")
     if sequencer:
         by_tab[TAB_SPAWN]["sections"].append("sequencer")
     if speed:
@@ -1843,7 +1872,12 @@ def build_tabs(groups: List[Dict[str, Any]],
             if control is not None:
                 by_tab[tab_id]["primary"].append(control)
 
-    return [by_tab[tab_id] for tab_id, _t in TAB_TITLES]
+    # Ein Tab ohne jeden Inhalt taucht nicht auf. Das betrifft genau den
+    # Tonleiter-Tab: er traegt keine Regel in TAB_RULES und keine Adresse in
+    # TAB_PRIMARY, sein einziger Inhalt ist die Melodie-Sektion. Ein leerer
+    # Reiter waere ein Versprechen, hinter dem nichts steht.
+    return [by_tab[tab_id] for tab_id, _t in TAB_TITLES
+            if tab_id != TAB_SCALE or by_tab[tab_id]["sections"]]
 
 
 def sc_param_groups() -> List[Dict[str, Any]]:
@@ -2832,7 +2866,7 @@ class ParameterStore:
                 "fade": fade,
                 "melody": melody,
                 "tabs": build_tabs(groups, sequencer, speed, split, song,
-                                   colors, fade),
+                                   colors, fade, melody),
                 "scParams": {
                     "port": SC_OSC_PORT,
                     "groups": sc_param_groups(),
