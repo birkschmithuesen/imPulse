@@ -880,6 +880,13 @@ class TabLayoutTest(unittest.TestCase):
             "float\t/net/randomSpawn/interval\tx\t30\t0.05\t40",
             "float\t/net/randomSpawn/energy\tx\t0.6\t0\t1",
             "int\t/net/randomSpawn/count\tx\t1\t1\t30",
+            "int\t/net/pause/enabled\tx\t0\t0\t1",
+            "float\t/net/pause/checkIntervalBars\tx\t8\t1\t64",
+            "float\t/net/pause/probability\tx\t0.25\t0\t1",
+            "float\t/net/pause/lengthMinBars\tx\t2\t0.5\t32",
+            "float\t/net/pause/lengthMaxBars\tx\t6\t0.5\t32",
+            "int\t/net/pause/affectsSequencer\tx\t1\t0\t1",
+            "int\t/net/pause/affectsRandomSpawn\tx\t1\t0\t1",
             "int\t/net/activateNode\tx\t0\t0\t50",
             "float\t/nodes/times/recover\tx\t4\t0\t10",
             "float\t/net/sequencer/bpm\tx\t60\t20\t200",
@@ -1024,6 +1031,8 @@ class TabLayoutTest(unittest.TestCase):
         self.assertEqual(server.tab_for_address("Master/trace"), "mixer")
         self.assertEqual(server.tab_for_address("/net/sequencer/bpm"), "spawn")
         self.assertEqual(server.tab_for_address("/net/randomSpawn/interval"), "spawn")
+        self.assertEqual(server.tab_for_address("/net/pause/enabled"), "spawn")
+        self.assertEqual(server.tab_for_address("/net/pause/checkIntervalBars"), "spawn")
         self.assertEqual(server.tab_for_address("/net/activateStripe"), "spawn")
         # speedQuantize gehoert zu den Noten, NICHT zur Physik - die Regel
         # dafuer muss vor der allgemeinen /net/impulse/-Regel stehen.
