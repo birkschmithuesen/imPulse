@@ -905,6 +905,13 @@ ADDRESS_LABELS: Dict[str, Tuple[str, Optional[str]]] = {
         "Gemeldete Impulse je Takt",
         "Hoechstzahl gleichzeitig gemeldeter Impulse, ausgewaehlt nach "
         "Energie. Deckel gegen Klangbrei und Netzlast."),
+    "/net/hitNode/rateHz": (
+        "Knotentoene je Sekunde (Notbremse)",
+        "Hoechste Rate, mit der Node-Treffer an SuperCollider gehen. Anders "
+        "als die Positionsmeldungen daneben wird hier NICHTS verworfen: ein "
+        "Burst wird ueber ein paar Millisekunden gestreckt, jeder Ton kommt. "
+        "Der Auslieferungswert 100 greift im Normalbetrieb nie - runter damit "
+        "nur, wenn der Klangrechner mit 'command FIFO full' aussteigt."),
     "/net/impulse/splitSpeedJitter": (
         "Streuung: Tempo der Zweige",
         "Streut die Geschwindigkeit der Kinder an einer Kreuzung. "
@@ -1606,6 +1613,12 @@ TAB_RULES: List[Tuple[str, str]] = [
     ("/net/pause/", TAB_SPAWN),
     ("/net/activate", TAB_SPAWN),
     ("/net/impulse/", TAB_PHYSICS),
+    # Der Sendetakt der Knotentoene steht bei den Impuls-Reglern und nicht
+    # beim Sound-Design: er entscheidet, wieviele /net/hitNode-Datagramme das
+    # NETZ traegt, nicht wie eine Glocke klingt. Der Rueckfall von
+    # tab_for_address() lieferte hier zwar denselben Tab -- eine Regel, die
+    # zufaellig richtig liegt, sagt aber nicht, dass jemand nachgedacht hat.
+    ("/net/hitNode/", TAB_PHYSICS),
     ("/nodes/", TAB_PHYSICS),
 ]
 
@@ -2178,6 +2191,11 @@ TRIGGER_ADDRESSES = {"/net/activateNode", "/net/activateStripe"}
 ADVANCED_ADDRESSES = {
     "/net/impulse/oscMaxCount",
     "/net/impulse/energyExponent",
+    # Genau dieselbe Sorte wie oscMaxCount daneben: ein Rechnerlast-Schutz,
+    # kein gestalterischer Regler. Er steht damit neben seinem naechsten
+    # Verwandten statt als einzelner Schieber in einer eigenen Gruppe
+    # "/net/hitNode", die ausser ihm nichts enthielte.
+    "/net/hitNode/rateHz",
 }
 ADVANCED_GROUP_KEY = "zzz_advanced"
 
