@@ -23,8 +23,7 @@ const metaEl = document.getElementById('meta');
 const couplingEl = document.getElementById('coupling');
 const reloadEl = document.getElementById('reload');
 const presetsEl = document.getElementById('presets');
-const presetSelectEl = document.getElementById('presetSelect');
-const presetLoadEl = document.getElementById('presetLoad');
+const presetRowsEl = document.getElementById('presetRows');
 const presetNameEl = document.getElementById('presetName');
 const presetSaveEl = document.getElementById('presetSave');
 const autocommitEl = document.getElementById('autocommit');
@@ -1349,6 +1348,18 @@ melodyRecomputeEl.addEventListener('click', recomputeMelody);
 // Maschine wie imPulse), die Kommandos gehen als OSC-String raus. Nach dem
 // Laden schickt der Server die Preset-Werte zurueck, damit die Regler
 // mitziehen -- still gesetzt, also ohne dabei ein zweites OSC auszuloesen.
+//
+// Eine Zeile je Preset: Name, Level, Haken, Loeschen. Die drei Bedienelemente
+// gehoeren neben den Namen, zu dem sie gehoeren -- in einem Dropdown waere
+// immer nur der Zustand EINES Presets sichtbar, und genau der Vergleich
+// ("habe ich ueberhaupt noch zwei ruhige?") ist die Frage beim Taggen.
+//
+// Drei Wege raus, und sie sind absichtlich verschieden:
+//   Name anklicken -> /api/preset/load, dazu der Name ins Speichern-Feld
+//   Level/Haken    -> /api/preset/tag, sofort, ohne Knopf (wie ein Regler)
+//   Loeschen       -> confirm() und dann /api/preset/delete
+// Die Rueckfrage steht nur beim Loeschen: Speichern ueberschreibt bewusst
+// ohne, aber ein geloeschtes Preset ist nicht wiederzuholen.
 // ---------------------------------------------------------------------------
 
 /* Wortgleicher Spiegel von valid_preset_name() in server.py und
@@ -1364,37 +1375,109 @@ function presetNameProblem(name) {
   return null;
 }
 
+/* Der Name des zuletzt geladenen oder gespeicherten Presets -- nur fuer die
+ * Hervorhebung der Zeile. Kommt beim Seitenaufbau vom Server (Schritt 2b)
+ * und wird danach hier fortgeschrieben; es gibt keinen Rueckkanal, ein von
+ * aussen per OSC geladenes Preset taucht hier also nicht auf. */
+let activePresetName = null;
+
+/* Die Level-Namen kommen vom Server (Spiegel von EnergyLevelStore.LEVEL_NAMES),
+ * nicht als Literal hierher: eine zweite Kopie im JS muesste bei jeder
+ * Aenderung nachgezogen werden und faellt sonst nur im Browser auf. */
+let presetLevels = [];
+
 function fillPresets(payload, activeName) {
-  const names = (payload && payload.presets) || [];
-  const previous = presetSelectEl.value;
-  presetSelectEl.innerHTML = '';
-  names.forEach((name) => {
-    const option = document.createElement('option');
-    option.value = name;
-    option.textContent = name;
-    presetSelectEl.appendChild(option);
-  });
-  if (!names.length) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = 'keine Presets';
-    presetSelectEl.appendChild(option);
+  const entries = (payload && payload.entries)
+    // Rueckfall fuer einen aelteren Server ohne Tagging: dann steht in jeder
+    // Zeile nur der Name, statt dass die Liste leer bliebe.
+    || ((payload && payload.presets) || []).map((name) => ({ name: name }));
+  if (payload && payload.levels) { presetLevels = payload.levels; }
+  if (activeName) { activePresetName = activeName; }
+
+  presetRowsEl.innerHTML = '';
+  if (!entries.length) {
+    const empty = document.createElement('p');
+    empty.className = 'preset-empty';
+    empty.textContent = 'keine Presets';
+    presetRowsEl.appendChild(empty);
   }
-  presetSelectEl.disabled = !names.length;
-  presetLoadEl.disabled = !names.length;
-  // Schritt 2b (reine Anzeige-Synchronisation): beim allerersten Aufruf
-  // (Seiten-Load, kein `previous`-Wert im Select vorhanden) auf das vom
-  // Server gemeldete zuletzt aktive Preset springen, falls es noch in der
-  // Liste steht. Bei jedem SPAETEREN Aufruf (z.B. Preset von Hand geloescht,
-  // refreshPresets() nach 404) hat der Operator womoeglich schon manuell
-  // etwas anderes ausgewaehlt -- dessen Wahl darf hier nicht ueberschrieben
-  // werden, deshalb Vorrang fuer `previous`, wenn es noch gueltig ist.
-  if (names.indexOf(previous) >= 0) {
-    presetSelectEl.value = previous;
-  } else if (activeName && names.indexOf(activeName) >= 0) {
-    presetSelectEl.value = activeName;
-  }
+  entries.forEach((entry) => presetRowsEl.appendChild(presetRow(entry)));
+
   if (payload && payload.error) { setStatus(payload.error, 'warn'); }
+  // Eine kaputte Zeile in energyLevels.txt legt das UI nicht lahm (der Server
+  // ueberspringt sie), soll aber auch nicht unbemerkt bleiben -- sonst
+  // wundert sich jemand, warum sein Tag verschwunden ist.
+  if (payload && payload.tagWarnings && payload.tagWarnings.length) {
+    setStatus('Energie-Level: ' + payload.tagWarnings.join('; '), 'warn');
+  }
+}
+
+function presetRow(entry) {
+  const row = document.createElement('div');
+  row.className = 'preset-item';
+  if (entry.name === activePresetName) { row.classList.add('is-active'); }
+  if (entry.active === false) { row.classList.add('is-inactive'); }
+
+  // Der Name ist der Knopf. Ein zusaetzlicher "Laden"-Knopf daneben waere ein
+  // zweites Bedienelement fuer dieselbe Sache -- und die ganze Zeile
+  // anklickbar zu machen kollidierte mit Auswahl, Level und Haken darin.
+  const load = document.createElement('button');
+  load.type = 'button';
+  load.className = 'preset-name';
+  load.textContent = entry.name;
+  load.title = 'Laden (/preset/load) und den Namen ins Speichern-Feld uebernehmen';
+  load.addEventListener('click', () => loadPreset(entry.name));
+  row.appendChild(load);
+
+  if (entry.level && presetLevels.length) {
+    const level = document.createElement('select');
+    level.className = 'preset-level';
+    level.setAttribute('aria-label', 'Energie-Level von ' + entry.name);
+    level.title = 'Energie-Level fuer die Song-Struktur -- aendert nichts am '
+      + 'Klang, nur daran, wann dieses Preset an der Reihe ist';
+    presetLevels.forEach((name) => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      level.appendChild(option);
+    });
+    level.value = entry.level;
+    // Ein nie eingeschaetztes Preset zeigt "mittel", weil es so behandelt
+    // wird -- gedimmt, damit der Rueckfall nicht wie eine Entscheidung
+    // aussieht.
+    if (entry.tagged === false) { level.classList.add('is-untagged'); }
+    level.addEventListener('change', () => {
+      tagPreset(entry.name, level.value, entry.active !== false);
+    });
+    row.appendChild(level);
+
+    const switchLabel = document.createElement('label');
+    switchLabel.className = 'preset-active';
+    switchLabel.title = 'Steht dieses Preset in der Rotation der Song-Struktur '
+      + 'zur Wahl? Unabhaengig vom Level -- das Preset bleibt ladbar.';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = entry.active !== false;
+    box.addEventListener('change', () => {
+      tagPreset(entry.name, level.value, box.checked);
+    });
+    switchLabel.appendChild(box);
+    const caption = document.createElement('span');
+    caption.textContent = 'Rotation';
+    switchLabel.appendChild(caption);
+    row.appendChild(switchLabel);
+  }
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'preset-delete';
+  remove.textContent = '×';
+  remove.title = 'Preset loeschen (/preset/delete) -- nicht rueckgaengig zu machen';
+  remove.setAttribute('aria-label', entry.name + ' loeschen');
+  remove.addEventListener('click', () => deletePreset(entry.name));
+  row.appendChild(remove);
+
+  return row;
 }
 
 async function refreshPresets() {
@@ -1406,10 +1489,66 @@ async function refreshPresets() {
   }
 }
 
-async function loadPreset() {
-  const name = presetSelectEl.value;
+/* Level und Haken gehen IMMER zusammen raus, auch wenn nur eines verstellt
+ * wurde: der Server schreibt eine ganze Zeile, und zwei Teil-Updates auf
+ * derselben Datei koennten sich ueberholen. */
+async function tagPreset(name, level, active) {
+  try {
+    const response = await fetch('/api/preset/tag', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, level: level, active: active }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      setStatus('Taggen fehlgeschlagen: ' + (data.error || 'HTTP ' + response.status), 'err');
+      // Der Server hat nichts geschrieben, die Zeile zeigt aber schon den
+      // neuen Wert -- zurueck auf den Stand der Datei, statt eine Aenderung
+      // zu behaupten, die es nicht gibt.
+      refreshPresets();
+      return;
+    }
+    fillPresets(data);
+    setStatus(`"${name}": ${level}, ${active ? 'in der Rotation' : 'nicht in der Rotation'}`, 'ok');
+  } catch (err) {
+    setStatus('Taggen fehlgeschlagen: ' + err, 'err');
+    refreshPresets();
+  }
+}
+
+async function deletePreset(name) {
+  // Der einzige Bestaetigungsschritt im ganzen UI. Speichern ueberschreibt
+  // bewusst ohne Rueckfrage, aber ein geloeschtes Preset ist weg -- und die
+  // Zeilen stehen dicht beieinander, ein Fehlgriff ist naheliegend.
+  if (!window.confirm(`Preset "${name}" wirklich loeschen? Das laesst sich nicht rueckgaengig machen.`)) {
+    return;
+  }
+  setStatus(`Loesche "${name}" …`);
+  try {
+    const response = await fetch('/api/preset/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      setStatus('Loeschen fehlgeschlagen: ' + (data.error || 'HTTP ' + response.status), 'err');
+      refreshPresets();
+      return;
+    }
+    if (name === activePresetName) { activePresetName = null; }
+    fillPresets(data);
+    let text = `Preset "${name}" geloescht`;
+    let level = 'ok';
+    if (data.tagError) { text += ' | ' + data.tagError; level = 'warn'; }
+    setStatus(text, level);
+  } catch (err) {
+    setStatus('Loeschen fehlgeschlagen: ' + err, 'err');
+  }
+}
+
+async function loadPreset(name) {
   if (!name) { return; }
-  presetLoadEl.disabled = true;
   try {
     const response = await fetch('/api/preset/load', {
       method: 'POST',
@@ -1451,11 +1590,29 @@ async function loadPreset() {
       level = 'warn';
     }
     setStatus(text, level);
+
+    // Update-Komfort: der Name landet im Speichern-Feld, "Speichern" schreibt
+    // also genau das Preset zurueck, das gerade geladen wurde. Vorher war
+    // Ueberschreiben ein fehlerfreies Abtippen des alten Namens -- ein Tippfehler
+    // legte still ein zweites Preset an, statt das gemeinte zu aktualisieren.
+    presetNameEl.value = name;
+    activePresetName = name;
+    highlightActivePreset();
   } catch (err) {
     setStatus('Laden fehlgeschlagen: ' + err, 'err');
-  } finally {
-    presetLoadEl.disabled = presetSelectEl.disabled;
   }
+}
+
+/* Nur die Hervorhebung nachziehen, ohne die Zeilen neu zu bauen: ein
+ * Neuaufbau mitten im Klick naehme dem Browser das gerade angefasste
+ * Bedienelement unter den Fingern weg. */
+function highlightActivePreset() {
+  Array.prototype.forEach.call(
+    presetRowsEl.querySelectorAll('.preset-item'), (row) => {
+      const name = row.querySelector('.preset-name');
+      row.classList.toggle('is-active',
+        !!name && name.textContent === activePresetName);
+    });
 }
 
 async function savePreset() {
@@ -1479,9 +1636,12 @@ async function savePreset() {
       setStatus('Speichern fehlgeschlagen: ' + (data.error || 'HTTP ' + response.status), 'err');
       return;
     }
+    // Der Name bleibt im Feld stehen (frueher wurde es geleert): mit dem
+    // Update-Komfort ist "laden, schrauben, speichern, weiterschrauben,
+    // wieder speichern" der normale Ablauf, und dabei jedes Mal neu zu
+    // tippen war genau das, was hier wegfallen sollte.
+    activePresetName = name;
     fillPresets(data);
-    presetSelectEl.value = name;
-    presetNameEl.value = '';
     setStatus(`Preset "${name}" ${data.overwritten ? 'ueberschrieben' : 'gespeichert'}`, 'ok');
   } catch (err) {
     setStatus('Speichern fehlgeschlagen: ' + err, 'err');
@@ -3421,7 +3581,8 @@ async function pollAutocommit() {
   }
 }
 
-presetLoadEl.addEventListener('click', loadPreset);
+// Geladen wird ueber den Namen in der Zeile (siehe presetRow()), es gibt
+// keinen eigenen Laden-Knopf mehr.
 presetSaveEl.addEventListener('click', savePreset);
 presetNameEl.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') { savePreset(); }

@@ -300,6 +300,37 @@ class PresetStore {
     return true;
   }
 
+  // Loescht eine Preset-Datei. Der einzige Weg, auf dem eine verschwindet:
+  // auch das Web-UI schickt dafuer /preset/delete an imPulse, statt selbst zu
+  // loeschen - "nur imPulse schreibt und loescht in data/presets/" bleibt so
+  // eine Regel ohne Ausnahme, und die Namenspruefung liegt an einer Stelle.
+  //
+  // Eine fehlende Datei ist ausdruecklich ein Fehler und kein stiller Erfolg:
+  // sonst meldete das Web-UI "geloescht" fuer ein Preset, das jemand anders
+  // gerade umbenannt hat.
+  //
+  // Der Klang bleibt unberuehrt: supercollider/presets/<name>.txt wird NICHT
+  // mitgeloescht. Loeschen ist nicht rueckgaengig zu machen, und eine
+  // Fernwirkung auf einen zweiten Prozess ohne Rueckmeldung waere hier der
+  // falsche Tausch - anders als beim Speichern, wo ein fehlendes Klang-Preset
+  // die Szene halb wiederherstellen wuerde.
+  boolean delete(String name) {
+    if (!isValidName(name)) {
+      return false;
+    }
+    File file = fileFor(name);
+    if (!file.isFile()) {
+      message = "Preset nicht gefunden: " + file.getPath();
+      return false;
+    }
+    if (!file.delete()) {
+      message = "Preset nicht loeschbar: " + file.getPath();
+      return false;
+    }
+    message = "Preset \"" + name + "\" geloescht";
+    return true;
+  }
+
   // Kommandos, die in remoteSettings.txt stehen, aber keine Parameter sind:
   // LedNetworkTransportEffect feuert bei diesen Adressen sofort. Beim Laden
   // still uebergehen statt melden, damit eine handkopierte

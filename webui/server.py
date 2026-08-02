@@ -2713,6 +2713,192 @@ def wait_for_preset_file(path: str, previous_mtime: Optional[float],
         time.sleep(step)
 
 
+def wait_for_preset_gone(path: str, timeout: float = PRESET_SAVE_TIMEOUT_S,
+                         step: float = PRESET_SAVE_POLL_S) -> bool:
+    """Gegenstueck zu wait_for_preset_file() fuer /preset/delete.
+
+    Geloescht wird ausschliesslich von imPulse (PresetStore.delete()), damit
+    "nur imPulse schreibt und loescht in data/presets/" eine Regel ohne
+    Ausnahme bleibt. Hier wird deshalb nur darauf gewartet, dass die Datei
+    wirklich verschwindet -- laeuft der Sketch nicht, laeuft die Frist ab und
+    der Aufrufer meldet das ehrlich, statt Erfolg zu behaupten.
+
+    Anders als beim Speichern genuegt die blosse Existenz als Kriterium: eine
+    Datei, die weg ist, ist eindeutig weg.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if not os.path.exists(path):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(step)
+
+
+# ---------------------------------------------------------------------------
+# Energie-Level-Tagging (data/energyLevels.txt)
+#
+# Zwei Aussagen je Preset: in welches Energie-Level es gehoert (Level) und ob
+# es ueberhaupt zur Wahl steht (aktiv). Sie sind unabhaengig -- ein Preset kann
+# "mittel" bleiben und trotzdem aus der Rotation genommen sein.
+#
+# Geschrieben wird die Datei DIREKT vom Server, ohne Umweg ueber imPulse:
+# derselbe Praezedenzfall wie data/colorPalettes.txt. Das Level ist eine
+# kuenstlerische Einschaetzung ueber ein Preset, kein Preset-INHALT -- imPulse
+# liest es beim Start und bei jedem Levelwechsel, muss es aber nie selbst
+# vergeben. Ein OSC-Umweg brauchte einen neuen Befehl, einen Schreibpfad in
+# Java und ein Warten auf die Datei, fuer nichts, was der Server nicht schon
+# kann.
+#
+# Format und Bedeutung sind der Spiegel von EnergyLevelStore.java:
+#
+#     name<TAB>level[<TAB>aktiv]      aktiv = 1 oder 0, fehlt = 1
+#
+# '#' leitet einen Kommentar ein, bei doppeltem Namen gewinnt die LETZTE
+# Zeile, und ein unbrauchbarer Wert wird gemeldet statt geraten.
+# ---------------------------------------------------------------------------
+
+ENERGY_LEVELS_FILENAME = "energyLevels.txt"
+
+# Spiegel von EnergyLevelStore.FALLBACK_LEVEL (= Index 1). Nicht "ruhig" (das
+# daempfte einen unklassifizierten dramatischen Moment faelschlich) und nicht
+# "dramatisch" (das verschaerfte ihn faelschlich). Ein Test haelt beide Seiten
+# zusammen.
+ENERGY_DEFAULT_LEVEL = SONG_LEVEL_NAMES[1]
+
+# Fehlt die dritte Spalte, steht das Preset zur Wahl -- jede vorhandene
+# Zweispalten-Zeile bleibt damit unveraendert gueltig.
+ENERGY_DEFAULT_ACTIVE = True
+
+ENERGY_HEADER = (
+    "# data/energyLevels.txt -- Preset-Name -> Energie-Level -> in der Rotation\n"
+    "#\n"
+    "# Gelesen von EnergyLevelStore, benutzt von SongStructureDirector: die\n"
+    "# Song-Struktur-Ebene wuerfelt zuerst das naechste LEVEL und waehlt danach\n"
+    "# ein Preset INNERHALB dieses Levels.\n"
+    "#\n"
+    "# Level: ruhig | mittel | dynamisch | dramatisch\n"
+    "# Format: name <TAB> level <TAB> aktiv. '#' leitet einen Kommentar ein,\n"
+    "# Leerzeilen werden uebersprungen.\n"
+    "#\n"
+    "# Die dritte Spalte (1 oder 0) ist UNABHAENGIG vom Level: sie sagt nicht,\n"
+    "# wie ein Preset klingt, sondern ob es ueberhaupt zur Wahl steht. Ein\n"
+    "# Preset kann \"mittel\" bleiben und trotzdem aus der Rotation genommen\n"
+    "# sein. Fehlt die Spalte, gilt 1.\n"
+    "#\n"
+    "# Fehlt ein Preset hier, gilt \"mittel\" und es steht zur Wahl -- ein\n"
+    "# untagged Preset soll nicht still verschwinden.\n"
+    "#\n"
+    "# Diese Datei liegt bewusst NICHT in data/presets/: PresetStore.list()\n"
+    "# sammelt jede *.txt dort ein und der Scheduler versuchte sie zu laden.\n"
+    "#\n"
+    "# Geschrieben wird sie vom Web-UI (Sektion \"Presets\") und ist von Hand\n"
+    "# editierbar. Dieser Kopfkommentar wird dabei aus server.py neu gesetzt --\n"
+    "# eigene Notizen dazwischen ueberleben das nicht.\n")
+
+
+def parse_energy_levels(text: str) -> Tuple[Dict[str, Dict[str, Any]],
+                                            List[str]]:
+    """Parst den Inhalt von energyLevels.txt.
+
+    Rueckgabe: (name -> {"level", "active"}, Warnungen). Kaputte Zeilen werden
+    gemeldet und uebersprungen, nicht als Abbruch weitergereicht -- dasselbe
+    Verhalten wie parse_palette() und wie EnergyLevelStore.load() auf der
+    Java-Seite.
+    """
+    tags: Dict[str, Dict[str, Any]] = {}
+    warnings: List[str] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Tab ist das Trennzeichen; zusaetzlich Leerzeichen, weil die Datei von
+        # Hand ausgerichtet wird (dieselbe Aufteilung wie in Java).
+        fields = [f for f in re.split(r"[\t ]+", line) if f]
+        if len(fields) < 2:
+            warnings.append("Zeile %d uebersprungen (weniger als zwei Felder)"
+                            % lineno)
+            continue
+        name, level = fields[0], fields[1]
+        if level.lower() not in SONG_LEVEL_NAMES:
+            warnings.append("Zeile %d uebersprungen (unbekanntes Level %r)"
+                            % (lineno, level))
+            continue
+        active = ENERGY_DEFAULT_ACTIVE
+        if len(fields) >= 3:
+            if fields[2] == "1":
+                active = True
+            elif fields[2] == "0":
+                active = False
+            else:
+                warnings.append("Zeile %d uebersprungen (dritte Spalte %r -- "
+                                "erlaubt sind 1 und 0)" % (lineno, fields[2]))
+                continue
+        if name in tags:
+            warnings.append("Name %r in Zeile %d ersetzt den frueheren Eintrag"
+                            % (name, lineno))
+        # Die LETZTE Zeile gewinnt, und sie gilt GANZ: eine angehaengte
+        # Zweispalten-Handkorrektur setzt den Schalter zurueck auf den Default,
+        # statt den Wert der frueheren Zeile weiterzutragen.
+        tags[name] = {"level": level.lower(), "active": active}
+    return tags, warnings
+
+
+def format_energy_levels(tags: Dict[str, Dict[str, Any]]) -> str:
+    """Schreibt das Tagging im Dateiformat, mit Kopfkommentar.
+
+    Gruppiert nach Level in der Reihenfolge von SONG_LEVEL_NAMES, innerhalb
+    eines Levels alphabetisch: die Datei wird von Hand gelesen und korrigiert
+    und soll das auch nach einem Schreibvorgang aus dem UI bleiben. Ein
+    stabiler, berechenbarer Aufbau haelt ausserdem den git-diff der
+    automatischen Sicherung (webui/autocommit.py) klein.
+    """
+    parts = [ENERGY_HEADER]
+    for level in SONG_LEVEL_NAMES:
+        names = sorted(n for n, t in tags.items() if t["level"] == level)
+        if not names:
+            continue
+        parts.append("\n# --- %s ---\n" % level)
+        for name in names:
+            parts.append("%s\t%s\t%d\n"
+                         % (name, level, 1 if tags[name]["active"] else 0))
+    return "".join(parts)
+
+
+def load_energy_levels(path: str) -> Tuple[Dict[str, Dict[str, Any]],
+                                           List[str]]:
+    """Liest das Tagging. Fehlende Datei = kein Tagging, kein Fehler.
+
+    Ohne die Datei gilt fuer jedes Preset der Rueckfall (mittel, waehlbar) --
+    genau wie in Java, wo die Show dann vollstaendig bleibt und nur die
+    Dramaturgie flach.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return {}, []
+    except OSError as exc:
+        return {}, ["Energie-Level nicht lesbar: %s" % exc]
+    return parse_energy_levels(text)
+
+
+def save_energy_levels(path: str, tags: Dict[str, Dict[str, Any]]) -> None:
+    """Schreibt das Tagging atomar (Temp-Datei + Rename), wie save_palette."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(format_energy_levels(tags))
+    os.replace(temp, path)
+
+
+def default_energy_levels_path(settings_path: str) -> str:
+    """Tagging neben der Parameterdatei: <dir von settings>/energyLevels.txt."""
+    return os.path.join(os.path.dirname(os.path.abspath(settings_path)),
+                        ENERGY_LEVELS_FILENAME)
+
+
 # ---------------------------------------------------------------------------
 # Farbpalette
 #
@@ -3687,7 +3873,8 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
                record_status_port: int = DEFAULT_RECORD_STATUS_PORT,
                ui_state_path: Optional[str] = None,
                sc_state_path: Optional[str] = None,
-               active_preset_path: Optional[str] = None):
+               active_preset_path: Optional[str] = None,
+               energy_levels_path: Optional[str] = None):
     if Flask is None:
         raise SystemExit("Flask fehlt (%s) -- bitte 'pip install -r requirements.txt'"
                          % _FLASK_IMPORT_ERROR)
@@ -3728,6 +3915,10 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         palette_path = default_palette_path(settings_path)
     app.config["IMPULSE_PALETTE_PATH"] = palette_path
 
+    energy_path = (energy_levels_path if energy_levels_path is not None
+                   else default_energy_levels_path(settings_path))
+    app.config["IMPULSE_ENERGY_LEVELS_PATH"] = energy_path
+
     def palette_payload() -> Dict[str, Any]:
         entries, warnings = load_palette(palette_path)
         return {"ok": True, "entries": entries, "path": palette_path,
@@ -3761,8 +3952,27 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
 
     def preset_list_payload() -> Dict[str, Any]:
         names, error = list_presets(presets_path)
+        tags, tag_warnings = load_energy_levels(energy_path)
+        # Gefiltert wird gegen den ORDNER, nicht aus der Tagging-Datei heraus
+        # -- dieselbe Regel wie presetsForLevel(level, allNames) in Java: ein
+        # Eintrag, dessen Preset-Datei geloescht wurde, waere sonst eine Zeile
+        # im UI, die sich zu nichts laden laesst.
+        entries = []
+        for name in names:
+            tag = tags.get(name)
+            entries.append({
+                "name": name,
+                "level": tag["level"] if tag else ENERGY_DEFAULT_LEVEL,
+                "active": tag["active"] if tag else ENERGY_DEFAULT_ACTIVE,
+                # "tagged" trennt "nie eingeschaetzt" von "ausdruecklich
+                # mittel" -- im UI ist das der Unterschied zwischen einer
+                # offenen Aufgabe und einer getroffenen Entscheidung.
+                "tagged": tag is not None,
+            })
         return {"ok": True, "presets": names, "dir": presets_path,
-                "error": error}
+                "error": error, "entries": entries,
+                "levels": list(SONG_LEVEL_NAMES),
+                "tagPath": energy_path, "tagWarnings": tag_warnings}
 
     def autocommit_payload() -> Dict[str, Any]:
         if autocommit_scheduler is None:
@@ -4131,6 +4341,111 @@ def create_app(settings_path: str, osc_host: str, osc_port: int,
         store.set_active_preset(str(name))
         return jsonify(payload)
 
+    @app.route("/api/preset/tag", methods=["POST"])
+    def api_preset_tag():
+        """Level und Rotationszustand eines Presets setzen.
+
+        Schreibt data/energyLevels.txt DIREKT, ohne OSC -- Praezedenzfall
+        colorPalettes.txt. Das Level ist eine kuenstlerische Einschaetzung
+        UEBER ein Preset, kein Preset-Inhalt; imPulse liest es beim Start und
+        bei jedem Levelwechsel, muss es aber nie selbst vergeben.
+
+        Beide Felder gehen immer zusammen raus, auch wenn nur eines sich
+        geaendert hat: das UI kennt den vollstaendigen Zustand der Zeile, und
+        zwei Teil-Updates auf derselben Datei koennten sich ueberholen.
+        """
+        body = request.get_json(silent=True) or {}
+        name = body.get("name")
+        problem = valid_preset_name(name)
+        if problem is not None:
+            return jsonify({"ok": False, "error": problem}), 400
+        level = body.get("level")
+        if not isinstance(level, str) or level.lower() not in SONG_LEVEL_NAMES:
+            return jsonify({"ok": False,
+                            "error": "unbekanntes Level %r -- erlaubt sind %s"
+                                     % (level, ", ".join(SONG_LEVEL_NAMES))}), 400
+        active = body.get("active")
+        # bool und 0/1, aber nicht "ja"/"1": ein String, den jemand fuer wahr
+        # haelt, waere hier ein stiller Zustandswechsel in die falsche
+        # Richtung. isinstance(True, int) ist wahr, deshalb erst bool pruefen.
+        if isinstance(active, bool):
+            pass
+        elif isinstance(active, int) and active in (0, 1):
+            active = bool(active)
+        else:
+            return jsonify({"ok": False,
+                            "error": "\"active\" ist weder true noch false"}), 400
+        if not os.path.isfile(preset_file(name)):
+            # Sonst stuende eine Zeile in der Datei, zu der es keine
+            # Preset-Datei gibt -- im UI unsichtbar (dort wird gegen den Ordner
+            # gefiltert) und damit nie wieder loszuwerden.
+            return jsonify({"ok": False,
+                            "error": "Preset %s gibt es nicht" % name}), 404
+        tags, _warnings = load_energy_levels(energy_path)
+        tags[str(name)] = {"level": level.lower(), "active": active}
+        try:
+            save_energy_levels(energy_path, tags)
+        except OSError as exc:
+            return jsonify({"ok": False,
+                            "error": "Energie-Level nicht schreibbar: %s"
+                                     % exc}), 500
+        payload = preset_list_payload()
+        payload.update({"name": name, "level": level.lower(),
+                        "active": active})
+        return jsonify(payload)
+
+    @app.route("/api/preset/delete", methods=["POST"])
+    def api_preset_delete():
+        """Ein Preset loeschen -- ueber imPulse, nicht vom Server aus.
+
+        Der Server hat Dateisystemzugriff und koennte selbst loeschen; er tut
+        es bewusst nicht. "Nur imPulse schreibt und loescht in data/presets/"
+        bleibt so eine Regel ohne Ausnahme, und die Namenspruefung gegen
+        Pfad-Traversal liegt an einer Stelle (PresetStore.isValidName()).
+
+        Gewartet wird wie beim Speichern auf das Ergebnis auf der Platte --
+        hier auf das Verschwinden der Datei. Bleibt sie liegen, gibt es 504
+        statt einer behaupteten Loeschung; der haeufigste Fehlerfall ist
+        "Web-UI laeuft, imPulse nicht".
+        """
+        body = request.get_json(silent=True) or {}
+        name = body.get("name")
+        problem = valid_preset_name(name)
+        if problem is not None:
+            return jsonify({"ok": False, "error": problem}), 400
+        path = preset_file(name)
+        if not os.path.isfile(path):
+            # Kein Kommando fuer etwas, das es nicht gibt: sonst liefe die
+            # Frist ab und der Operator saehe einen Timeout, wo in Wahrheit
+            # jemand anders das Preset schon geloescht hat.
+            return jsonify({"ok": False,
+                            "error": "Preset %s gibt es nicht" % name}), 404
+        sender.send("/preset/delete", name)
+        if not wait_for_preset_gone(path):
+            return jsonify({
+                "ok": False,
+                "error": "imPulse hat %s.txt nicht geloescht -- laeuft der "
+                         "Sketch?" % name,
+            }), 504
+        # Erst NACH dem bestaetigten Loeschen: eine Zeile ohne Preset waere
+        # zwar harmlos (gefiltert wird gegen den Ordner), aber ein spaeter
+        # gleichnamig neu angelegtes Preset erbte still die alte
+        # Einschaetzung.
+        tag_error = None
+        tags, _warnings = load_energy_levels(energy_path)
+        if str(name) in tags:
+            del tags[str(name)]
+            try:
+                save_energy_levels(energy_path, tags)
+            except OSError as exc:
+                # Das Preset ist weg; daran aendert ein fehlgeschlagener
+                # Schreibvorgang nichts mehr. Melden statt den Vorgang als
+                # gescheitert auszugeben.
+                tag_error = "Energie-Level nicht schreibbar: %s" % exc
+        payload = preset_list_payload()
+        payload.update({"name": name, "tagError": tag_error})
+        return jsonify(payload)
+
     @app.route("/api/palette")
     def api_palette():
         return jsonify(palette_payload())
@@ -4177,6 +4492,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default=os.environ.get("IMPULSE_PALETTE"),
                         help="Datei mit der Farbpalette "
                              "(Vorgabe: colorPalettes.txt neben --settings)")
+    parser.add_argument("--energy-levels",
+                        default=os.environ.get("IMPULSE_ENERGY_LEVELS"),
+                        help="Datei mit dem Energie-Level-Tagging der Presets "
+                             "(Vorgabe: %s neben --settings)"
+                             % ENERGY_LEVELS_FILENAME)
     parser.add_argument("--state",
                         default=os.environ.get("IMPULSE_SONG_STATE"),
                         help="Zustandsdatei der Song-Struktur "
@@ -4243,6 +4563,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else default_presets_path(settings_path))
     palette_path = (os.path.abspath(args.palette) if args.palette
                     else default_palette_path(settings_path))
+    energy_levels_path = (os.path.abspath(args.energy_levels)
+                          if args.energy_levels
+                          else default_energy_levels_path(settings_path))
     state_path = (os.path.abspath(args.state) if args.state
                   else os.path.join(os.path.dirname(settings_path),
                                     DEFAULT_STATE_FILENAME))
@@ -4269,10 +4592,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                      record_status_port=args.record_status_port,
                      ui_state_path=ui_state_path,
                      sc_state_path=sc_state_path,
-                     active_preset_path=active_preset_path)
+                     active_preset_path=active_preset_path,
+                     energy_levels_path=energy_levels_path)
 
     print("[webui] remoteSettings: %s" % settings_path)
     print("[webui] Presets:        %s" % presets_path)
+    print("[webui] Energie-Level:  %s" % energy_levels_path)
     print("[webui] Palette:        %s" % palette_path)
     print("[webui] Song-Zustand:   %s" % state_path)
     print("[webui] UI-Zustand:     %s (nur was ueber dieses UI gesendet wurde)"

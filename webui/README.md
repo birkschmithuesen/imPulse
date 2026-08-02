@@ -87,7 +87,7 @@ Tabs und wird zusammen gelesen: Szene waehlen, Rueckmeldung lesen.
 Das Markup aller drei Bloecke liegt trotzdem weiterhin in
 `templates/index.html`, in einem `<div id="parked" hidden>`-Abstellplatz —
 `buildTabs()` haengt die `<section>`-Elemente nur um, statt sie neu zu bauen:
-`app.js` verdrahtet seine Listener beim Laden an feste IDs (`presetSelect`,
+`app.js` verdrahtet seine Listener beim Laden an feste IDs (`presetSave`,
 `melodyRecompute`, `coupling`, `reload` usw.), und dieselben Elemente muessen
 bei jedem Tab-Neuaufbau (`tabPanelsEl.innerHTML = ''`) wieder in den
 Abstellplatz zurueck, statt aus dem Dokument zu fallen.
@@ -329,21 +329,29 @@ Daraus folgt der Rest:
 ## Presets
 
 Im Mixer-Tab, unter der Kopfzeilen-Karte und ueber den kuratierten Reglern,
-sitzt die Sektion **Presets**: ein Dropdown mit
-allen vorhandenen Presets plus **Laden**, darunter ein Textfeld plus
+sitzt die Sektion **Presets**: **eine Zeile je Preset** mit Name,
+Energie-Level, Rotationshaken und Loeschknopf, darunter ein Textfeld plus
 **Speichern**.
 
 Ein Preset ist ein kompletter Wertesatz aller fernsteuerbaren Parameter, abgelegt
 als `data/presets/<name>.txt` — **im selben Format wie `remoteSettings.txt`**.
-Geschrieben wird der Ordner ausschliesslich von imPulse (`PresetStore.java`);
-das Web-UI **liest** ihn nur.
+Geschrieben und geloescht wird der Ordner ausschliesslich von imPulse
+(`PresetStore.java`); das Web-UI **liest** ihn nur und schickt Kommandos.
 
 - **Liste**: kommt vom Dateisystem, nicht per OSC. Der Server laeuft auf
   derselben Maschine wie imPulse und sieht den Ordner direkt — ein OSC-
   Rueckkanal waere neu zu bauen (die einzige Ausgangsadresse des Sketches ist
   Port 8002, also SuperCollider). Aktualisiert wird beim Seitenaufruf und nach
-  jedem Speichern.
-- **Laden** schickt `/preset/load <name>` und zieht zusaetzlich die Regler nach:
+  jedem Speichern, Taggen und Loeschen.
+- **Laden** ist ein Klick auf den **Namen** — es gibt keinen eigenen
+  Laden-Knopf je Zeile, der waere ein zweites Bedienelement fuer dieselbe
+  Sache. Der Name landet dabei zusaetzlich im Speichern-Feld darunter, und
+  das Feld wird nach dem Speichern auch nicht mehr geleert: „laden,
+  schrauben, speichern, weiterschrauben, wieder speichern" ist der normale
+  Ablauf, und dabei jedes Mal den alten Namen abzutippen war eine
+  Fehlerquelle — ein Tippfehler legte still ein zweites Preset an, statt das
+  gemeinte zu aktualisieren. Der Klick schickt `/preset/load <name>` und zieht
+  zusaetzlich die Regler nach:
   der Server liest dieselbe Datei mit demselben Parser wie `remoteSettings.txt`
   und schickt die Werte in der Antwort zurueck. Die Regler werden still gesetzt,
   loesen also kein zweites OSC aus — das Anwenden macht imPulse selbst.
@@ -366,9 +374,63 @@ Dump aus verschiedenen Codestaenden), und Werte ausserhalb der im UI verengten
 Range (siehe `UI_RANGE_OVERRIDES`) — dort klemmt der Regler sichtbar und soll
 nicht behaupten, der Sketch fahre den angezeigten Wert.
 
-**Kein Loeschen**: ein Preset wird man los, indem man die Datei auf dem Laptop
-von Hand loescht. Bewusst nicht im UI, weil sonst das Web-UI in einen Ordner
-schreiben wuerde, der imPulse gehoert.
+**Loeschen** (`×` am rechten Rand der Zeile) fragt erst nach
+(`window.confirm`) und schickt dann `/preset/delete <name>` an imPulse.
+Danach wird — wie beim Speichern — auf das Ergebnis auf der Platte gewartet,
+hier auf das *Verschwinden* der Datei; bleibt sie liegen, kommt „laeuft der
+Sketch?" statt einer behaupteten Loeschung. Drei Dinge:
+
+- **Der Server loescht nicht selbst**, obwohl er den Ordner sieht. „Nur
+  imPulse schreibt und loescht in `data/presets/`" bleibt so eine Regel ohne
+  Ausnahme, und die Pruefung gegen Pfad-Traversal liegt an einer Stelle.
+- **Die Rueckfrage gibt es nur hier.** Speichern ueberschreibt bewusst ohne;
+  ein geloeschtes Preset ist dagegen nicht wiederzuholen, und die Zeilen
+  stehen dicht beieinander.
+- **`supercollider/presets/<name>.txt` bleibt liegen.** Ein Preset ist zwar
+  ein Name und zwei Dateien, aber `/sc/preset/*` kennt kein Loeschen — eine
+  Fernwirkung auf sclang ohne Rueckmeldung waere bei einer nicht rueckgaengig
+  zu machenden Aktion der falsche Tausch.
+
+### Energie-Level und Rotation
+
+Die zwei Bedienelemente in der Mitte jeder Zeile gehoeren zur
+**Song-Struktur** und aendern nichts am Klang des Presets:
+
+- **Level** (`ruhig`/`mittel`/`dynamisch`/`dramatisch`) sagt, wann dieses
+  Preset an der Reihe ist. Ein nie eingeschaetztes Preset zeigt gedimmt und
+  kursiv `mittel` — den Rueckfall, nicht eine getroffene Entscheidung.
+- **Rotation** (Haken) sagt, ob es ueberhaupt zur Wahl steht.
+  **Unabhaengig** vom Level: ein Preset kann `mittel` bleiben und trotzdem
+  aus der Nacht genommen sein, und wer es zurueckholt, bekommt es an
+  derselben Stelle der Dramaturgie wieder. Laden und Speichern von Hand
+  bleiben in beiden Faellen moeglich.
+
+Beides wirkt **sofort**, ohne eigenen Knopf (wie ein Regler), und geht immer
+**zusammen** raus — der Server schreibt eine ganze Zeile, zwei Teil-Updates
+auf derselben Datei koennten sich ueberholen.
+
+Geschrieben wird dabei `data/energyLevels.txt` **direkt vom Server, ohne
+OSC** — anders als beim Loeschen. Das ist kein Widerspruch: dort geht es um
+`data/presets/`, hier um eine Datei daneben. Das Level ist eine
+kuenstlerische Einschaetzung *ueber* ein Preset, kein Preset-*Inhalt*;
+imPulse liest sie beim Start und bei jedem Levelwechsel, muss sie aber nie
+selbst vergeben — genau die Abwaegung wie bei der Farbpalette.
+
+- **Format**: `name<TAB>level<TAB>aktiv`, `aktiv` ist `1` oder `0`. Fehlt die
+  dritte Spalte, gilt `1` — jede aeltere Zweispalten-Zeile bleibt unveraendert
+  gueltig. Von Hand editierbar, `#` leitet einen Kommentar ein, bei doppeltem
+  Namen gewinnt die **letzte** Zeile.
+- **Der Kopfkommentar kommt aus `ENERGY_HEADER` in `server.py`** und wird bei
+  jedem Schreibvorgang neu gesetzt; die Eintraege stehen nach Level gruppiert
+  und darin alphabetisch. Eigene Notizen zwischen den Zeilen ueberleben das
+  nicht — dafuer bleibt die Datei lesbar und der git-diff der automatischen
+  Sicherung klein.
+- **Ein Eintrag ohne Preset-Datei taucht im UI nicht auf** (gefiltert wird
+  gegen den Ordner, dieselbe Regel wie `presetsForLevel()` in Java). Beim
+  Loeschen faellt der Eintrag deshalb mit weg, sonst erbte ein spaeter
+  gleichnamig neu angelegtes Preset still die alte Einschaetzung.
+- **Pfad** ueber `--energy-levels` bzw. `IMPULSE_ENERGY_LEVELS` verschiebbar,
+  Vorgabe `energyLevels.txt` neben `--settings`.
 
 Der Knopf **Neu laden** in der Kopfzeilen-Karte darueber hat damit nichts zu
 tun — der liest

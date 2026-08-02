@@ -2057,6 +2057,392 @@ class PaletteFileTest(unittest.TestCase):
                 self.assertLessEqual(entry[key], 1.0)
 
 
+class EnergyLevelFileTest(unittest.TestCase):
+    """data/energyLevels.txt lesen und schreiben.
+
+    Der Server ist hier NICHT nur Leser: das Tagging im Web-UI schreibt die
+    Datei direkt, ohne Umweg ueber imPulse -- derselbe Praezedenzfall wie die
+    Farbpalette. Das Format muss deshalb auf beiden Seiten exakt dasselbe
+    bedeuten, sonst taggt das UI etwas, das EnergyLevelStore anders liest.
+    """
+
+    def test_parses_two_and_three_columns(self):
+        tags, warnings = server.parse_energy_levels(
+            "# Kopf\n"
+            "\n"
+            "eins\truhig\t1\n"
+            "zwei\truhig\t0\n"
+            "drei\tdynamisch\n")
+        self.assertEqual(warnings, [])
+        self.assertEqual(tags["eins"], {"level": "ruhig", "active": True})
+        self.assertEqual(tags["zwei"], {"level": "ruhig", "active": False})
+        self.assertEqual(tags["drei"], {"level": "dynamisch", "active": True})
+
+    def test_spaces_count_as_separator_like_in_java(self):
+        tags, warnings = server.parse_energy_levels("eins    mittel  0\n")
+        self.assertEqual(warnings, [])
+        self.assertEqual(tags["eins"], {"level": "mittel", "active": False})
+
+    def test_unknown_level_is_reported_not_guessed(self):
+        tags, warnings = server.parse_energy_levels("eins\tepisch\n")
+        self.assertEqual(tags, {})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("episch", warnings[0])
+
+    def test_unusable_third_column_is_reported_not_guessed(self):
+        """Wie in EnergyLevelStore.load(): raten waere ein Preset in der
+        Rotation, das der Operator herausgenommen zu haben glaubt."""
+        tags, warnings = server.parse_energy_levels("eins\truhig\tja\n")
+        self.assertEqual(tags, {})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("ja", warnings[0])
+
+    def test_too_few_fields_are_reported(self):
+        tags, warnings = server.parse_energy_levels("eins\n")
+        self.assertEqual(tags, {})
+        self.assertEqual(len(warnings), 1)
+
+    def test_duplicate_name_last_line_wins(self):
+        tags, warnings = server.parse_energy_levels(
+            "eins\truhig\t0\neins\tdramatisch\t1\n")
+        self.assertEqual(tags["eins"],
+                         {"level": "dramatisch", "active": True})
+        self.assertEqual(len(warnings), 1)
+
+    def test_appended_two_column_line_resets_the_switch(self):
+        """Genau wie in Java: die letzte Zeile gilt ganz, nicht halb."""
+        tags, _warnings = server.parse_energy_levels(
+            "eins\truhig\t0\neins\truhig\n")
+        self.assertTrue(tags["eins"]["active"])
+
+    def test_round_trip_through_the_file_format(self):
+        tags = {"b": {"level": "dramatisch", "active": False},
+                "a": {"level": "ruhig", "active": True}}
+        back, warnings = server.parse_energy_levels(
+            server.format_energy_levels(tags))
+        self.assertEqual(warnings, [])
+        self.assertEqual(back, tags)
+
+    def test_written_lines_carry_all_three_columns_separated_by_tabs(self):
+        text = server.format_energy_levels(
+            {"a": {"level": "ruhig", "active": True}})
+        lines = [l for l in text.splitlines() if l and not l.startswith("#")]
+        self.assertEqual(lines, ["a\truhig\t1"])
+
+    def test_written_file_keeps_a_header_comment(self):
+        text = server.format_energy_levels({})
+        self.assertTrue(text.startswith("#"))
+        self.assertIn("aktiv", text)
+
+    def test_entries_are_grouped_by_level_in_the_java_order(self):
+        """Die Datei wird von Hand gelesen und korrigiert -- nach Level
+        gruppiert bleibt sie das auch nach einem Schreibvorgang aus dem UI."""
+        text = server.format_energy_levels({
+            "spaet": {"level": "dramatisch", "active": True},
+            "frueh": {"level": "ruhig", "active": True},
+            "mitte": {"level": "dynamisch", "active": True}})
+        order = [l.split("\t")[0] for l in text.splitlines()
+                 if l and not l.startswith("#")]
+        self.assertEqual(order, ["frueh", "mitte", "spaet"])
+
+    def test_missing_file_is_an_empty_tagging_not_an_error(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        tags, warnings = server.load_energy_levels(
+            os.path.join(directory, "gibtsnicht.txt"))
+        self.assertEqual(tags, {})
+        self.assertEqual(warnings, [])
+
+    def test_save_then_load_returns_the_same_tagging(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, server.ENERGY_LEVELS_FILENAME)
+        tags = {"a": {"level": "mittel", "active": False}}
+        server.save_energy_levels(path, tags)
+        self.assertEqual(server.load_energy_levels(path), (tags, []))
+
+    def test_save_leaves_no_temp_file_behind(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, server.ENERGY_LEVELS_FILENAME)
+        server.save_energy_levels(path, {"a": {"level": "ruhig",
+                                               "active": True}})
+        self.assertEqual(sorted(os.listdir(directory)),
+                         [server.ENERGY_LEVELS_FILENAME])
+
+    def test_default_path_sits_next_to_the_settings_file(self):
+        path = server.default_energy_levels_path(
+            os.path.join("a", "data", "remoteSettings.txt"))
+        self.assertEqual(os.path.basename(path), server.ENERGY_LEVELS_FILENAME)
+        self.assertEqual(os.path.basename(os.path.dirname(path)), "data")
+
+    def test_the_default_level_matches_the_java_fallback(self):
+        """EnergyLevelStore.FALLBACK_LEVEL ist der Index in LEVEL_NAMES."""
+        path = os.path.join(server.REPO_ROOT, "EnergyLevelStore.java")
+        if not os.path.exists(path):
+            self.skipTest("EnergyLevelStore.java nicht gefunden")
+        with open(path, encoding="utf-8") as handle:
+            java = handle.read()
+        match = re.search(r"FALLBACK_LEVEL\s*=\s*(\d+)", java)
+        self.assertIsNotNone(match, "FALLBACK_LEVEL nicht gefunden")
+        self.assertEqual(server.SONG_LEVEL_NAMES[int(match.group(1))],
+                         server.ENERGY_DEFAULT_LEVEL)
+
+    def test_the_repo_file_parses_without_warnings(self):
+        """Gegenprobe an der echten data/energyLevels.txt."""
+        path = os.path.join(server.REPO_ROOT, "data",
+                            server.ENERGY_LEVELS_FILENAME)
+        if not os.path.exists(path):
+            self.skipTest("data/energyLevels.txt fehlt")
+        tags, warnings = server.load_energy_levels(path)
+        self.assertEqual(warnings, [])
+        self.assertTrue(tags)
+        for name, tag in tags.items():
+            self.assertIn(tag["level"], server.SONG_LEVEL_NAMES, name)
+            self.assertIsInstance(tag["active"], bool)
+
+
+class FakeImpulse:
+    """Ein UDP-Empfaenger, der sich wie imPulse verhaelt: er loescht wirklich.
+
+    Echte Pakete auf dem Loopback und ein echtes os.remove, weil genau das
+    das Neue ist: der Server loescht NICHT selbst, sondern schickt
+    /preset/delete und wartet darauf, dass die Datei verschwindet. Ein Mock
+    des Senders wuerde das Warten ueberspringen und nur pruefen, dass eine
+    Funktion aufgerufen wurde.
+    """
+
+    def __init__(self, presets_dir: str) -> None:
+        self.presets_dir = presets_dir
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(("127.0.0.1", 0))
+        self.port = self.socket.getsockname()[1]
+        self.obey = True                # aus = "imPulse laeuft nicht"
+        self.seen = []
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while True:
+            try:
+                data, _sender = self.socket.recvfrom(4096)
+            except OSError:
+                return
+            try:
+                address, args = server.parse_osc_message(data)
+            except (ValueError, struct.error):
+                continue
+            with self._lock:
+                self.seen.append((address, args))
+                obey = self.obey
+            if obey and address == "/preset/delete" and args:
+                try:
+                    os.remove(os.path.join(self.presets_dir,
+                                           str(args[0]) + ".txt"))
+                except OSError:
+                    pass
+
+    def addresses(self):
+        with self._lock:
+            return [a for a, _args in self.seen]
+
+    def close(self) -> None:
+        self.socket.close()
+
+
+class PresetTaggingEndpointTest(unittest.TestCase):
+    """GET /api/presets mit Tags, POST /api/preset/tag, POST /api/preset/delete."""
+
+    def setUp(self):
+        if server.Flask is None:
+            self.skipTest("Flask nicht installiert")
+        self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory)
+        self.settings = os.path.join(self.directory, "remoteSettings.txt")
+        with open(self.settings, "w", encoding="utf-8") as handle:
+            handle.write("int\t/net/impulse/speed\tx\t16\t1\t1500\n")
+        self.presets = os.path.join(self.directory, "presets")
+        os.makedirs(self.presets)
+        for name in ("alpha", "beta"):
+            self.write_preset(name)
+        self.tags_path = os.path.join(self.directory,
+                                      server.ENERGY_LEVELS_FILENAME)
+        self.impulse = FakeImpulse(self.presets)
+        self.addCleanup(self.impulse.close)
+        app = server.create_app(self.settings, "127.0.0.1", self.impulse.port,
+                                self.presets,
+                                os.path.join(self.directory, "palette.txt"),
+                                record_status_port=0)
+        app.config["TESTING"] = True
+        close_app_sockets(self, app)
+        self.client = app.test_client()
+
+    def write_preset(self, name):
+        with open(os.path.join(self.presets, name + ".txt"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("int\t/net/impulse/speed\tx\t16\t1\t1500\n")
+
+    def tag(self, name, level, active):
+        return self.client.post("/api/preset/tag",
+                                json={"name": name, "level": level,
+                                      "active": active})
+
+    def entries(self):
+        payload = self.client.get("/api/presets").get_json()
+        return {e["name"]: e for e in payload["entries"]}
+
+    # ---- GET /api/presets ----
+
+    def test_untagged_presets_carry_the_fallback_level_and_are_active(self):
+        """Wie levelOf()/isActive() in Java: nicht getaggt heisst mittel und
+        waehlbar, nicht "faellt aus der Show"."""
+        entries = self.entries()
+        self.assertEqual(sorted(entries), ["alpha", "beta"])
+        self.assertEqual(entries["alpha"]["level"], server.ENERGY_DEFAULT_LEVEL)
+        self.assertTrue(entries["alpha"]["active"])
+        self.assertFalse(entries["alpha"]["tagged"])
+
+    def test_the_plain_name_list_stays_for_older_clients(self):
+        payload = self.client.get("/api/presets").get_json()
+        self.assertEqual(payload["presets"], ["alpha", "beta"])
+        self.assertEqual(payload["levels"], server.SONG_LEVEL_NAMES)
+
+    def test_a_tag_without_a_preset_file_does_not_show_up(self):
+        """Gefiltert wird gegen den Ordner, nicht aus der Datei heraus --
+        dieselbe Regel wie presetsForLevel(level, allNames) in Java."""
+        server.save_energy_levels(self.tags_path, {
+            "alpha": {"level": "ruhig", "active": True},
+            "laengst-geloescht": {"level": "ruhig", "active": True}})
+        self.assertEqual(sorted(self.entries()), ["alpha", "beta"])
+
+    # ---- POST /api/preset/tag ----
+
+    def test_tagging_writes_the_file_directly_without_osc(self):
+        """Praezedenzfall colorPalettes.txt: Artistik-Metadaten, kein
+        Preset-Inhalt -- imPulse muss davon nichts wissen."""
+        response = self.tag("alpha", "dramatisch", False)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(os.path.exists(self.tags_path))
+        self.assertEqual(self.impulse.addresses(), [])
+        tags, warnings = server.load_energy_levels(self.tags_path)
+        self.assertEqual(warnings, [])
+        self.assertEqual(tags["alpha"],
+                         {"level": "dramatisch", "active": False})
+
+    def test_the_answer_carries_the_new_state(self):
+        payload = self.tag("alpha", "ruhig", False).get_json()
+        self.assertTrue(payload["ok"])
+        entry = {e["name"]: e for e in payload["entries"]}["alpha"]
+        self.assertEqual(entry["level"], "ruhig")
+        self.assertFalse(entry["active"])
+        self.assertTrue(entry["tagged"])
+
+    def test_tagging_one_preset_leaves_the_others_alone(self):
+        self.tag("beta", "dynamisch", True)
+        self.tag("alpha", "ruhig", False)
+        entries = self.entries()
+        self.assertEqual(entries["beta"]["level"], "dynamisch")
+        self.assertTrue(entries["beta"]["active"])
+        self.assertEqual(entries["alpha"]["level"], "ruhig")
+
+    def test_level_and_switch_are_independent(self):
+        """Der ganze Zweck der dritten Spalte: raus aus der Rotation, ohne
+        die einmal vergebene Einschaetzung zu verlieren."""
+        self.tag("alpha", "dramatisch", True)
+        self.tag("alpha", "dramatisch", False)
+        self.assertEqual(self.entries()["alpha"]["level"], "dramatisch")
+        self.assertFalse(self.entries()["alpha"]["active"])
+
+    def test_an_unknown_level_is_rejected(self):
+        response = self.tag("alpha", "episch", True)
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(os.path.exists(self.tags_path))
+
+    def test_an_invalid_name_is_rejected(self):
+        self.assertEqual(self.tag("../boese", "ruhig", True).status_code, 400)
+
+    def test_a_preset_that_does_not_exist_is_rejected(self):
+        """Sonst stuende eine Zeile in der Datei, zu der es keine Datei gibt
+        -- und niemand koennte sie im UI je wieder loswerden."""
+        self.assertEqual(self.tag("gibtsnicht", "ruhig", True).status_code, 404)
+
+    def test_a_non_boolean_switch_is_rejected(self):
+        self.assertEqual(self.tag("alpha", "ruhig", "vielleicht").status_code,
+                         400)
+
+    def test_one_and_zero_count_as_the_switch(self):
+        self.assertEqual(self.tag("alpha", "ruhig", 0).status_code, 200)
+        self.assertFalse(self.entries()["alpha"]["active"])
+
+    def test_hand_written_comments_survive_as_a_header(self):
+        """Der Kopfkommentar kommt aus server.py und steht nach jedem
+        Schreibvorgang wieder da -- die Datei bleibt von Hand lesbar."""
+        self.tag("alpha", "ruhig", True)
+        with open(self.tags_path, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertTrue(text.startswith("#"))
+
+    # ---- POST /api/preset/delete ----
+
+    def test_delete_goes_through_impulse_and_removes_the_file(self):
+        response = self.client.post("/api/preset/delete",
+                                    json={"name": "alpha"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/preset/delete", self.impulse.addresses())
+        self.assertFalse(os.path.exists(
+            os.path.join(self.presets, "alpha.txt")))
+        self.assertEqual(response.get_json()["presets"], ["beta"])
+
+    def test_delete_drops_the_tag_as_well(self):
+        self.tag("alpha", "dramatisch", False)
+        self.client.post("/api/preset/delete", json={"name": "alpha"})
+        tags, _warnings = server.load_energy_levels(self.tags_path)
+        self.assertNotIn("alpha", tags)
+
+    def test_delete_leaves_the_other_tags_alone(self):
+        self.tag("alpha", "dramatisch", False)
+        self.tag("beta", "ruhig", True)
+        self.client.post("/api/preset/delete", json={"name": "alpha"})
+        tags, _warnings = server.load_energy_levels(self.tags_path)
+        self.assertEqual(tags, {"beta": {"level": "ruhig", "active": True}})
+
+    def test_delete_of_a_missing_preset_is_a_404_not_a_command(self):
+        response = self.client.post("/api/preset/delete",
+                                    json={"name": "gibtsnicht"})
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.impulse.addresses(), [])
+
+    def test_delete_with_an_invalid_name_is_rejected(self):
+        response = self.client.post("/api/preset/delete",
+                                    json={"name": "../boese"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.impulse.addresses(), [])
+
+    def test_a_silent_impulse_is_reported_instead_of_claimed_success(self):
+        """Derselbe Fall wie beim Speichern: Web-UI laeuft, imPulse nicht."""
+        self.impulse.obey = False
+        response = self.client.post("/api/preset/delete",
+                                    json={"name": "alpha"},)
+        self.assertEqual(response.status_code, 504)
+        self.assertFalse(response.get_json()["ok"])
+        self.assertTrue(os.path.exists(
+            os.path.join(self.presets, "alpha.txt")))
+
+    def test_a_failed_delete_keeps_the_tag(self):
+        self.impulse.obey = False
+        self.tag("alpha", "ruhig", True)
+        self.client.post("/api/preset/delete", json={"name": "alpha"})
+        tags, _warnings = server.load_energy_levels(self.tags_path)
+        self.assertIn("alpha", tags)
+
+    def test_index_carries_the_tagged_list_in_the_bootstrap(self):
+        self.tag("alpha", "dramatisch", False)
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("dramatisch", html)
+        self.assertIn("entries", html)
+
+
 class FadeOutEndpointTest(unittest.TestCase):
     """POST /api/fadeout: Zielfarbe + Tempo rein, drei Zerfallsraten raus.
 

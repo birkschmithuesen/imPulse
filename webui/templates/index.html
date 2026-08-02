@@ -62,13 +62,25 @@
       </div>
     </section>
 
+    <!-- Eine Zeile je Preset statt Dropdown plus Textfeld: Level und
+         Rotationszustand gehoeren neben den Namen, zu dem sie gehoeren. In
+         einem Dropdown waere immer nur der Zustand EINES Presets sichtbar,
+         und genau der Vergleich ("habe ich ueberhaupt noch zwei ruhige?")
+         ist die Frage, die beim Taggen gestellt wird.
+
+         Die Liste baut app.js aus /api/presets; #presetRows ist der einzige
+         Anker dafuer. Das Speichern-Feld bleibt darunter stehen: es gilt
+         nicht fuer eine Zeile, sondern fuer den aktuellen Reglerstand. -->
     <section class="presets" id="presets">
       <h2>Presets</h2>
+      <div class="preset-list" id="presetRows"></div>
+      <p class="preset-note" id="presetNote">
+        Klick auf den Namen l&auml;dt das Preset und &uuml;bernimmt ihn unten
+        ins Namensfeld &ndash; Speichern &uuml;berschreibt es dann ohne
+        R&uuml;ckfrage. Level und Haken wirken sofort und gelten nur f&uuml;r
+        die Song-Struktur.
+      </p>
       <div class="preset-rows">
-        <div class="preset-row">
-          <select id="presetSelect" aria-label="Preset auswaehlen"></select>
-          <button type="button" id="presetLoad" title="Gewaehltes Preset laden (/preset/load)">Laden</button>
-        </div>
         <div class="preset-row">
           <input type="text" id="presetName" placeholder="neuer-preset-name" maxlength="64"
                  autocomplete="off" spellcheck="false" aria-label="Name fuer das neue Preset">
